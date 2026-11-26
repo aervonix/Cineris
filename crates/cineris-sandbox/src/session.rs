@@ -29,10 +29,13 @@
 //!   limits and no breakaway, and joins it. Every process it starts from then
 //!   on (a command's tree, a hook, an extension's runtime, an MCP server) is
 //!   in that job and cannot leave it. A process is under a session's command
-//!   when it is in the job of that name of a process that is running: each
-//!   running process this user may open is tried, and a job of that name
-//!   that cannot be opened or asked, for any reason but there being none,
-//!   is not known, which refuses. Being in any other job (a terminal's, an
+//!   when it is in the job of that name of a process that is running and
+//!   this user may open: the jobs of that prefix in the logon session's
+//!   namespace of objects are tried, each by the instance its name gives
+//!   (where the namespace cannot be listed, the job's name of every process
+//!   of the system's list), and a job of that name that cannot be opened or
+//!   asked, for any reason but there being none, is not known, which
+//!   refuses. Being in any other job (a terminal's, an
 //!   editor's, a CI runner's) is nothing. One job each, and not one shared:
 //!   a process already in a job can join a job only where that job can nest
 //!   in its own, so a job shared by harnesses started under different jobs
@@ -588,6 +591,64 @@ fn passes_through(name: &str) -> bool {
 #[cfg_attr(not(windows), allow(dead_code, reason = "Windows's services"))]
 const LINE_OF_PARENTS: usize = 64;
 
+/// What opening a process of the line of parents tells of it.
+#[cfg_attr(not(windows), allow(dead_code, reason = "Windows's services"))]
+#[derive(Debug, Clone)]
+enum Described {
+    /// Its parent, its program's name and when it was made.
+    Is(Listed),
+    /// No process has its id.
+    Gone,
+    /// It runs and cannot be opened (another user's, the system's, a
+    /// service's host): only the system's list gives its name.
+    Closed,
+}
+
+/// The processes of the line of parents from `own` that
+/// [`started_by_a_service`] reads, each described by opening it: this
+/// process, and its parents as far as they pass a command through
+/// ([`passes_through`]), with the first that does not. `None` where it
+/// meets one that cannot be opened, whose name only the system's list
+/// gives: the list is then taken, as it was for every check before (since
+/// step 28's third pull request: a headless run's line from a terminal or a
+/// runner's step is a few of the user's own processes, and the list, every
+/// process and thread of the system, cost its start 0.6 to 0.8 ms on a
+/// hosted runner).
+#[cfg_attr(not(windows), allow(dead_code, reason = "Windows's services"))]
+fn line_of(own: u32, describe: impl Fn(u32) -> Described) -> Option<Vec<Listed>> {
+    let mut line = Vec::new();
+    let mut at = own;
+    for _ in 0..=LINE_OF_PARENTS {
+        match describe(at) {
+            Described::Is(process) => {
+                let parent = process.parent;
+                let goes_on = at == own || passes_through(&process.name);
+                line.push(process);
+                if !goes_on || parent == 0 || parent == at {
+                    break;
+                }
+                at = parent;
+            }
+            Described::Gone => break,
+            Described::Closed => return None,
+        }
+    }
+    Some(line)
+}
+
+/// The process instance a job's name in the namespace of objects names,
+/// when it is a harness's job of sessions' commands ([`job_name`], with
+/// its `Local\` taken off, as the namespace lists it): `None` for any other
+/// name, and for one [`job_name`] would not write so (a sign, a zero in
+/// front).
+#[cfg_attr(not(windows), allow(dead_code, reason = "Windows's jobs"))]
+fn harness_named(name: &str) -> Option<(u32, u64)> {
+    let prefix = JOB_PREFIX.strip_prefix(r"Local\")?;
+    let (pid, made) = name.strip_prefix(prefix)?.split_once('.')?;
+    let (pid, made) = (pid.parse().ok()?, made.parse().ok()?);
+    (job_name(pid, made).strip_prefix(r"Local\") == Some(name)).then_some((pid, made))
+}
+
 /// Whether this process, `own`, was started by a service that starts what
 /// a command asks of it, outside any job (WMI's provider host, the task
 /// host, the service host that runs the task scheduler, which `scheduler`
@@ -692,18 +753,22 @@ mod sys {
     use std::sync::OnceLock;
 
     use super::{Listed, Opened, Under, job_name, started_by_a_service};
+    use windows_sys::Wdk::Foundation::OBJECT_ATTRIBUTES;
+    use windows_sys::Wdk::Storage::FileSystem::{NtOpenDirectoryObject, NtQueryDirectoryObject};
     use windows_sys::Wdk::System::SystemInformation::{
         NtQuerySystemInformation, SystemProcessInformation,
     };
+    use windows_sys::Wdk::System::Threading::{NtQueryInformationProcess, ProcessBasicInformation};
     use windows_sys::Win32::Foundation::{
-        ERROR_ALREADY_EXISTS, ERROR_FILE_NOT_FOUND, FALSE, FILETIME, HANDLE, LocalFree,
-        STATUS_INFO_LENGTH_MISMATCH, SetLastError,
+        ERROR_ALREADY_EXISTS, ERROR_FILE_NOT_FOUND, ERROR_INVALID_PARAMETER, FALSE, FILETIME,
+        HANDLE, LocalFree, STATUS_INFO_LENGTH_MISMATCH, SetLastError, UNICODE_STRING,
     };
     use windows_sys::Win32::Security::{
         ACCESS_ALLOWED_ACE, ACL, ACL_REVISION, AddAccessAllowedAce, CreateWellKnownSid,
         GetLengthSid, GetTokenInformation, InitializeAcl, InitializeSecurityDescriptor, PSID,
         SE_DACL_PROTECTED, SECURITY_ATTRIBUTES, SECURITY_DESCRIPTOR, SetSecurityDescriptorControl,
-        SetSecurityDescriptorDacl, TOKEN_QUERY, TOKEN_USER, TokenUser, WinCreatorOwnerRightsSid,
+        SetSecurityDescriptorDacl, TOKEN_QUERY, TOKEN_USER, TokenSessionId, TokenUser,
+        WinCreatorOwnerRightsSid,
     };
     use windows_sys::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob, JOB_OBJECT_LIMIT_BREAKAWAY_OK,
@@ -716,7 +781,7 @@ mod sys {
     };
     use windows_sys::Win32::System::Threading::{
         GetCurrentProcess, GetCurrentProcessId, GetProcessTimes, OpenProcess, OpenProcessToken,
-        PROCESS_QUERY_LIMITED_INFORMATION,
+        PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
     };
     use windows_sys::Win32::System::WindowsProgramming::SYSTEM_PROCESS_INFORMATION;
 
@@ -1218,31 +1283,288 @@ mod sys {
     }
 
     pub(super) fn under_a_session() -> Under {
-        let listed = match processes() {
-            Ok(listed) => listed,
-            Err(error) => {
-                return Under::Unknown(format!(
-                    "the system's processes could not be listed: {error}"
-                ));
-            }
+        // The system's list of processes, taken once at most, and only
+        // where the cheaper reads cannot answer.
+        let list = std::cell::OnceCell::new();
+        let listed = || {
+            list.get_or_init(processes)
+                .as_ref()
+                .map_err(|error| format!("the system's processes could not be listed: {error}"))
+        };
+        // The running harnesses that could hold it: the jobs of sessions'
+        // commands in this logon session's namespace, by their names; where
+        // the namespace cannot be listed, every process of the list, each
+        // tried by its job's name.
+        let harnesses: Vec<(u32, u64)> = match named_jobs() {
+            Ok(named) => named,
+            Err(_) => match listed() {
+                Ok(listed) => listed
+                    .iter()
+                    .map(|process| (process.pid, process.made))
+                    .collect(),
+                Err(error) => return Under::Unknown(error),
+            },
         };
         // When the earliest harness of this user that runs now was made.
         let mut began: Option<u64> = None;
-        for process in &listed {
-            match in_the_job_of(process.pid, process.made) {
+        for (pid, made) in harnesses {
+            match in_the_job_of(pid, made) {
                 Job::None => {}
-                Job::Elsewhere => {
-                    began = Some(began.map_or(process.made, |began| began.min(process.made)));
-                }
+                Job::Elsewhere => began = Some(began.map_or(made, |began| began.min(made))),
                 Job::Holds(under) => return under,
             }
         }
         // SAFETY: plain call.
         let own = unsafe { GetCurrentProcessId() };
-        // Only the processes on its line are opened, to ask when each was
-        // made and whether this user may; the service manager is asked only
-        // where the line reaches a service host.
-        started_by_a_service(&listed, own, opened, scheduler, began)
+        // The line of parents, each process on it opened, or the list where
+        // one cannot be; the service manager is asked only where the line
+        // reaches a service host.
+        let line = super::line_of(own, described);
+        let read: &[Listed] = match &line {
+            Some(line) => line,
+            None => match listed() {
+                Ok(listed) => listed,
+                Err(error) => return Under::Unknown(error),
+            },
+        };
+        started_by_a_service(read, own, opened, scheduler, began)
+    }
+
+    /// `winnt.h`'s `DIRECTORY_QUERY`: the right to list a directory of
+    /// objects.
+    const DIRECTORY_QUERY: u32 = 0x0001;
+
+    /// `OBJ_CASE_INSENSITIVE`.
+    const OBJ_CASE_INSENSITIVE: u32 = 0x0040;
+
+    /// What `NtQueryDirectoryObject` writes for each object
+    /// (`OBJECT_DIRECTORY_INFORMATION`, which `windows-sys` does not
+    /// declare): its name and its type's.
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct DirectoryEntry {
+        name: UNICODE_STRING,
+        kind: UNICODE_STRING,
+    }
+
+    /// `ntstatus.h`'s `STATUS_MORE_ENTRIES` and `STATUS_NO_MORE_ENTRIES`.
+    const STATUS_MORE_ENTRIES: i32 = 0x0000_0105;
+    const STATUS_NO_MORE_ENTRIES: i32 = 0x8000_001A_u32.cast_signed();
+
+    /// The type's name a job has in a directory of objects.
+    const JOB_TYPE: &str = "Job";
+
+    /// The text of a counted string the system wrote.
+    fn counted(string: &UNICODE_STRING) -> String {
+        if string.Buffer.is_null() {
+            return String::new();
+        }
+        // SAFETY: the system wrote `Length` bytes of text at `Buffer`, in
+        // the buffer that holds the entry, which lives through this read.
+        let units =
+            unsafe { std::slice::from_raw_parts(string.Buffer, usize::from(string.Length) / 2) };
+        String::from_utf16_lossy(units)
+    }
+
+    /// This process's logon session's id, as its token gives it.
+    fn session_id() -> io::Result<u32> {
+        let mut token: HANDLE = ptr::null_mut();
+        // SAFETY: the pseudo-handle is always valid, and `token` is a live
+        // handle's place.
+        if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &raw mut token) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: `token` was just opened and nothing else owns it.
+        let token = unsafe { OwnedHandle::from_raw_handle(token) };
+        let mut session = 0_u32;
+        let mut needed = 0_u32;
+        // SAFETY: `token` is open to query, and `session` is a live `u32`,
+        // as large as said.
+        let asked = unsafe {
+            GetTokenInformation(
+                token.as_raw_handle(),
+                TokenSessionId,
+                (&raw mut session).cast(),
+                4,
+                &raw mut needed,
+            )
+        };
+        if asked == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(session)
+    }
+
+    /// The harnesses' jobs of sessions' commands in this logon session's
+    /// own namespace of objects, `\Sessions\<id>\BaseNamedObjects`, where
+    /// `Local\` names them: each by the process instance it is named for,
+    /// read from its name. A few calls, where the system's list of
+    /// processes lists every thread too (0.3 ms cold on a hosted runner,
+    /// with 359 objects, against 0.6 to 0.8 ms; step 28's third pull
+    /// request). `Err` where the namespace cannot be listed, and in session
+    /// 0, which the services share and whose `Local\` is another directory:
+    /// every process of the list is tried then, as before.
+    fn named_jobs() -> io::Result<Vec<(u32, u64)>> {
+        let session = session_id()?;
+        if session == 0 {
+            return Err(io::Error::other("session 0's namespace is the services'"));
+        }
+        let path: Vec<u16> = format!(r"\Sessions\{session}\BaseNamedObjects")
+            .encode_utf16()
+            .collect();
+        let length = u16::try_from(path.len() * 2).map_err(io::Error::other)?;
+        let name = UNICODE_STRING {
+            Length: length,
+            MaximumLength: length,
+            Buffer: path.as_ptr().cast_mut(),
+        };
+        let attributes = OBJECT_ATTRIBUTES {
+            Length: u32::try_from(std::mem::size_of::<OBJECT_ATTRIBUTES>()).unwrap_or(0),
+            RootDirectory: ptr::null_mut(),
+            ObjectName: &raw const name,
+            Attributes: OBJ_CASE_INSENSITIVE,
+            SecurityDescriptor: ptr::null(),
+            SecurityQualityOfService: ptr::null(),
+        };
+        let mut directory: HANDLE = ptr::null_mut();
+        // SAFETY: the attributes and the name they point at live through
+        // the call, and `directory` is a live handle's place.
+        let status = unsafe {
+            NtOpenDirectoryObject(&raw mut directory, DIRECTORY_QUERY, &raw const attributes)
+        };
+        if status < 0 {
+            return Err(io::Error::other(format!(
+                "the namespace of objects could not be opened (status {status:#010x})"
+            )));
+        }
+        // SAFETY: `directory` was just opened and nothing else owns it.
+        let directory = unsafe { OwnedHandle::from_raw_handle(directory) };
+        let mut buffer: Vec<u64> = vec![0; 64 * 1024 / 8];
+        let room = u32::try_from(buffer.len() * 8).unwrap_or(0);
+        let mut context = 0_u32;
+        let mut restart = true;
+        let mut found = Vec::new();
+        // Bounded: a namespace that keeps growing as it is listed is not
+        // listed for ever, and the list is taken in its place.
+        for _ in 0..4096 {
+            let mut written = 0_u32;
+            // SAFETY: the buffer is as large as said and aligned for the
+            // entries; `context` and `written` are live `u32`s.
+            let status = unsafe {
+                NtQueryDirectoryObject(
+                    directory.as_raw_handle(),
+                    buffer.as_mut_ptr().cast(),
+                    room,
+                    false,
+                    restart,
+                    &raw mut context,
+                    &raw mut written,
+                )
+            };
+            restart = false;
+            if status == STATUS_NO_MORE_ENTRIES {
+                return Ok(found);
+            }
+            if status < 0 {
+                return Err(io::Error::other(format!(
+                    "the namespace of objects could not be listed (status {status:#010x})"
+                )));
+            }
+            let entries = buffer.as_ptr().cast::<DirectoryEntry>();
+            let most = buffer.len() * 8 / std::mem::size_of::<DirectoryEntry>();
+            for at in 0..most {
+                // SAFETY: within the buffer; the list of entries ends with
+                // one of zeroes, before the names they point at.
+                let entry = unsafe { ptr::read_unaligned(entries.add(at)) };
+                if entry.name.Buffer.is_null() {
+                    break;
+                }
+                if counted(&entry.kind) == JOB_TYPE
+                    && let Some(harness) = super::harness_named(&counted(&entry.name))
+                {
+                    found.push(harness);
+                }
+            }
+            if status != STATUS_MORE_ENTRIES {
+                return Ok(found);
+            }
+        }
+        Err(io::Error::other("the namespace of objects did not end"))
+    }
+
+    /// `PROCESS_BASIC_INFORMATION`, which `windows-sys` keeps under a
+    /// feature of its own: its parent's id is the last field.
+    #[repr(C)]
+    struct BasicInformation {
+        exit_status: i32,
+        environment_block: *mut core::ffi::c_void,
+        affinity: usize,
+        priority: i32,
+        process: usize,
+        parent: usize,
+    }
+
+    /// The process `pid`, opened to ask its parent, its program's name and
+    /// when it was made, as the system's list gives them.
+    fn described(pid: u32) -> super::Described {
+        use super::Described;
+        // SAFETY: plain values.
+        let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid) };
+        if handle.is_null() {
+            let error = io::Error::last_os_error();
+            return if error.raw_os_error() == i32::try_from(ERROR_INVALID_PARAMETER).ok() {
+                Described::Gone
+            } else {
+                Described::Closed
+            };
+        }
+        // SAFETY: `handle` was just opened and nothing else owns it.
+        let process = unsafe { OwnedHandle::from_raw_handle(handle) };
+        let Some(made) = made_at(process.as_raw_handle()) else {
+            return Described::Closed;
+        };
+        // SAFETY: the structure is plain data, for which all zeroes is valid.
+        let mut basic: BasicInformation = unsafe { std::mem::zeroed() };
+        // SAFETY: `process` is open with the limited right to ask, which
+        // this class takes, and the structure is as large as said.
+        let status = unsafe {
+            NtQueryInformationProcess(
+                process.as_raw_handle(),
+                ProcessBasicInformation,
+                (&raw mut basic).cast(),
+                u32::try_from(std::mem::size_of::<BasicInformation>()).unwrap_or(0),
+                ptr::null_mut(),
+            )
+        };
+        if status < 0 {
+            return Described::Closed;
+        }
+        let mut path = [0_u16; 1024];
+        let mut length = u32::try_from(path.len()).unwrap_or(0);
+        // SAFETY: `process` is open with the limited right to ask, and the
+        // buffer holds `length` characters.
+        let asked = unsafe {
+            QueryFullProcessImageNameW(
+                process.as_raw_handle(),
+                PROCESS_NAME_WIN32,
+                path.as_mut_ptr(),
+                &raw mut length,
+            )
+        };
+        if asked == 0 {
+            return Described::Closed;
+        }
+        let Some(path) = path.get(..usize::try_from(length).unwrap_or(usize::MAX)) else {
+            return Described::Closed;
+        };
+        let path = String::from_utf16_lossy(path);
+        let name = path.rsplit('\\').next().unwrap_or(&path).to_lowercase();
+        Described::Is(Listed {
+            pid,
+            parent: u32::try_from(basic.parent).unwrap_or(u32::MAX),
+            name,
+            made,
+        })
     }
 
     /// Where this process stands to the job of sessions' commands of the
@@ -1672,6 +1994,94 @@ mod tests {
             Under::Session(_)
         ));
         assert_eq!(asked.get(), 1, "asked once, at the service host");
+    }
+
+    /// The line of parents a service's start is read on is described by
+    /// opening each process of it, as far as they pass a command through,
+    /// with the first that does not; one that cannot be opened (a service's
+    /// host, whose name only the list gives) makes it take the list. Read
+    /// on the line described, a check says what it says on the list.
+    #[test]
+    fn the_line_is_described_by_opening_each_process_and_the_list_taken_at_a_closed_one() {
+        let processes = listed(&[
+            (100, 90, "cin.exe"),
+            (90, 80, "pwsh.exe"),
+            (80, 70, "windowsterminal.exe"),
+            (70, 4, "explorer.exe"),
+            (200, 190, "cin.exe"),
+            (190, 180, "cmd.exe"),
+            (180, 4, "wmiprvse.exe"),
+            (300, 290, "cin.exe"),
+            (290, 9999, "cmd.exe"),
+            (400, 390, "cin.exe"),
+            (390, 380, "cmd.exe"),
+            (380, 4, "taskhostw.exe"),
+        ]);
+        let closed = [4, 180];
+        let describe = |pid: u32| {
+            if closed.contains(&pid) {
+                return Described::Closed;
+            }
+            processes
+                .iter()
+                .find(|process| process.pid == pid)
+                .cloned()
+                .map_or(Described::Gone, Described::Is)
+        };
+        let pids = |line: Option<Vec<Listed>>| {
+            line.map(|line| line.iter().map(|process| process.pid).collect::<Vec<_>>())
+        };
+        // A terminal ends it: what is above the terminal is not read.
+        assert_eq!(pids(line_of(100, describe)), Some(vec![100, 90, 80]));
+        // WMI's host cannot be opened: the list is taken.
+        assert_eq!(pids(line_of(200, describe)), None);
+        // A parent that has gone ends it.
+        assert_eq!(pids(line_of(300, describe)), Some(vec![300, 290]));
+        // The task host, the user's own, is described and read.
+        assert_eq!(pids(line_of(400, describe)), Some(vec![400, 390, 380]));
+        let opened = |pid: u32| {
+            if closed.contains(&pid) {
+                Opened::Closed
+            } else {
+                Opened::Made(u64::from(pid))
+            }
+        };
+        for own in [100, 200, 300, 400] {
+            let line = line_of(own, describe).unwrap_or_else(|| processes.clone());
+            assert_eq!(
+                started_by_a_service(&line, own, opened, || Some(0), Some(0)),
+                started_by_a_service(&processes, own, opened, || Some(0), Some(0)),
+                "{own}"
+            );
+        }
+    }
+
+    /// A harness's job is found in the namespace of objects by its name,
+    /// which gives its process's instance back; any other name, and one
+    /// `job_name` would not write so, is no harness's.
+    #[test]
+    fn a_harnesss_job_is_known_by_its_name_in_the_namespace() {
+        let listed_name = |pid, made| {
+            job_name(pid, made)
+                .strip_prefix(r"Local\")
+                .unwrap()
+                .to_owned()
+        };
+        assert_eq!(
+            harness_named(&listed_name(4242, 133_000_000_000)),
+            Some((4242, 133_000_000_000))
+        );
+        for other in [
+            "Cineris.SessionCommands.42",
+            "Cineris.SessionCommands.042.7",
+            "Cineris.SessionCommands.+42.7",
+            "Cineris.SessionCommands.42.7.1",
+            "Cineris.SessionCommands.x.7",
+            "Other.42.7",
+            r"Local\Cineris.SessionCommands.42.7",
+        ] {
+            assert_eq!(harness_named(other), None, "{other}");
+        }
     }
 
     /// A harness's job is named for its process's instance: the same id
