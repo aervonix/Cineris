@@ -2223,3 +2223,83 @@ fn the_viewer_turns_the_mouse_off_as_it_returns_to_the_main_screen() {
     let modes = modes_after(&all);
     assert!(!modes.alternate && !modes.mouse && !modes.mouse_sgr);
 }
+
+/// The keyboard protocol's flags, which the terminal's reply turns on, are
+/// left pushed on neither screen of a terminal that keeps a stack per
+/// screen (kitty, ghostty, the test kit's `VTerm`): by the full screen,
+/// whose first frame takes the alternate screen before the reply is read,
+/// when it quits and when the terminal fails under it; and by the viewer
+/// opened from the inline screen after the reply (the fixes of step 25's
+/// review, finding 10: the full screen left them on the alternate screen,
+/// where the next program that took it got keys it never asked for).
+#[test]
+fn the_full_screen_and_the_viewer_leave_no_keyboard_flags_on_either_screen() {
+    use cineris_term::Ready;
+    let reply = b"\x1b[?0u\x1b[?62;22c".to_vec();
+    let ways: [(&str, Presenter, Steps); 3] = [
+        (
+            "the full screen quits",
+            Presenter::Fullscreen,
+            vec![
+                (Ready::Woken, Vec::new()),
+                (Ready::Input, reply.clone()),
+                (Ready::Input, b"\x04".to_vec()),
+            ],
+        ),
+        // The script ends: the terminal fails under the loop.
+        (
+            "the terminal fails under the full screen",
+            Presenter::Fullscreen,
+            vec![(Ready::Woken, Vec::new()), (Ready::Input, reply.clone())],
+        ),
+        (
+            "the viewer opened and closed",
+            Presenter::Inline,
+            vec![
+                (Ready::Woken, Vec::new()),
+                (Ready::Input, reply.clone()),
+                // Ctrl+O, then Esc on its own.
+                (Ready::Input, b"\x0f".to_vec()),
+                (Ready::Timeout, Vec::new()),
+                (Ready::Input, b"\x1b".to_vec()),
+                (Ready::Timeout, Vec::new()),
+                (Ready::Timeout, Vec::new()),
+                (Ready::Input, b"\x04".to_vec()),
+            ],
+        ),
+    ];
+    for (way, presenter, steps) in ways {
+        let base = Instant::now();
+        let settings = Settings {
+            presenter,
+            ..Settings::default()
+        };
+        let (mut app, link) = app_with_settings(base, settings);
+        link.give(Inbound::Done(
+            crate::app::Ticket(1),
+            Ok(cineris_protocol::methods::OpResult::SessionNew(
+                cineris_protocol::methods::SessionResult {
+                    session: crate::testkit::session().build(),
+                },
+            )),
+        ));
+        let (device, written) = played(steps, base);
+        let mut terminal = cineris_term::Terminal::with_device(device, crate::testkit::caps())
+            .expect("a terminal");
+        let ended = crate::app::run(&mut terminal, &mut app);
+        assert_eq!(ended.is_err(), way.contains("fails"), "{way}: {ended:?}");
+        terminal.leave().expect("left");
+        let all = bytes(&written);
+        assert!(holds(&all, b"\x1b[>3u"), "{way}: the flags were pushed");
+        assert!(holds(&all, b"\x1b[?1049h"), "{way}: the alternate screen");
+        let mut term = cineris_testkit::VTerm::new(100, 30);
+        term.feed(&all);
+        assert!(
+            term.main_keyboard().is_empty() && term.alternate_keyboard().is_empty(),
+            "{way}: the main screen's flags {:?}, the alternate screen's {:?}",
+            term.main_keyboard(),
+            term.alternate_keyboard()
+        );
+        assert!(!term.modes().alternate, "{way}");
+    }
+}

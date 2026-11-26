@@ -79,6 +79,13 @@ fn run(scenario: &str, test: &str, editor: &Editor) -> String {
             "an editor's keyboard flags are left: {:?}",
             session.screen().keyboard()
         );
+        // Each screen has its own stack (the fixes of step 25's review): a
+        // killed editor's flags on the alternate screen are popped there.
+        assert!(
+            session.screen().alternate_keyboard().is_empty(),
+            "an editor's keyboard flags are left on the alternate screen: {:?}",
+            session.screen().alternate_keyboard()
+        );
     }
     // The terminal's handlers are all in place again: a resize reaches the
     // application (the review of step 23: the terminal entered again with

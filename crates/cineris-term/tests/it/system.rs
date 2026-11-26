@@ -77,9 +77,14 @@ fn restored(session: &mut Session) {
     // ConPTY asks the terminal for focus events itself, for the console it
     // runs, so on Windows the mode says nothing about the demo.
     assert!(cfg!(windows) || !modes.focus, "focus events were left on");
+    // On either screen: each has a stack of its own (the fixes of step 25's
+    // review).
     assert!(
-        screen.keyboard().is_empty(),
-        "the keyboard protocol was left on"
+        screen.main_keyboard().is_empty() && screen.alternate_keyboard().is_empty(),
+        "the keyboard protocol was left on: the main screen's flags {:?}, the alternate \
+         screen's {:?}",
+        screen.main_keyboard(),
+        screen.alternate_keyboard()
     );
     // ConPTY asks the terminal for the win32 input mode itself, and draws
     // with automatic wrap as it likes, so on Windows these say nothing about
