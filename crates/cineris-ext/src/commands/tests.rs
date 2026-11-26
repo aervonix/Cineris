@@ -234,7 +234,9 @@ fn a_folder_of_commands_is_read_within_its_bounds() {
     );
     scratch.file(
         format!("{USER}/big.md"),
-        "x".repeat(usize::try_from(MAX_FILE_BYTES).unwrap() + 1),
+        // 64 KiB and one byte, written out: the cap is 64 KiB, whatever the
+        // constant says.
+        "x".repeat(64 * 1024 + 1),
     );
     scratch.file(format!("{USER}/Deploy.md"), "One.");
     scratch.file(format!("{USER}/deploy.md"), "Two.");
