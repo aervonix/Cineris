@@ -148,11 +148,26 @@ impl World {
         // process is started to open a session.
         static SHELL: std::sync::OnceLock<Option<cineris_tools::Shell>> =
             std::sync::OnceLock::new();
+        // On Windows, Windows PowerShell where Windows keeps it, one look,
+        // before a search of `PATH`, which looks in each of a hosted
+        // runner's dozens of folders: 1.9 ms of a test's process there
+        // (`docs/steps/ci-budgets-2/answered.md`).
         options.shell = SHELL
             .get_or_init(|| {
                 let search = cineris_tools::ShellSearch::from_env();
+                let kept = search.system_root.as_ref().map(|root| {
+                    root.join("System32")
+                        .join("WindowsPowerShell")
+                        .join("v1.0")
+                        .join("powershell.exe")
+                });
                 cfg!(windows)
-                    .then(|| search.find(Some("powershell"), None).ok())
+                    .then(|| {
+                        kept.as_deref()
+                            .and_then(std::path::Path::to_str)
+                            .and_then(|kept| search.find(Some(kept), None).ok())
+                            .or_else(|| search.find(Some("powershell"), None).ok())
+                    })
                     .flatten()
                     .or_else(|| search.find(None, None).ok())
             })

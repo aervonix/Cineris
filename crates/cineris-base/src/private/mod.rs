@@ -141,11 +141,24 @@ pub fn create_dir_all(path: &Path) -> io::Result<()> {
     }
     #[cfg(windows)]
     {
-        // Find what is missing, outermost last.
+        // Find what is missing, outermost last. A name's attributes answer
+        // without opening it where it is no reparse point, as the path
+        // resolver's walk asks (`windows::attributes`); anything else is
+        // asked of `metadata`, which follows a link, as before.
         let mut missing = Vec::new();
         let mut current = path;
         loop {
-            match std::fs::metadata(current) {
+            let looked = match windows::attributes(current) {
+                Ok(attributes) if !attributes.is_reparse_point() => {
+                    if attributes.is_directory() {
+                        break;
+                    }
+                    return Err(io::ErrorKind::NotADirectory.into());
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => Err(error),
+                _ => std::fs::metadata(current),
+            };
+            match looked {
                 Ok(found) if found.is_dir() => break,
                 Ok(_) => return Err(io::ErrorKind::NotADirectory.into()),
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {

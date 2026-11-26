@@ -763,6 +763,42 @@ mod tests {
         }
     }
 
+    /// What the path resolver's walk reads of each name: a directory, a
+    /// file, a name that is not there, and a link, whose own attributes are
+    /// read and not those of what it leads to.
+    #[test]
+    fn a_names_attributes_say_whether_it_is_a_directory_or_a_reparse_point() {
+        let dir = std::env::temp_dir().join(format!("cineris-attributes-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("folder")).unwrap();
+        std::fs::write(dir.join("file.txt"), "x").unwrap();
+
+        let folder = attributes(&dir.join("folder")).unwrap();
+        assert!(folder.is_directory() && !folder.is_reparse_point());
+        let file = attributes(&dir.join("file.txt")).unwrap();
+        assert!(!file.is_directory() && !file.is_reparse_point());
+        let missing = attributes(&dir.join("missing").join("file.txt")).unwrap_err();
+        assert_eq!(missing.kind(), io::ErrorKind::NotFound, "{missing}");
+        let missing = attributes(&dir.join("missing.txt")).unwrap_err();
+        assert_eq!(missing.kind(), io::ErrorKind::NotFound, "{missing}");
+
+        // A link to the folder: its own attributes, a reparse point. CI's
+        // runners may make one; a machine without the right is not asked
+        // to.
+        let link = dir.join("link");
+        match std::os::windows::fs::symlink_dir(dir.join("folder"), &link) {
+            Ok(()) => {
+                let link = attributes(&link).unwrap();
+                assert!(link.is_reparse_point() && link.is_directory());
+            }
+            Err(error) => assert!(
+                std::env::var_os("CI").is_none(),
+                "a link could not be made on CI: {error}"
+            ),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn the_current_user_is_an_identifier_and_is_read_once() {
         let first = current_user().unwrap();
