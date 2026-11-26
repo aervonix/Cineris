@@ -1500,6 +1500,19 @@ mod sys {
         String::from_utf16_lossy(units)
     }
 
+    /// Whether a counted string the system wrote is `text`, read where it
+    /// lies, unit by unit: no text is made of it (an entry's type, which
+    /// every object of the namespace has, and only a job's matters).
+    fn says(string: &UNICODE_STRING, text: &str) -> bool {
+        if string.Buffer.is_null() {
+            return text.is_empty();
+        }
+        // SAFETY: as in `counted`.
+        let units =
+            unsafe { std::slice::from_raw_parts(string.Buffer, usize::from(string.Length) / 2) };
+        units.iter().copied().eq(text.encode_utf16())
+    }
+
     /// This process's logon session's id, as its token gives it.
     fn session_id() -> io::Result<u32> {
         let mut token: HANDLE = ptr::null_mut();
@@ -1631,7 +1644,7 @@ mod sys {
             if entry.name.Buffer.is_null() {
                 break;
             }
-            if counted(&entry.kind) == JOB_TYPE
+            if says(&entry.kind, JOB_TYPE)
                 && let Some(harness) = super::harness_named(&counted(&entry.name))
             {
                 found.push(harness);
