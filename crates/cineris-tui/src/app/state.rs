@@ -1464,8 +1464,10 @@ impl App {
     }
 
     /// A slash command this build has is done, and one it does not have
-    /// yet is said to be missing and given back. Says whether `text` was
-    /// either; anything else is a prompt.
+    /// yet is said to be missing and given back, its name in any case of
+    /// ASCII letters (`/Help`; since step 28, so that a custom command
+    /// never takes a built-in's name in another case). Says whether `text`
+    /// was either; anything else is a prompt.
     fn slash_command(&mut self, text: &str, at: Instant) -> bool {
         let Some(command) = text.strip_prefix('/') else {
             return false;
@@ -1473,11 +1475,14 @@ impl App {
         let (name, rest) = command
             .split_once(char::is_whitespace)
             .unwrap_or((command, ""));
-        if COMMANDS.iter().any(|(known, _)| *known == name) {
-            self.command(name, rest.trim(), at);
+        if let Some((known, _)) = COMMANDS
+            .iter()
+            .find(|(known, _)| known.eq_ignore_ascii_case(name))
+        {
+            self.command(known, rest.trim(), at);
             return true;
         }
-        if NOT_YET.contains(&name) {
+        if NOT_YET.iter().any(|known| known.eq_ignore_ascii_case(name)) {
             self.say(&format!(
                 "/{name} is not in this build yet. /help lists the commands there are."
             ));
@@ -1792,16 +1797,12 @@ impl App {
                 self.models = models;
             }
             (Pending::Prompt(sent), result) => self.prompt_answered(ticket, sent, result, now),
+            // Each in turn; one a command made as it was typed (since step
+            // 28).
             (Pending::Interrupt, Ok(OpResult::TurnInterrupt(result))) => {
-                for parts in result.undelivered {
-                    let text: Vec<&str> = parts
-                        .iter()
-                        .filter_map(|part| match part {
-                            Part::Text(text) => Some(text.text.as_str()),
-                            _ => None,
-                        })
-                        .collect();
-                    self.give_back(&text.join("\n"));
+                for (at, parts) in result.undelivered.iter().enumerate() {
+                    let command = result.undelivered_commands.get(at).and_then(Option::as_ref);
+                    self.give_back(&custom::given_back(parts, command).0);
                 }
             }
             (Pending::Sessions, Ok(OpResult::SessionList(list))) => {
@@ -2060,7 +2061,12 @@ impl App {
                 if (sent.started || (held && !self.turn_runs)) && self.running.is_some() {
                     self.stop_running();
                 }
-                self.error(&error);
+                // A command the person stopped while it ran (an
+                // extension's, since step 28) comes back as it was typed,
+                // with nothing said: they know why.
+                if !custom::stopped_command(sent.command.as_ref(), &error) {
+                    self.error(&error);
+                }
                 self.give_back(&sent.text);
                 true
             }
@@ -2493,22 +2499,10 @@ impl App {
             }
             // A prompt a hook refused, or one the turn's interrupt kept
             // from its hooks (step 28): said with the hooks' reasons, and
-            // put back in the editor.
+            // put back in the editor, one a command made as it was typed.
             Event::Notice(Notice::PromptReturned(returned)) => {
-                let text: Vec<&str> = returned
-                    .parts
-                    .iter()
-                    .filter_map(|part| match part {
-                        Part::Text(text) => Some(text.text.as_str()),
-                        _ => None,
-                    })
-                    .collect();
-                let text = text.join("\n");
-                let left_out = returned
-                    .parts
-                    .iter()
-                    .filter(|part| !matches!(part, Part::Text(_)))
-                    .count();
+                let (text, left_out) =
+                    custom::given_back(&returned.parts, returned.command.as_ref());
                 // Into the draft, and an item being edited stays as it is:
                 // the notice says where it went.
                 let into = self.put_back(&text);

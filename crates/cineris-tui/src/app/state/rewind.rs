@@ -324,13 +324,15 @@ impl App {
     }
 
     /// The chosen prompt, read whole: the point's own item, and no other.
+    /// One a command made is given back as it was typed, `/name args`
+    /// (since step 28).
     pub(super) fn rewind_prompt_read(&mut self, session: &SessionId, page: &SessionReadResult) {
         let Some(rewinding) = self.rewinding_of(session) else {
             return;
         };
         let text = page.items.iter().find_map(|item| match item {
             Item::UserMessage(message) if message.id == rewinding.point.item => {
-                Some(prompt_text(message))
+                Some(super::custom::given_back(&message.parts, message.command.as_ref()).0)
             }
             _ => None,
         });

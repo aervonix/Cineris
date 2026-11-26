@@ -269,8 +269,8 @@ caught-by:
 rule: The interface sends `/name …` as a command when `name` is one of the session's.
 file: crates/cineris-tui/src/app/state/custom.rs
 in: App::custom_call
-find: (!built_in(name) && self.custom.list.iter().any(|command| command.name == name))
-replace: (!built_in(name) && self.custom.list.iter().any(|command| command.name == name) && name.is_empty())
+find: (!built_in(name) && known)
+replace: (!built_in(name) && known && name.is_empty())
 caught-by:
     cineris-tui app::tests::custom::custom_commands_join_the_menu_and_go_as_commands
     cineris-tui app::tests::custom::a_held_command_waits_for_the_list_and_its_prompt_says_whose
@@ -301,6 +301,114 @@ find: CommandSource::Project => "the project's".to_owned()
 replace: CommandSource::Project => "your".to_owned()
 caught-by:
     cineris-tui app::tests::custom::a_held_command_waits_for_the_list_and_its_prompt_says_whose
+
+[break] a-hooks-refusal-gives-a-command-back-expanded
+rule: A prompt a command made that a hook refused comes back into the editor as it was typed, `/name args`, not as the command's text.
+file: crates/cineris-tui/src/app/state.rs
+in: App::event
+find: custom::given_back(&returned.parts, returned.command.as_ref())
+replace: custom::given_back(&returned.parts, None)
+caught-by:
+    cineris-tui app::tests::custom::a_commands_prompt_comes_back_as_it_was_typed
+
+[break] an-interrupt-gives-a-command-back-expanded
+rule: An undelivered steering message a command made comes back from an interrupt as it was typed, `/name args`, beside the plain ones.
+file: crates/cineris-tui/src/app/state.rs
+in: App::done
+find: let command = result.undelivered_commands.get(at).and_then(Option::as_ref);
+replace: let command = None;
+caught-by:
+    cineris-tui app::tests::custom::a_commands_prompt_comes_back_as_it_was_typed
+
+[break] the-interrupt-key-waits-for-a-commands-turn
+rule: The interrupt key interrupts while a command's `turn/start` is on its way (an extension's command still running), as it does while a turn runs.
+file: crates/cineris-tui/src/app/state.rs
+in: App::submit
+find: if started {
+replace: if started && self.custom_call(&text).is_none() {
+caught-by:
+    cineris-tui app::tests::custom::a_commands_prompt_comes_back_as_it_was_typed
+
+[break] a-command-not-used-goes-as-text
+rule: A command the list says is not used, typed, goes as the command, for the core to refuse with why, not to the model as `/name args`.
+file: crates/cineris-tui/src/app/state/custom.rs
+in: App::custom_call
+find: .any(|command| command.name == name);
+replace: .any(|command| command.name == name && name.is_empty());
+caught-by:
+    cineris-tui app::tests::custom::commands_not_used_are_said_once_and_typed_go_as_commands
+
+[break] the-commands-not-used-are-not-said
+rule: The commands the list says are not used are said, each with whose it is and why.
+file: crates/cineris-tui/src/app/state/custom.rs
+in: App::commands_listed
+find: self.say(&line);
+replace: let _ = line;
+caught-by:
+    cineris-tui app::tests::custom::commands_not_used_are_said_once_and_typed_go_as_commands
+
+[break] the-commands-not-used-are-said-at-every-list
+rule: The commands not used are said once a session, not at every list the menu asks for.
+file: crates/cineris-tui/src/app/state/custom.rs
+in: App::commands_listed
+find: self.custom.not_used_said = Some(session.clone());
+replace: self.custom.not_used_said = None;
+caught-by:
+    cineris-tui app::tests::custom::commands_not_used_are_said_once_and_typed_go_as_commands
+
+[break] help-leaves-out-the-commands-not-used
+rule: `/help` lists the commands not used, marked, with why.
+file: crates/cineris-tui/src/app/state/custom.rs
+in: App::custom_help
+find: used.chain(not_used).collect()
+replace: used.chain(not_used.take(0)).collect()
+caught-by:
+    cineris-tui app::tests::custom::commands_not_used_are_said_once_and_typed_go_as_commands
+
+[break] a-rewind-gives-a-command-back-expanded
+rule: A rewind to a prompt a command made puts it back as it was typed, `/name args`, not as the command's text.
+file: crates/cineris-tui/src/app/state/rewind.rs
+in: App::rewind_prompt_read
+find: super::custom::given_back(&message.parts, message.command.as_ref())
+replace: super::custom::given_back(&message.parts, None)
+caught-by:
+    cineris-tui app::tests::rewind::two_rewinds_the_conversation_only
+
+[break] a-stopped-command-is-said-to-have-failed
+rule: A command the person stopped while it ran (`command_failed`, `interrupted`) comes back with nothing said.
+file: crates/cineris-tui/src/app/state.rs
+in: App::prompt_answered
+find: if !custom::stopped_command(sent.command.as_ref(), &error) {
+replace: if true {
+caught-by:
+    cineris-tui app::tests::custom::a_commands_prompt_comes_back_as_it_was_typed
+
+[break] a-failed-command-is-given-back-unsaid
+rule: Only a command the person stopped comes back unsaid: one that failed of itself says why.
+file: crates/cineris-tui/src/app/state/custom.rs
+in: stopped_command
+find: error.kind == ErrorKind::Interrupted &&
+replace:
+caught-by:
+    cineris-tui app::tests::custom::a_commands_prompt_comes_back_as_it_was_typed
+
+[break] a-custom-command-takes-a-built-ins-name-in-another-case
+rule: A custom command named like a built-in in another case of ASCII letters (`Help`) is not offered.
+file: crates/cineris-tui/src/app/state/custom.rs
+in: built_in
+find: .any(|(known, _)| known.eq_ignore_ascii_case(name))
+replace: .any(|(known, _)| *known == name)
+caught-by:
+    cineris-tui app::tests::custom::custom_commands_join_the_menu_and_go_as_commands
+
+[break] a-built-in-typed-in-another-case-is-a-prompt
+rule: A built-in typed in another case of ASCII letters (`/Help`) is the built-in.
+file: crates/cineris-tui/src/app/state.rs
+in: App::slash_command
+find: .find(|(known, _)| known.eq_ignore_ascii_case(name))
+replace: .find(|(known, _)| *known == name)
+caught-by:
+    cineris-tui app::tests::custom::custom_commands_join_the_menu_and_go_as_commands
 
 [break] the-list-does-not-wait-for-the-extensions
 rule: `commands/list` gives an extension's commands once the session's extensions are found and registered.

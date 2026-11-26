@@ -332,8 +332,8 @@ caught-by:
 rule: A slash command of 09-tui that this build does not have is said to be missing, and is no prompt for the model.
 file: crates/cineris-tui/src/app/state.rs
 in: App::slash_command
-find: if NOT_YET.contains(&name) {
-replace: if NOT_YET.contains(&name) && false {
+find: if NOT_YET.iter().any(|known| known.eq_ignore_ascii_case(name)) {
+replace: if NOT_YET.iter().any(|known| known.eq_ignore_ascii_case(name)) && false {
 caught-by:
     app::tests::a_command_not_in_this_build_is_said_and_not_sent
 

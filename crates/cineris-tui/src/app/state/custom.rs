@@ -7,16 +7,28 @@
 //!   time the `/` menu opens: it is a read beside the lane, and cheap. The
 //!   last one answered is kept; one that fails leaves what was there. A
 //!   command named like a built-in, or like one of 09-tui's commands this
-//!   build does not have yet, is not offered: the built-in wins, typed or
-//!   chosen, and nothing is said.
+//!   build does not have yet, in any case of ASCII letters (`Help`), is not
+//!   offered: the built-in wins, typed or chosen, and nothing is said.
+//! - **Not used.** The commands the list says are not used, and why, are
+//!   said once a session, one line each, and `/help` lists them, marked.
 //! - **The menu** lists them after the built-ins, each with its
 //!   description; a project's (a file's or a project extension's) is noted
 //!   `(project's)` before it, so that a cut row never loses the note. So
 //!   does `/help`.
-//! - **Sending.** `/name rest`, `name` in the last list, goes as that
-//!   command (`turn/start`'s `command`, `input` empty), as a prompt goes:
-//!   steering or queued while a turn runs, its typed text given back with
-//!   the core's sentence when it is refused. Anything else goes as before.
+//! - **Sending.** `/name rest`, `name` in the last list, used or not, goes
+//!   as that command (`turn/start`'s `command`, `input` empty), as a prompt
+//!   goes: steering or queued while a turn runs, its typed text given back
+//!   with the core's sentence when it is refused (one not used is refused
+//!   with why, and never reaches the model as text). Anything else goes as
+//!   before. The interrupt key while its `turn/start` is on its way (an
+//!   extension's command still running) interrupts, as while a turn runs;
+//!   the refusal that follows (`command_failed`, `interrupted`) gives the
+//!   typed text back, says nothing, since the person stopped it, and stops
+//!   the spinner.
+//! - **Given back.** A prompt a command made that comes back into the
+//!   editor, a hook's refusal (`prompt_returned`), an interrupt's
+//!   undelivered steering message or a rewind's prompt, comes back as it
+//!   was typed, `/name args`, in place of the command's text.
 //! - **Held prompts.** A prompt held while the session opened (the command
 //!   line's among them) that may be a custom command waits for the
 //!   session's first list, so that it is sent as what it is: until then the
@@ -26,10 +38,15 @@
 
 use std::time::Instant;
 
-use cineris_protocol::methods::{CommandCall, CommandInfo, CommandsListParams, Op, OpResult};
-use cineris_protocol::{ErrorData, SessionId};
+use cineris_protocol::error::code;
+use cineris_protocol::item::PromptCommand;
+use cineris_protocol::message::Part;
+use cineris_protocol::methods::{
+    CommandCall, CommandInfo, CommandNotUsed, CommandsListParams, Op, OpResult,
+};
+use cineris_protocol::{ErrorData, ErrorKind, SessionId};
 
-use super::super::items::owner_note;
+use super::super::items::{owner_note, typed, whose};
 use super::{App, COMMANDS, NOT_YET, Pending, Ticket};
 use crate::complete::{Command, Kind};
 
@@ -39,6 +56,11 @@ pub(super) struct Custom {
     /// The last list answered for the session open, the names of built-ins
     /// left out.
     list: Vec<CommandInfo>,
+    /// The commands the last list says are not used, and why: typed, one
+    /// goes as the command, for the core to refuse with why.
+    not_used: Vec<CommandNotUsed>,
+    /// The session whose commands not used were said: once a session.
+    not_used_said: Option<SessionId>,
     /// The session whose list was answered, well or not: a held prompt
     /// that may be one of its commands waits until then.
     answered: Option<SessionId>,
@@ -53,9 +75,13 @@ pub(super) struct Custom {
 }
 
 /// Whether `name` is a built-in's, or one of 09-tui's commands this build
-/// does not have yet: a custom command never takes it.
+/// does not have yet, in any case of ASCII letters: a custom command never
+/// takes it.
 fn built_in(name: &str) -> bool {
-    COMMANDS.iter().any(|(known, _)| *known == name) || NOT_YET.contains(&name)
+    COMMANDS
+        .iter()
+        .any(|(known, _)| known.eq_ignore_ascii_case(name))
+        || NOT_YET.iter().any(|known| known.eq_ignore_ascii_case(name))
 }
 
 /// The name a `/` prompt names, and the rest of its text.
@@ -65,6 +91,42 @@ fn named(text: &str) -> Option<(&str, &str)> {
         .split_once(char::is_whitespace)
         .unwrap_or((command, ""));
     (!name.is_empty()).then_some((name, rest))
+}
+
+/// What a prompt handed back puts in the editor, and how many of its parts
+/// it leaves out: its text parts, one to a line, and not the rest (images);
+/// or, for one a command made, what was typed, `/name args`, in place of
+/// the command's text, which leaves nothing out.
+pub(super) fn given_back(parts: &[Part], command: Option<&PromptCommand>) -> (String, usize) {
+    if let Some(command) = command {
+        return (typed(command), 0);
+    }
+    let text: Vec<&str> = parts
+        .iter()
+        .filter_map(|part| match part {
+            Part::Text(text) => Some(text.text.as_str()),
+            _ => None,
+        })
+        .collect();
+    let left_out = parts.len() - text.len();
+    (text.join("\n"), left_out)
+}
+
+/// Whether a prompt's refusal is a command's that the person stopped
+/// (`command_failed`, `interrupted`): its text comes back, and nothing is
+/// said.
+pub(super) fn stopped_command(sent: Option<&CommandCall>, error: &ErrorData) -> bool {
+    sent.is_some() && error.kind == ErrorKind::Interrupted && error.code == code::COMMAND_FAILED
+}
+
+/// How a command not used is named: `/name`, or its file when it has no
+/// name.
+fn not_used_name(command: &CommandNotUsed) -> String {
+    match &command.path {
+        _ if !command.name.is_empty() => format!("/{}", command.name),
+        Some(path) => path.clone(),
+        None => "(no name)".to_owned(),
+    }
 }
 
 /// A custom command's note in the menu and in `/help`: its description,
@@ -111,6 +173,7 @@ impl App {
     pub(super) fn forget_commands(&mut self) {
         let had = !self.custom.list.is_empty();
         self.custom.list.clear();
+        self.custom.not_used.clear();
         self.custom.answered = None;
         self.custom.asked = None;
         if had {
@@ -120,8 +183,9 @@ impl App {
 
     /// `commands/list` answered. The list of the session open is kept, and
     /// the menu given it when it changed; a failure keeps what was there,
-    /// and says nothing, since nobody asked. The held prompts that waited
-    /// for it go.
+    /// and says nothing, since nobody asked. The commands not used are said
+    /// the first time a list of the session has some. The held prompts that
+    /// waited for it go.
     pub(super) fn commands_listed(
         &mut self,
         ticket: Ticket,
@@ -143,6 +207,28 @@ impl App {
                 if list != self.custom.list {
                     self.custom.list = list;
                     self.input.set_commands(self.menu_commands());
+                }
+                self.custom.not_used = listed.not_used;
+                if !self.custom.not_used.is_empty()
+                    && self.custom.not_used_said.as_ref() != Some(session)
+                {
+                    self.custom.not_used_said = Some(session.clone());
+                    let lines: Vec<String> = self
+                        .custom
+                        .not_used
+                        .iter()
+                        .map(|command| {
+                            format!(
+                                "{} ({}) is not used: {}",
+                                not_used_name(command),
+                                whose(&command.source, command.extension.as_deref()),
+                                command.reason
+                            )
+                        })
+                        .collect();
+                    for line in lines {
+                        self.say(&line);
+                    }
                 }
             }
             self.custom.answered = Some(session.clone());
@@ -180,24 +266,43 @@ impl App {
             .collect()
     }
 
-    /// `/help`'s lines for the custom commands, as the built-ins' are.
+    /// `/help`'s lines for the custom commands, as the built-ins' are, then
+    /// those not used, marked, with why.
     pub(super) fn custom_help(&self) -> Vec<String> {
-        self.custom
+        let used = self
+            .custom
             .list
             .iter()
-            .map(|command| format!("/{:<12} {}", command.name, note(command)))
-            .collect()
+            .map(|command| format!("/{:<12} {}", command.name, note(command)));
+        let not_used = self.custom.not_used.iter().map(|command| {
+            let owner = owner_note(&command.source)
+                .map(|owner| format!("({owner}) "))
+                .unwrap_or_default();
+            format!(
+                "{:<13} {owner}not used: {}",
+                not_used_name(command),
+                command.reason
+            )
+        });
+        used.chain(not_used).collect()
     }
 
-    /// The command `text` sends, when it names one of the last list.
+    /// The command `text` sends, when it names one of the last list: one
+    /// it says is not used too, which the core refuses with why, rather
+    /// than the model being sent `/name args` as text. A name typed is
+    /// never empty, so one not used that has none is never it.
     pub(super) fn custom_call(&self, text: &str) -> Option<CommandCall> {
         let (name, rest) = named(text)?;
-        (!built_in(name) && self.custom.list.iter().any(|command| command.name == name)).then(
-            || CommandCall {
-                name: name.to_owned(),
-                args: rest.trim().to_owned(),
-            },
-        )
+        let known = self.custom.list.iter().any(|command| command.name == name)
+            || self
+                .custom
+                .not_used
+                .iter()
+                .any(|command| command.name == name);
+        (!built_in(name) && known).then(|| CommandCall {
+            name: name.to_owned(),
+            args: rest.trim().to_owned(),
+        })
     }
 
     /// Whether the held prompt `text` waits for the session's first list,

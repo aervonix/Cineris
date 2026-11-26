@@ -557,7 +557,7 @@ impl Mapper {
                 Some(command) => {
                     transcript.push(Block::UserCommand {
                         typed: typed(command),
-                        whose: whose(command),
+                        whose: whose(&command.source, command.extension.as_deref()),
                         text: user_text(message),
                     });
                 }
@@ -807,8 +807,9 @@ fn user_text(message: &UserMessageItem) -> String {
     text
 }
 
-/// A command as it was typed: `/review security`.
-fn typed(command: &PromptCommand) -> String {
+/// A command as it was typed: `/review security`, `/deploy` when nothing
+/// was typed after its name. A prompt a command made comes back so.
+pub(crate) fn typed(command: &PromptCommand) -> String {
     if command.args.is_empty() {
         format!("/{}", command.name)
     } else {
@@ -817,14 +818,15 @@ fn typed(command: &PromptCommand) -> String {
 }
 
 /// Whose a command is, as its prompt says it: `your command`, `the
-/// project's command`, `your extension tracker's command`.
-fn whose(command: &PromptCommand) -> String {
-    let owner = match &command.source {
+/// project's command`, `your extension tracker's command`. So does the
+/// notice of a command that is not used.
+pub(crate) fn whose(source: &CommandSource, extension: Option<&str>) -> String {
+    let owner = match source {
         CommandSource::User => "your".to_owned(),
         CommandSource::Project => "the project's".to_owned(),
         other => format!("{}'s", other.as_str()),
     };
-    match &command.extension {
+    match extension {
         Some(extension) => format!("{owner} extension {extension}'s command"),
         None => format!("{owner} command"),
     }
