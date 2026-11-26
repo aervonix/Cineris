@@ -1812,15 +1812,15 @@ impl Core {
                 // are settled and looked at again, before the loop takes the
                 // prompt: its `prompt.submit` hooks see the expanded text, and
                 // a gate they hold refuses it (step 28).
-                let (input, command) = match params.command {
-                    Some(call) => {
-                        let (run, name) = run.as_ref().expect("a command has its run");
+                let (input, command) = match (params.command, run.as_ref()) {
+                    (Some(call), Some((run, name))) => {
                         run.go_on(name)?;
                         let (input, command) =
                             crate::commands::expand(self, &live, call, run).await?;
                         (input, Some(command))
                     }
-                    None => (params.input, None),
+                    // A command always has its run, taken above.
+                    _ => (params.input, None),
                 };
                 // Refused with `history_changing` while a rewind is under
                 // way, under the session's own lock. Who sent it is noted
