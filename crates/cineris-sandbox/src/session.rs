@@ -545,6 +545,33 @@ mod sys {
             );
         }
 
+        /// Makes `script` a `#!/bin/sh` program that says `up` and then
+        /// waits for a line, starts it, and gives it back once it has said
+        /// so. `spawn` returns while the exec is still under way: glibc's
+        /// `posix_spawn` lets the parent go on as soon as the exec has let
+        /// go of the memory the child shared with it, and the kernel gives
+        /// the process its new name later in the same exec, so `/proc` read
+        /// straight after `spawn` can show the name of the thread that
+        /// started it (once in 30 runs of `stress`). The script's line
+        /// comes once the exec is done.
+        fn started_up(script: &std::path::Path) -> std::process::Child {
+            use std::io::BufRead as _;
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::write(script, "#!/bin/sh\necho up\nread -r line\n").unwrap();
+            std::fs::set_permissions(script, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let mut child = std::process::Command::new(script)
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .spawn()
+                .unwrap();
+            let mut said = String::new();
+            std::io::BufReader::new(child.stdout.take().unwrap())
+                .read_line(&mut said)
+                .unwrap();
+            assert_eq!(said, "up\n", "what the script said first");
+            child
+        }
+
         /// A process of the line whose name is not UTF-8 is not read as no
         /// harness: the line is not known, which refuses, as it was before
         /// `stat` was read in one call (a copy of the harness under such a
@@ -552,18 +579,11 @@ mod sys {
         #[test]
         fn sys_a_name_that_is_not_utf8_leaves_the_line_not_known() {
             use std::os::unix::ffi::OsStrExt as _;
-            use std::os::unix::fs::PermissionsExt as _;
             let scratch = cineris_testkit::scratch::Scratch::outside(
                 "cineris-sandbox-session",
                 "sys_a_name_that_is_not_utf8_leaves_the_line_not_known",
             );
-            let script = scratch.join(std::ffi::OsStr::from_bytes(b"cin\xff"));
-            std::fs::write(&script, "#!/bin/sh\nread -r line\n").unwrap();
-            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
-            let mut child = std::process::Command::new(&script)
-                .stdin(std::process::Stdio::piped())
-                .spawn()
-                .unwrap();
+            let mut child = started_up(&scratch.join(std::ffi::OsStr::from_bytes(b"cin\xff")));
             let pid = child.id();
             let comm = std::fs::read(format!("/proc/{pid}/comm")).unwrap();
             let seen = super::seen(&super::Own::read(), pid);
@@ -579,18 +599,11 @@ mod sys {
         /// third part).
         #[test]
         fn sys_a_program_named_cin_that_is_another_is_not_cineris() {
-            use std::os::unix::fs::PermissionsExt as _;
             let scratch = cineris_testkit::scratch::Scratch::outside(
                 "cineris-sandbox-session",
                 "sys_a_program_named_cin_that_is_another_is_not_cineris",
             );
-            let script = scratch.join("cin");
-            std::fs::write(&script, "#!/bin/sh\nread -r line\n").unwrap();
-            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
-            let mut child = std::process::Command::new(&script)
-                .stdin(std::process::Stdio::piped())
-                .spawn()
-                .unwrap();
+            let mut child = started_up(&scratch.join("cin"));
             let pid = child.id();
             let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).unwrap();
             let seen = super::seen(&super::Own::read(), pid);
