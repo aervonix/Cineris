@@ -527,7 +527,7 @@ fn sys_an_approving_subcommand_refuses_under_a_sessions_command() {
                     .join(" ")
             ));
         }
-        ("approve.cmd", (text, "cmd /c approve.cmd"))
+        ("approve.cmd", (text, "cmd /c .\\approve.cmd"))
     } else {
         let mut text = String::new();
         for words in subcommands {
@@ -742,7 +742,7 @@ fn sys_a_nested_headless_run_is_held_to_read_only_and_says_so() {
     };
     std::fs::write(machine.workspace.join(script), command).unwrap();
     let line = if cfg!(windows) {
-        "cmd /c nested.cmd"
+        "cmd /c .\\nested.cmd"
     } else {
         "sh nested.sh"
     };
