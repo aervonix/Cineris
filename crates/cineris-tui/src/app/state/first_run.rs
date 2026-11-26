@@ -48,7 +48,7 @@ use cineris_term::{Event as TermEvent, Key, KeyCode, Line, Mods};
 
 use super::{App, LastKey, Pending};
 use crate::app::Open;
-use crate::app::ready::{REPEAT, Readiness};
+use crate::app::ready::{REPEAT, Readiness, scaled};
 use crate::app::setup::{
     Answer, Chosen, Found, Imported, Job, KeyStore, McpServer, NotWritten, Providers, Setup, Worker,
 };
@@ -323,7 +323,7 @@ impl FirstRun {
         self.whole = false;
         self.ready = Readiness::default();
         if let Some(taken) = self.taken {
-            self.ready.not_before(taken + REPEAT);
+            self.ready.not_before(taken + scaled(REPEAT));
         }
     }
 
@@ -466,7 +466,7 @@ impl App {
                 run.ready.typed(untaken);
             }
             if let Some(taken) = taken {
-                run.ready.not_before(taken + REPEAT);
+                run.ready.not_before(taken + scaled(REPEAT));
             }
         }
     }
@@ -1411,7 +1411,7 @@ impl App {
                             // A held `Enter`, or a second one, does not keep
                             // the commands at once: the step waits a key's
                             // repeat window, as a new step does.
-                            run.ready.not_before(at + REPEAT);
+                            run.ready.not_before(at + scaled(REPEAT));
                             run.keys_drawn = false;
                         }
                         KeyCode::Esc => {

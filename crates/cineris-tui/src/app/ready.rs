@@ -48,6 +48,18 @@ pub(crate) const QUIET: Duration = Duration::from_millis(1000);
 /// about 500 ms), then every 25 to 50 ms.
 pub(crate) const REPEAT: Duration = Duration::from_millis(1000);
 
+/// One of the rule's times as this build holds it: the time itself, but
+/// in a build with the test hooks, where a system test of the binary that
+/// answers a dialog without testing the rule's timing divides it
+/// (`cineris_base::hook::ready_divisor`; `docs/steps/ci-budgets-2/
+/// answered.md`, "The dialogs' times in the system tests"). No build that
+/// is shipped or released has the test hooks. Every use of [`GRACE`],
+/// [`QUIET`] and [`REPEAT`] at run time goes through this, so that the rule
+/// keeps its proportions.
+pub(crate) fn scaled(time: Duration) -> Duration {
+    time / cineris_base::hook::ready_divisor()
+}
+
 // The quiet covers a key held down where the terminal does not mark its
 // repeats: each repeat holds it for longer than the gap to the next.
 const _: () = assert!(QUIET.as_millis() >= REPEAT.as_millis());
@@ -124,8 +136,11 @@ impl Readiness {
     /// `None` until its first frame.
     pub(crate) fn ready_at(&self) -> Option<Instant> {
         let shown = self.shown?;
-        let ready = (shown + GRACE).max(self.not_before.unwrap_or(shown));
-        Some(self.typed.map_or(ready, |typed| ready.max(typed + QUIET)))
+        let ready = (shown + scaled(GRACE)).max(self.not_before.unwrap_or(shown));
+        Some(
+            self.typed
+                .map_or(ready, |typed| ready.max(typed + scaled(QUIET))),
+        )
     }
 
     /// Whether it is ready at `at`.

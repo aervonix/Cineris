@@ -416,7 +416,7 @@ impl App {
         let again = if marked_only {
             repeat
         } else {
-            repeat || at.saturating_duration_since(last) < REPEAT
+            repeat || at.saturating_duration_since(last) < super::super::ready::scaled(REPEAT)
         };
         if held != key || !again {
             return false;

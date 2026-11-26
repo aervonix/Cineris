@@ -764,7 +764,7 @@ impl App {
                     dialog.typed(untaken);
                 }
                 if let Some(taken) = self.taken {
-                    dialog.not_before(taken + REPEAT);
+                    dialog.not_before(taken + super::ready::scaled(REPEAT));
                 }
             }
         }
@@ -1313,7 +1313,7 @@ impl App {
         let Some(since) = self.note_cut else {
             return false;
         };
-        if at.saturating_duration_since(since) >= QUIET {
+        if at.saturating_duration_since(since) >= super::ready::scaled(QUIET) {
             self.note_cut = None;
             return false;
         }
