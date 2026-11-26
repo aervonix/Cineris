@@ -11,8 +11,8 @@ find: Ok(attributes) if !attributes.is_reparse_point() => return Ok(false),
 replace: Ok(_) => return Ok(false),
 os: windows
 caught-by:
-    cineris-base::it paths_windows::sys_a_junction_that_leaves_the_workspace_resolves_outside
-    cineris-base::it paths_windows::a_directory_link_that_leaves_the_workspace_resolves_outside
+    cineris-base path::resolve::tests::on_windows_the_walks_look_at_a_name_is_the_standard_librarys
+    cineris-base::it paths_windows::a_link_to_a_network_share_is_refused_without_following_it
 
 [break] walk-reads-a-directory-from-the-wrong-attribute
 rule: On Windows a name with no reparse point is a directory when its attributes say so.
@@ -34,7 +34,7 @@ replace: false
 os: windows
 caught-by:
     cineris-base private::windows::tests::a_names_attributes_say_whether_it_is_a_directory_or_a_reparse_point
-    cineris-base::it paths_windows::sys_a_junction_that_leaves_the_workspace_resolves_outside
+    cineris-base path::resolve::tests::on_windows_the_walks_look_at_a_name_is_the_standard_librarys
 
 [break] walk-takes-every-reparse-point-for-a-link
 rule: A reparse point that is no link (the overlay filter's, a cloud placeholder's, deduplication's) is a plain name to the walk, as the standard library reads its tag: only its attributes' bit is not enough.
@@ -97,10 +97,19 @@ caught-by:
     cineris-testkit scratch::tests::on_a_runner_whose_disk_is_thrown_away_it_is_left_and_an_earlier_one_moved_aside
 
 [break] scratch-hosted-runner-not-told
-rule: A runner is taken for one whose disk is thrown away only when it says it is GitHub-hosted.
+rule: A test's directories are left only on a runner that says it is GitHub-hosted.
 file: crates/cineris-testkit/src/scratch.rs
-in: says_thrown_away
-find: value == "github-hosted"
-replace: value == "self-hosted"
+in: says_leave
+find: runner == "github-hosted"
+replace: runner == "self-hosted"
 caught-by:
-    cineris-testkit scratch::tests::only_a_github_hosted_runner_throws_its_disk_away
+    cineris-testkit scratch::tests::only_the_jobs_own_runs_on_a_github_hosted_runner_leave_their_directories
+
+[break] scratch-left-by-a-run-not-told-to
+rule: A test's directories are left only in a run told to leave them: the test job's own, not a stress run's or a break's, which repeat the tests and would fill the runner's disk.
+file: crates/cineris-testkit/src/scratch.rs
+in: says_leave
+find: keep.is_some_and(|keep| keep == "1") && runner
+replace: runner
+caught-by:
+    cineris-testkit scratch::tests::only_the_jobs_own_runs_on_a_github_hosted_runner_leave_their_directories

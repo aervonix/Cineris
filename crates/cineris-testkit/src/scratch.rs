@@ -15,13 +15,15 @@
 //!   is removed first, read-only files included.
 //! - **It is removed when the test ends,** unless the test failed: then it
 //!   is left for whoever looks at the failure, and the next run removes it.
-//!   **On a GitHub-hosted runner it is left** ([`disk_thrown_away`]): the
-//!   runner's disk goes with the job, and removing a core test's
-//!   directories took 2.7 ms of each test on a Windows runner
-//!   (`docs/steps/ci-budgets-2/answered.md`). What an earlier run there
-//!   left under the same name is moved aside in one rename, so that a
-//!   later run of the same tests on the runner (an A/B's next round) pays
-//!   no more than the first.
+//!   **In the test job's own runs on a GitHub-hosted runner it is left**
+//!   ([`leaves_directories`]): the runner's disk goes with the job, and
+//!   removing a core test's directories took 2.7 ms of each test on a
+//!   Windows runner (`docs/steps/ci-budgets-2/answered.md`). What an
+//!   earlier run there left under the same name is moved aside in one
+//!   rename, so that a later run of the same tests on the runner (an A/B's
+//!   next round) pays no more than the first. A run that repeats the tests
+//!   many times over (`stress`, `mutate`) is not told to, and removes them,
+//!   so that it does not fill the runner's disk.
 //! - **It is inside the build directory,** so on a developer's machine it is
 //!   inside the repository's checkout. A test that needs "no repository
 //!   above this directory" asks for [`Scratch::outside`], which is in the
@@ -45,20 +47,30 @@ use std::process::Command;
 /// to another parent: for running the tests on a particular disk.
 pub const BASE: &str = "CINERIS_TEST_TMPDIR";
 
-/// Whether this run is on a GitHub-hosted runner, whose disk is thrown
-/// away with the job: the runner says `RUNNER_ENVIRONMENT=github-hosted`,
-/// and a self-hosted one, which keeps its disk, says `self-hosted`. There a
+/// The variable that tells the tests their directories may be left: set
+/// to `1` by the blocking test job and by `try`'s runs of the tests and its
+/// A/Bs (`cargo xtask try`), and by nothing that repeats the tests many
+/// times over.
+pub const KEEP: &str = "CINERIS_TESTKIT_KEEP_DIRECTORIES";
+
+/// Whether a test's directories are left when it ends: when [`KEEP`] says
+/// so and the run is on a GitHub-hosted runner, whose disk is thrown away
+/// with the job (the runner says `RUNNER_ENVIRONMENT=github-hosted`; a
+/// self-hosted one, which keeps its disk, says `self-hosted`). There a
 /// [`Scratch`] is left when its test ends, and a rig that removes its own
 /// directory leaves it too.
 #[must_use]
-pub fn disk_thrown_away() -> bool {
-    says_thrown_away(std::env::var_os("RUNNER_ENVIRONMENT").as_deref())
+pub fn leaves_directories() -> bool {
+    says_leave(
+        std::env::var_os(KEEP).as_deref(),
+        std::env::var_os("RUNNER_ENVIRONMENT").as_deref(),
+    )
 }
 
-/// Whether a runner that says `RUNNER_ENVIRONMENT` is `value` throws its
-/// disk away with the job.
-fn says_thrown_away(value: Option<&std::ffi::OsStr>) -> bool {
-    value.is_some_and(|value| value == "github-hosted")
+/// Whether a run told [`KEEP`] `keep`, on a runner that says
+/// `RUNNER_ENVIRONMENT` is `runner`, leaves its tests' directories.
+fn says_leave(keep: Option<&std::ffi::OsStr>, runner: Option<&std::ffi::OsStr>) -> bool {
+    keep.is_some_and(|keep| keep == "1") && runner.is_some_and(|runner| runner == "github-hosted")
 }
 
 /// A directory that belongs to one test. See the module's description.
@@ -67,8 +79,8 @@ pub struct Scratch {
     dir: PathBuf,
     /// A parent that was made for this directory alone, and goes with it.
     own_parent: Option<PathBuf>,
-    /// Whether the directory is removed when the test ends: not on a
-    /// runner whose disk is thrown away ([`disk_thrown_away`]).
+    /// Whether the directory is removed when the test ends: not in the
+    /// test job's own runs on a hosted runner ([`leaves_directories`]).
     removed_at_end: bool,
     /// The test's time profile, written when the directory goes, when
     /// `CINERIS_TESTKIT_PROFILE` is on.
@@ -111,7 +123,7 @@ impl Scratch {
     /// test's at all.
     #[must_use]
     pub fn under(parent: &Path, group: &str, test: &str) -> Self {
-        Self::under_on(parent, group, test, disk_thrown_away())
+        Self::under_on(parent, group, test, leaves_directories())
     }
 
     /// [`Scratch::under`], on a runner whose disk is thrown away or not.
@@ -141,7 +153,7 @@ impl Scratch {
     /// is in its name, so two runs at once do not share it.
     #[must_use]
     pub fn outside(group: &str, test: &str) -> Self {
-        Self::outside_on(group, test, disk_thrown_away())
+        Self::outside_on(group, test, leaves_directories())
     }
 
     /// [`Scratch::outside`], on a runner whose disk is thrown away or not.
@@ -420,11 +432,20 @@ mod tests {
     }
 
     #[test]
-    fn only_a_github_hosted_runner_throws_its_disk_away() {
+    fn only_the_jobs_own_runs_on_a_github_hosted_runner_leave_their_directories() {
         use std::ffi::OsStr;
-        assert!(super::says_thrown_away(Some(OsStr::new("github-hosted"))));
-        for kept in [None, Some(OsStr::new("self-hosted")), Some(OsStr::new(""))] {
-            assert!(!super::says_thrown_away(kept), "{kept:?}");
+        let hosted = Some(OsStr::new("github-hosted"));
+        assert!(super::says_leave(Some(OsStr::new("1")), hosted));
+        // Not told to: a stress run or a break's on the same runner.
+        for keep in [None, Some(OsStr::new("")), Some(OsStr::new("0"))] {
+            assert!(!super::says_leave(keep, hosted), "{keep:?}");
+        }
+        // Told to, on a runner that keeps its disk, or at a desk.
+        for runner in [None, Some(OsStr::new("self-hosted")), Some(OsStr::new(""))] {
+            assert!(
+                !super::says_leave(Some(OsStr::new("1")), runner),
+                "{runner:?}"
+            );
         }
     }
 
