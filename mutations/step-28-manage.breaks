@@ -1626,7 +1626,7 @@ find: made.copy_from_slice(&entry.Reserved1[24..32]);
 replace: made.copy_from_slice(&entry.Reserved1[16..24]);
 caught-by:
     cineris-sandbox session::sys::tests::sys_the_list_of_processes_gives_each_when_it_was_made
-    cineris-sandbox session::sys::tests::sys_a_job_of_no_harnesss_is_no_sessions
+    cineris-sandbox session::sys::tests::sys_a_process_opened_is_described_as_the_list_says
 
 [break] session-windows-scheduler-asked-always
 rule: On Windows the service manager is asked which host runs the task scheduler only where a line of parents reaches a service host: a headless run's line from a terminal or a runner's step asks it nothing at its start.
