@@ -518,6 +518,16 @@ pub fn probing(test: &str, connect: &str) -> Option<(World, CoreThread)> {
         ),
     )
     .unwrap();
+    // And a program the model's shell runs, as a hand-written client of the
+    // server would be: the probe from a file of the workspace.
+    std::fs::write(world.workspace.join("probe.py"), &script).unwrap();
+    world
+        .server
+        .push(cineris_testkit::conformance::anthropic::tool(
+            "toolu_probe",
+            "shell",
+            &serde_json::json!({"command": format!("{python} probe.py shell")}),
+        ));
     let core = world.core();
     let project = core.core.project(&world.workspace).unwrap();
     let to_add = core.core.extension_to_add(&project, &folder).unwrap();
@@ -527,10 +537,15 @@ pub fn probing(test: &str, connect: &str) -> Option<(World, CoreThread)> {
     Some((world, core))
 }
 
-/// What the `probing` world's two probes said: the first request of the
-/// session's first turn, where a `session.start` hook's context is.
+/// What the `probing` world's probes said: every request of the session's
+/// first turn, where a `session.start` hook's context is, and the shell's
+/// result.
 pub fn probes_said(world: &World) -> String {
     let requests = world.server.requests();
-    let first = requests.first().expect("the turn asked the model");
-    String::from_utf8_lossy(&first.body).into_owned()
+    assert!(!requests.is_empty(), "the turn asked the model");
+    requests
+        .iter()
+        .map(|request| String::from_utf8_lossy(&request.body).into_owned())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
