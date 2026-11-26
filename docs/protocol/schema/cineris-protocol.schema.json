@@ -5255,6 +5255,17 @@
     "PromptReturnedNotice": {
       "description": "Notice: a prompt given back to the front end, for its editor, and never\nsent to the model (since step 28). A `prompt.submit` hook refused it,\nand `hooks` names each that did, with its reason; or the turn was\ninterrupted while its hooks were asked, and `hooks` is empty. A prompt\nthat would have started a turn ends that turn `denied` (or\n`interrupted`); a steering message is dropped, and the running turn goes\non.",
       "properties": {
+        "command": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PromptCommand"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The command the prompt came from, when it was a command's (since\nstep 28): a front end puts back what was typed, `/name args`, in\nplace of `parts`, its expanded text. Sent, as `parts` are, to the\nclient that sent the prompt alone."
+        },
         "delivery": {
           "anyOf": [
             {
@@ -8116,6 +8127,20 @@
               "$ref": "#/$defs/Part"
             },
             "type": "array"
+          },
+          "type": "array"
+        },
+        "undelivered_commands": {
+          "description": "Beside `undelivered`, one for each of its messages, when any came\nfrom a command (since step 28): the command it came from, or `null`.\nA front end puts back `/name args` for one, in place of its expanded\ntext. Absent when none did.",
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/PromptCommand"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "type": "array"
         }

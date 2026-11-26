@@ -832,6 +832,10 @@ impl Connection {
                 *lock(&self.shared.client) = Some(client.clone());
                 self.role = Some(role);
                 let client_id = client.id;
+                let early: crate::lane::Early = {
+                    let core = core.clone();
+                    Arc::new(move |op| core.early(client_id, op))
+                };
                 let run: Run = Arc::new(move |op| {
                     let core = core.clone();
                     Box::pin(async move { core.handle(client_id, op).await })
@@ -844,7 +848,7 @@ impl Connection {
                     drop(budget);
                     shared.freed.notify_waiters();
                 });
-                self.dispatcher = Some(Dispatcher::start(run, done));
+                self.dispatcher = Some(Dispatcher::start_with(run, Some(early), done));
                 self.shared.answered(id, Ok(result), Frees::Refusal);
             }
             Err(error) => {

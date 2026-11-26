@@ -1441,6 +1441,8 @@ export interface PromptCommand {
 
 /** Notice: a prompt given back to the front end, for its editor, and never sent to the model (since step 28). A `prompt.submit` hook refused it, and `hooks` names each that did, with its reason; or the turn was interrupted while its hooks were asked, and `hooks` is empty. A prompt that would have started a turn ends that turn `denied` (or `interrupted`); a steering message is dropped, and the running turn goes on. */
 export interface PromptReturnedNotice {
+  /** The command the prompt came from, when it was a command's (since step 28): a front end puts back what was typed, `/name args`, in place of `parts`, its expanded text. Sent, as `parts` are, to the client that sent the prompt alone. */
+  command?: PromptCommand | null;
   /** How it was sent while a turn ran, as its user message would have said: `steer` for a steering message, whether it was refused at a boundary of the running turn or as the prompt of a turn of its own (one that found no boundary); `queue` for a queued prompt. Absent for a prompt sent to an idle session. */
   delivery?: Delivery | null;
   /** The hooks that refused it, each with its reason or its failure. */
@@ -2326,6 +2328,8 @@ export interface TurnInterruptResult {
   interrupted?: boolean;
   /** Steering prompts that had not been delivered, handed back so the front end can put them in its editor. Queued prompts stay queued. */
   undelivered?: Array<Array<Part>>;
+  /** Beside `undelivered`, one for each of its messages, when any came from a command (since step 28): the command it came from, or `null`. A front end puts back `/name args` for one, in place of its expanded text. Absent when none did. */
+  undelivered_commands?: Array<PromptCommand | null>;
 }
 
 /** How a turn ended. It and a headless run's exit code always agree. */

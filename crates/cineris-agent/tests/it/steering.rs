@@ -242,12 +242,34 @@ fn after_an_interrupt_queued_prompts_are_held_and_follow_the_next_prompt() {
         rig.prompt("first");
         rig.events.seen("delta:text", 1).await;
         rig.steer("a nudge");
+        // A command's steering message goes back with its command.
+        let command = cineris_protocol::item::PromptCommand {
+            name: "review".to_owned(),
+            source: cineris_protocol::item::CommandSource::User,
+            extension: None,
+            args: "now".to_owned(),
+        };
+        rig.handle
+            .prompt_from(
+                vec![Part::text("Review it now.")],
+                Some(cineris_protocol::item::Delivery::Steer),
+                None,
+                Some(command.clone()),
+            )
+            .unwrap();
         rig.queue("second");
         rig.queue("third");
         let interrupted = rig.handle.interrupt();
         assert!(interrupted.interrupted);
-        // The steering message goes back to the editor. The queue stays.
-        assert_eq!(interrupted.undelivered, [vec![Part::text("a nudge")]]);
+        // The steering messages go back to the editor. The queue stays.
+        assert_eq!(
+            interrupted.undelivered,
+            [
+                vec![Part::text("a nudge")],
+                vec![Part::text("Review it now.")]
+            ]
+        );
+        assert_eq!(interrupted.undelivered_commands, [None, Some(command)]);
         rig.events.turns(1).await;
     });
     assert_eq!(rig.events.ends()[0].outcome, TurnOutcome::Interrupted);

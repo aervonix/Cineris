@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::ErrorData;
 use crate::ids::{CallId, EntryId, ItemId, SessionId, Timestamp, TurnId};
-use crate::item::{ArtifactRef, Delivery, HookReason, Item, Plan, StopReason};
+use crate::item::{ArtifactRef, Delivery, HookReason, Item, Plan, PromptCommand, StopReason};
 use crate::jsonrpc::RequestId;
 use crate::message::Part;
 use crate::open::{open_enum, open_union};
@@ -298,6 +298,12 @@ pub struct PromptReturnedNotice {
     /// The hooks that refused it, each with its reason or its failure.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hooks: Vec<HookReason>,
+    /// The command the prompt came from, when it was a command's (since
+    /// step 28): a front end puts back what was typed, `/name args`, in
+    /// place of `parts`, its expanded text. Sent, as `parts` are, to the
+    /// client that sent the prompt alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<PromptCommand>,
     /// The ticket the server gave the prompt when it handed it to the
     /// session's loop, carried back untouched: what the server knows the
     /// prompt's sender by. **Never on the wire:** it is not written, and a

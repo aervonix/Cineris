@@ -292,6 +292,7 @@ fn steering_that_was_never_delivered_comes_back_into_the_editor() {
         Ok(OpResult::TurnInterrupt(TurnInterruptResult {
             interrupted: true,
             undelivered: vec![vec![Part::text("the steer")]],
+            undelivered_commands: Vec::new(),
         })),
     ));
     drain(&mut app, now);
@@ -732,6 +733,7 @@ fn a_prompt_a_hook_refused_comes_back_into_the_editor_with_why() {
                     hook: "no-keys".to_owned(),
                     reason: Some("it names a key".to_owned()),
                 }],
+                command: None,
                 ticket: None,
             },
         ),
@@ -778,6 +780,7 @@ fn a_prompt_a_hook_refused_comes_back_into_the_editor_with_why() {
         parts: Vec::new(),
         delivery: None,
         hooks: Vec::new(),
+        command: None,
         ticket: None,
     };
     assert!(

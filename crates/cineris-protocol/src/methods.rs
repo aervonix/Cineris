@@ -762,6 +762,12 @@ pub struct TurnInterruptResult {
     /// front end can put them in its editor. Queued prompts stay queued.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub undelivered: Vec<Vec<Part>>,
+    /// Beside `undelivered`, one for each of its messages, when any came
+    /// from a command (since step 28): the command it came from, or `null`.
+    /// A front end puts back `/name args` for one, in place of its expanded
+    /// text. Absent when none did.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub undelivered_commands: Vec<Option<crate::item::PromptCommand>>,
 }
 
 // ---------------------------------------------------- plan, usage, project

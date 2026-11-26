@@ -760,6 +760,8 @@ impl EventSink for SessionSink {
                 &mut without.event
             {
                 returned.parts = Vec::new();
+                // What was typed after a command's name is the prompt too.
+                returned.command = None;
             }
             for (client, queue) in lock(&self.subscribers).iter() {
                 if Some(*client) == sender {

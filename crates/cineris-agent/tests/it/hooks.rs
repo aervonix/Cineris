@@ -1745,7 +1745,20 @@ fn a_steering_message_a_hook_refuses_or_an_interrupt_stops_is_given_back() {
     world.run(async {
         rig.prompt("go");
         world.log.has("start read a").await;
-        rig.steer("the key is sk-123");
+        // A command's text, steering: given back with its command.
+        rig.handle
+            .prompt_from(
+                vec![Part::text("the key is sk-123")],
+                Some(Delivery::Steer),
+                None,
+                Some(cineris_protocol::item::PromptCommand {
+                    name: "keys".to_owned(),
+                    source: cineris_protocol::item::CommandSource::Project,
+                    extension: None,
+                    args: "sk".to_owned(),
+                }),
+            )
+            .unwrap();
         prompt_with(rig, "and be quick", Some(Delivery::Steer), 11);
         world.gates.open("tool1");
         p.turns(1).await;
@@ -1761,6 +1774,13 @@ fn a_steering_message_a_hook_refuses_or_an_interrupt_stops_is_given_back() {
     let returned = p.returned();
     assert_eq!(returned.len(), 1);
     assert_eq!(returned[0].parts, [Part::text("the key is sk-123")]);
+    assert_eq!(
+        returned[0]
+            .command
+            .as_ref()
+            .map(|command| command.args.as_str()),
+        Some("sk")
+    );
     assert_eq!(returned[0].delivery, Some(Delivery::Steer));
     assert!(returned[0].message.contains("this steering message"));
     assert_valid_history(&last_request(&world.provider).messages);
