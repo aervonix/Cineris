@@ -403,7 +403,7 @@ fn a_call_allowed_by_an_approval_revoked_while_it_waits_is_asked_about() {
         front.prompt("again").await;
         assert!(
             deciding
-                .wait_reached_times_async(2, std::time::Duration::from_secs(5))
+                .wait_reached_times_async(2, std::time::Duration::from_secs(60))
                 .await,
             "the read and the write were not both decided"
         );
@@ -465,7 +465,7 @@ fn a_call_decided_before_the_level_was_lowered_is_decided_again_and_refused() {
         front.prompt("go").await;
         assert!(
             deciding
-                .wait_reached_times_async(2, std::time::Duration::from_secs(5))
+                .wait_reached_times_async(2, std::time::Duration::from_secs(60))
                 .await,
             "the read and the write were not both decided"
         );

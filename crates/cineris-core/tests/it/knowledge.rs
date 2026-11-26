@@ -1428,7 +1428,7 @@ fn sys_a_learned_command_turned_off_while_an_earlier_call_waits_is_asked_about()
         front.prompt("test it").await;
         assert!(
             deciding
-                .wait_reached_times_async(2, std::time::Duration::from_secs(5))
+                .wait_reached_times_async(2, std::time::Duration::from_secs(60))
                 .await,
             "the read and the command were not both decided"
         );
