@@ -213,21 +213,6 @@ replace:
 caught-by:
     cineris-ext::it engine::a_memory_bomb_is_stopped_by_the_memory_limit
 
-[break] a-link-in-the-folder-is-followed
-rule: An extension's folder holds no link: a link anywhere in it refuses the extension.
-file: crates/cineris-ext/src/folder.rs
-in: read_into
-find:
-        if kind.is_symlink() {
-            return Err(FolderError::Link(relative));
-        }
-replace:
-        if kind.is_symlink() && false {
-            return Err(FolderError::Link(relative));
-        }
-caught-by:
-    cineris-ext::it folder::a_link_anywhere_in_the_folder_refuses_it
-
 [break] an-import-climbs-out-of-the-folder
 rule: An import resolves only inside the extension's folder.
 file: crates/cineris-ext/src/engine/loader.rs
@@ -1581,7 +1566,7 @@ caught-by:
 [break] a-folder-of-empty-folders-is-unbounded
 rule: Every entry of an extension's folder, folders as well as files, counts toward its cap.
 file: crates/cineris-ext/src/folder.rs
-in: read_into
+in: read_unfollowed_into
 find: if *entries_seen > MAX_ENTRIES {
 replace: if *entries_seen > MAX_ENTRIES * 100 {
 caught-by:
@@ -5685,13 +5670,12 @@ caught-by:
     cineris-ext skills::tests::a_link_in_a_root_that_leads_out_of_it_is_left_out
 
 [break] a-skill-file-linked-out-of-its-root-is-read
-rule: A `SKILL.md` reached through a link is read only where it stays inside its root.
+rule: A `SKILL.md` reached through a link is read only where it stays inside its root. Since the skills are read through handles from the root that was looked in, `read_capped`'s own check that the file's place is below the root (`strip_location_prefix`) refuses it too, so this break survives: it takes away the first of two checks.
 file: crates/cineris-ext/src/skills.rs
 in: skill_in
 find: !location_within(&file.to_fs_path(), &root)
 replace: false
-caught-by:
-    cineris-ext skills::tests::a_link_in_a_root_that_leads_out_of_it_is_left_out
+expect: survives
 
 [break] a-skill-file-that-is-no-file-is-passed-over
 rule: A `SKILL.md` that is a folder, a FIFO or a device is left out with its reason.
