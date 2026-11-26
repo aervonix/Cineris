@@ -398,9 +398,9 @@ pub(crate) fn through_a_link(root: &AbsPath, name: &str, with_the_file: bool) ->
     };
     for part in &parts[..looked_at] {
         walked.push(part);
-        match fs::symlink_metadata(&walked) {
-            Ok(metadata) if metadata.file_type().is_symlink() => return Ok(true),
-            Ok(_) => {}
+        match cineris_base::path::is_link(&walked) {
+            Ok(true) => return Ok(true),
+            Ok(false) => {}
             // What is not there is not a link, and nor is anything below it.
             Err(_) => return Ok(false),
         }

@@ -75,7 +75,7 @@ use std::path::{Path, PathBuf};
 use lexical::{Part, Root};
 
 pub use location::{location_within, same_location, strip_location_prefix};
-pub use resolve::{PathOptions, PathResolver, ResolvedPath};
+pub use resolve::{PathOptions, PathResolver, ResolvedPath, is_link};
 
 /// How many hexadecimal digits of the hash a project key keeps: 128 bits.
 const PROJECT_KEY_DIGITS: usize = 32;

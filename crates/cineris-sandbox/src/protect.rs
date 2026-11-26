@@ -774,8 +774,7 @@ impl Look {
         let parts: Vec<_> = below.components().collect();
         for part in parts.iter().take(parts.len().saturating_sub(1)) {
             walked.push(part);
-            if fs::symlink_metadata(&walked).is_ok_and(|metadata| metadata.file_type().is_symlink())
-            {
+            if cineris_base::path::is_link(&walked).unwrap_or(false) {
                 return Some(walked);
             }
         }
@@ -792,8 +791,7 @@ impl Look {
         let parts: Vec<_> = below.components().collect();
         for part in parts.iter().take(parts.len().saturating_sub(1)) {
             walked.push(part);
-            if fs::symlink_metadata(&walked).is_ok_and(|metadata| metadata.file_type().is_symlink())
-            {
+            if cineris_base::path::is_link(&walked).unwrap_or(false) {
                 return true;
             }
         }

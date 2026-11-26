@@ -535,7 +535,11 @@ fn locate(
 /// all the walk asks of it. A reparse point, and a name whose attributes
 /// cannot be read for any other reason, are looked at by `symlink_metadata`
 /// as before, so that the answer, or the error, is the one it gives.
-fn is_link(path: &Path) -> io::Result<bool> {
+///
+/// Public for the other walks of a path that ask each name the same
+/// question (the program search's, the checkpoints', the protected paths'
+/// look and the snapshots'), so that each asks it at the same cost.
+pub fn is_link(path: &Path) -> io::Result<bool> {
     #[cfg(windows)]
     match crate::private::attributes(path) {
         Ok(attributes) if !attributes.is_reparse_point() => return Ok(false),
