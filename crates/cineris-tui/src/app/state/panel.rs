@@ -120,7 +120,6 @@ impl App {
     #[cfg(any(test, feature = "test-kit"))]
     pub fn set_clock(&mut self, clock: cineris_base::SharedClock) {
         self.panels = registered(&clock, Some(cineris_base::Zone::utc()));
-        self.clock = clock;
     }
 
     /// The look, for tests that draw a panel as the application does.

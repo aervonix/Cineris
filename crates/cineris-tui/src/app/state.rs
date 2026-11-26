@@ -504,11 +504,9 @@ pub struct App {
     /// than the repeat window after it.
     taken: Option<Instant>,
     /// The panels (step 24): the plan's, the review's, the project's and
-    /// the usage's.
+    /// the usage's. Each that says a time (an entry's age, a limit's reset)
+    /// holds the clock it reads it from.
     panels: Panels,
-    /// The time of day, for what the panels say of times (an entry's age,
-    /// a limit's reset).
-    clock: cineris_base::SharedClock,
     /// The panel drawn with the focus in the last frame.
     panel_drawn: Option<u64>,
     /// When the last input no panel took was read: a key or a paste that
@@ -669,7 +667,6 @@ impl App {
             untaken: None,
             taken: None,
             panels: panel::registered(&clock, None),
-            clock,
             panel_drawn: None,
             panel_untaken: None,
             panel_held: None,
