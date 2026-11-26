@@ -396,8 +396,8 @@ fn a_directory_link_that_leaves_the_workspace_resolves_outside() {
 /// (`IO_REPARSE_TAG_AF_UNIX`), whose tag is no name surrogate, as a
 /// placeholder of a cloud folder or a file deduplication left is one of
 /// theirs. Its attributes show the reparse point, the walk asks the
-/// standard library, whose answer is that it is no link, and the file
-/// resolves as any other (the early review of CI budgets II). A file the
+/// standard library, whose answer is that it is no link, and it reads no
+/// link's target (the early review of CI budgets II). A file the
 /// overlay filter compresses (`compact /exe`) would not do: the filter
 /// hides its own reparse point from both. PowerShell 7 binds the socket,
 /// a process: hence the `sys_` name.
@@ -463,16 +463,20 @@ fn sys_a_reparse_point_that_is_no_link_is_a_plain_name() {
     );
     assert!(!cineris_base::path::is_link(&socket).unwrap());
 
+    // The walk passes it as no link and reads no target; the system cannot
+    // open a socket's file to give its own spelling, so the walk's last
+    // step refuses it, as it did before the attributes were read.
     let resolver = scratch.resolver("ws");
-    let resolved = resolver.resolve("socket").unwrap();
-    assert!(resolved.exists());
-    assert!(resolved.is_inside_workspace());
-    assert_eq!(resolved.abs(), &scratch.real("ws/socket"));
-    let below = resolver.resolve("socket/below.txt");
-    assert!(
-        below.is_err(),
-        "nothing is below a socket's file: {below:?}"
-    );
+    for written in ["socket", "socket/below.txt"] {
+        let refused = resolver.resolve(written);
+        assert!(
+            matches!(refused, Err(PathError::Io { .. })),
+            "{written}: {refused:?}"
+        );
+    }
+    // And a name beside it resolves as any other.
+    scratch.file("ws/beside.txt", "x");
+    assert!(resolver.resolve("beside.txt").unwrap().exists());
     drop(child.stdin.take());
     let _ = child.wait();
 }
