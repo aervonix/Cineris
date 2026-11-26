@@ -881,7 +881,7 @@ impl RecordingShell {
             self.rounds.as_ref(),
             &self.policy,
             before,
-            cx.turn,
+            Some(cx.turn),
             &cx.paths.root().to_fs_path(),
         )
         .await?;
@@ -893,7 +893,8 @@ impl RecordingShell {
 /// the last one, and if a protected path changed in between that none of
 /// the harness's own tools changed (a process an earlier command left
 /// running, or the user's own hand), records it in the round's checkpoint,
-/// stops turn `turn`, and returns what the model and the user are told.
+/// stops turn `turn` (none when it is `None`: a command's program, run as
+/// no turn runs), and returns what the model and the user are told.
 /// `None` when nothing changed from outside. The shell's commands and an
 /// extension's programs (step 28) start only after it.
 pub(crate) async fn changed_since_last_look(
@@ -901,7 +902,7 @@ pub(crate) async fn changed_since_last_look(
     rounds: Option<&Arc<Rounds>>,
     policy: &EnginePolicy,
     before: &Snapshot,
-    turn: u32,
+    turn: Option<u32>,
     root: &std::path::Path,
 ) -> Option<String> {
     let changed = sandbox.continuity(before)?;
@@ -932,7 +933,9 @@ pub(crate) async fn changed_since_last_look(
         None => changed.iter().map(|one| one.path.clone()).collect(),
     };
     let note = continuity_note(&changed, root, &by_hand);
-    policy.stop_turn(turn, note.clone());
+    if let Some(turn) = turn {
+        policy.stop_turn(turn, note.clone());
+    }
     Some(note)
 }
 

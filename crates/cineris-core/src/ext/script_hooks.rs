@@ -634,6 +634,21 @@ impl ScriptHooks {
         on.retain(|hook| hook.extension.name() != name);
     }
 
+    /// Why a gate held on `event` fails, the first, if one is held: a
+    /// changed, unreadable or unloadable extension's gating hook.
+    pub(crate) fn held_on(&self, event: LoopEvent) -> Option<String> {
+        lock(&self.held)
+            .iter()
+            .find(|held| held.event == event)
+            .map(|held| {
+                format!(
+                    "the extension `{}` holds a gate on `prompt.submit` that fails: {}",
+                    cineris_base::in_code(&held.extension),
+                    held.why
+                )
+            })
+    }
+
     /// The extensions loaded now, by name: what a command of one is run
     /// by.
     pub(crate) fn extensions(&self) -> Vec<Arc<LoadedExtension>> {

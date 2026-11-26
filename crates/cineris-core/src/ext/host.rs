@@ -97,6 +97,10 @@ impl CallHost<'_> {
         // The call's own effects first: a question shows the first one (a
         // path, a host) as what it is about. The `ext` effect after them
         // puts the extension's rules to the call too.
+        let summary = match self.asker() {
+            Some(asker) => format!("{asker}: {summary}"),
+            None => summary,
+        };
         let mut plan = Plan::new(summary, ());
         plan.effects.extend(effects);
         plan.effects.push(Effect::Ext {
@@ -152,16 +156,40 @@ impl CallHost<'_> {
                 // decided again and answered with the stop. (A stop
                 // already in force is what this one says, if there was
                 // one: its reason is the same.)
-                // A command's runs outside any turn: its stop is its own
-                // call's, and no turn of the session is told it (turn 0 is
-                // also the number of what is of no turn).
-                if self.phase != Phase::Command {
+                // A command's runs outside any turn: its stop stops the
+                // turn running as it runs, if one is (its context's turn),
+                // and never turn 0, the number of what is of no turn; its
+                // own stop is told and refuses the next prompt
+                // (`crate::commands`).
+                if self.phase != Phase::Command || self.cx.turn != 0 {
                     self.parts.policy.stop_turn(self.cx.turn, reason.clone());
                 }
                 Err(HostError::Stopped(reason))
             }
             _ => Err(HostError::Denied("it was not allowed".to_owned())),
         }
+    }
+
+    /// Who a command's question is from, as it says first: the command,
+    /// and whose it is (since step 28's commands). `None` for any other
+    /// call, whose tool names it.
+    fn asker(&self) -> Option<String> {
+        if self.phase != Phase::Command {
+            return None;
+        }
+        let command = self.full_name.split_once("/command.").map_or_else(
+            || self.full_name.to_owned(),
+            |(ext, name)| format!("/{ext}:{name}"),
+        );
+        Some(format!(
+            "The command `{}` of {} extension `{}`",
+            cineris_base::in_code(&command),
+            match self.source {
+                cineris_ext::source::Source::User => "your",
+                cineris_ext::source::Source::Project => "the project's",
+            },
+            cineris_base::in_code(self.extension)
+        ))
     }
 
     /// Whose values the extension's `cineris.state` reads and writes.
@@ -414,7 +442,16 @@ impl Host for CallHost<'_> {
             Ok(self
                 .parts
                 .policy
-                .put_question(&call.session, &call.turn, question, choices, self.extension)
+                .put_question(
+                    &call.session,
+                    &call.turn,
+                    match self.asker() {
+                        Some(asker) => format!("{asker} asks: {question}"),
+                        None => question,
+                    },
+                    choices,
+                    self.extension,
+                )
                 .await)
         })
     }
@@ -453,7 +490,13 @@ impl Host for CallHost<'_> {
         scope: Scope,
     ) -> HostFuture<'_, Result<(), HostError>> {
         Box::pin(async move {
-            let turn = self.cx.call.as_ref().map(|call| call.turn.clone());
+            // A command's run is of no turn: its record names none.
+            let turn = self
+                .cx
+                .call
+                .as_ref()
+                .filter(|_| self.phase != Phase::Command)
+                .map(|call| call.turn.clone());
             self.parts
                 .state
                 .set(self.owner(), key, value, scope, turn)

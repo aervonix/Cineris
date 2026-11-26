@@ -413,7 +413,13 @@ async fn in_core(core: &Core, front: &mut Front<'_>) -> u8 {
     // A prompt that is `/name …`, `name` one of the session's custom
     // commands, is sent as that command, as the interface sends it: the
     // core expands it before any hook (step 28). Anything else is text.
-    let command = command_in(core, client.id, &session, &front.plan.prompt).await;
+    let command = match command_in(core, client.id, &session, &front.plan.prompt).await {
+        Some((command, said)) => {
+            front.say(&said);
+            Some(command)
+        }
+        None => None,
+    };
     let input = if command.is_some() {
         Vec::new()
     } else {
@@ -505,14 +511,18 @@ async fn in_core(core: &Core, front: &mut Front<'_>) -> u8 {
 /// Writes the result in the run's format, says what went wrong on standard
 /// error, and returns the exit code that agrees with the outcome.
 /// The custom command `prompt` names, when it is `/name …` and `name` is
-/// one of the session's (`commands/list`): what follows the name is its
-/// arguments. `None` for any other prompt, which is sent as text.
+/// one of the session's (`commands/list`), used or not, so that the core
+/// refuses one it does not use with its reason: what follows the name is
+/// its arguments. With it, the line that says on standard error whose it
+/// is and its file. When the list cannot be had, a `/name …` is sent as a
+/// command all the same, for the core to judge, rather than as text.
+/// `None` for any other prompt, which is sent as text.
 async fn command_in(
     core: &Core,
     client: cineris_core::ClientId,
     session: &SessionId,
     prompt: &str,
-) -> Option<cineris_protocol::methods::CommandCall> {
+) -> Option<(cineris_protocol::methods::CommandCall, String)> {
     let named = prompt.strip_prefix('/')?;
     let (name, args) = named.split_once(char::is_whitespace).unwrap_or((named, ""));
     if name.is_empty() {
@@ -526,16 +536,52 @@ async fn command_in(
             }),
         )
         .await;
-    let Ok(OpResult::CommandsList(listed)) = listed else {
-        return None;
+    let call = cineris_protocol::methods::CommandCall {
+        name: name.to_owned(),
+        args: args.trim().to_owned(),
     };
+    let shown = cineris_base::in_code(&format!("/{name}")).into_owned();
+    let Ok(OpResult::CommandsList(listed)) = listed else {
+        return Some((
+            call,
+            format!("Sending `{shown}` as a command: the session's commands could not be listed."),
+        ));
+    };
+    let whose = |source: &cineris_protocol::item::CommandSource, extension: Option<&String>| {
+        let owner = match source {
+            cineris_protocol::item::CommandSource::User => "your".to_owned(),
+            cineris_protocol::item::CommandSource::Project => "the project's".to_owned(),
+            other => format!("{}'s", other.as_str()),
+        };
+        match extension {
+            Some(extension) => format!(
+                "{owner} extension `{}`'s command",
+                cineris_base::in_code(extension)
+            ),
+            None => format!("{owner} command"),
+        }
+    };
+    if let Some(command) = listed.commands.iter().find(|command| command.name == name) {
+        let file = command
+            .path
+            .as_deref()
+            .map(|path| format!(" ({})", cineris_base::in_code(path)))
+            .unwrap_or_default();
+        let said = format!(
+            "Sending `{shown}`, {}{file}.",
+            whose(&command.source, command.extension.as_ref())
+        );
+        return Some((call, said));
+    }
     listed
-        .commands
+        .not_used
         .iter()
-        .any(|command| command.name == name)
-        .then(|| cineris_protocol::methods::CommandCall {
-            name: name.to_owned(),
-            args: args.trim().to_owned(),
+        .any(|command| !command.name.is_empty() && command.name == name)
+        .then(|| {
+            (
+                call,
+                format!("Sending `{shown}`, a command that is not used."),
+            )
         })
 }
 

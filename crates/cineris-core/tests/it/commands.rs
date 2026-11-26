@@ -308,6 +308,10 @@ async fn sent_answering(front: &Front, name: &str) -> Result<(), String> {
 /// An extension that keeps a command running until it is stopped, and one
 /// that reads a file that looks like a secret, which is asked about.
 const RUNS: &str = "cineris.command({ name: 'spin', description: 'Never ends', run() { for (;;) {} } });\n\
+     cineris.command({ name: 'ask', description: 'Asks', async run() {\n\
+       await cineris.ask('Go on?', ['yes', 'no']);\n\
+       return 'asked';\n\
+     } });\n\
      cineris.command({ name: 'peek', description: 'Reads the secrets', async run() {\n\
        await cineris.fs.read('.env');\n\
        return 'peeked';\n\
@@ -343,23 +347,100 @@ fn an_interrupt_stops_a_running_command_and_its_questions_are_its_own() {
         let interrupt = Op::TurnInterrupt(cineris_protocol::methods::TurnInterruptParams::new(
             front.session.clone(),
         ));
-        for early in [true, false] {
-            let runs = cineris_testkit::Hold::new(cineris_core::A_SCRIPT_COMMAND_RUNS);
+        let other = front.join(cineris_core::ClientInfo::user()).await;
+        // Stopped where it waits before its script (`A_COMMAND_IS_TAKEN`),
+        // and where its script loops: by the early look, by the interrupt
+        // itself, and by another client's interrupt.
+        for (point, how) in [
+            (cineris_core::A_COMMAND_IS_TAKEN, "early"),
+            (cineris_core::A_SCRIPT_COMMAND_RUNS, "early"),
+            (cineris_core::A_SCRIPT_COMMAND_RUNS, "itself"),
+            (cineris_core::A_SCRIPT_COMMAND_RUNS, "another"),
+        ] {
+            let runs = cineris_testkit::Hold::new(point);
             let mut sent = std::pin::pin!(send(&front, "probe:spin", ""));
             runs.drive_until_reached(sent.as_mut()).await;
             runs.release();
             drop(runs);
-            if early {
-                front.core.early(front.client.id, &interrupt);
-            } else {
-                front.op(interrupt.clone()).await.unwrap();
+            match how {
+                "early" => front.core.early(front.client.id, &interrupt),
+                "itself" => drop(front.op(interrupt.clone()).await.unwrap()),
+                _ => other.core.early(other.client.id, &interrupt),
             }
             let error = sent.await.unwrap_err();
             assert!(
                 error.starts_with(code::COMMAND_FAILED) && error.contains("was interrupted"),
-                "{error}"
+                "{point}, {how}: {error}"
             );
         }
+        // An open question of its script is withdrawn, and a late answer
+        // refused.
+        let asking = {
+            let (core, id, op) = (
+                front.core.clone(),
+                front.client.id,
+                Op::TurnStart(TurnStartParams {
+                    session_id: front.session.clone(),
+                    input: Vec::new(),
+                    delivery: None,
+                    command: Some(CommandCall {
+                        name: "probe:ask".to_owned(),
+                        args: String::new(),
+                    }),
+                }),
+            );
+            tokio::spawn(async move { core.handle(id, op).await })
+        };
+        let question = || {
+            front
+                .seen
+                .borrow()
+                .iter()
+                .find_map(|outgoing| match outgoing {
+                    cineris_core::Outgoing::Request {
+                        id,
+                        request: cineris_protocol::methods::ServerRequest::Question(_),
+                    } => Some(id.clone()),
+                    _ => None,
+                })
+        };
+        front.until(|_| question().is_some()).await;
+        front.core.early(front.client.id, &interrupt);
+        let error = asking.await.unwrap().unwrap_err();
+        assert_eq!(
+            (error.code.as_str(), error.kind.clone()),
+            (
+                code::COMMAND_FAILED,
+                cineris_protocol::ErrorKind::Interrupted
+            )
+        );
+        let late = front.core.respond(
+            front.client.id,
+            &question().unwrap(),
+            cineris_protocol::methods::ServerResponse::Question(
+                cineris_protocol::methods::QuestionResponse {
+                    answer: Some("yes".to_owned()),
+                },
+            ),
+        );
+        assert!(late.is_err(), "a late answer was taken");
+        // A command has its own time, 30 s from when it is asked, whatever
+        // its manifest gives its tools.
+        let mut sent = std::pin::pin!(send(&front, "probe:spin", ""));
+        let mut sleeping =
+            std::pin::pin!(world.timer.sleeping_for(std::time::Duration::from_secs(30)));
+        std::future::poll_fn(|context| {
+            assert!(
+                sent.as_mut().poll(context).is_pending(),
+                "it ended before its time"
+            );
+            sleeping.as_mut().poll(context)
+        })
+        .await;
+        world.timer.advance(std::time::Duration::from_secs(30));
+        let error = sent.await.unwrap_err();
+        assert!(error.contains("did not end within its 30 s"), "{error}");
+        other.close().await;
         assert!(
             front.ends().is_empty(),
             "an interrupted command started a turn"

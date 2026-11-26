@@ -497,7 +497,12 @@ impl LoadedExtension {
         command: &str,
         input: Json,
         cx: &RunCx,
-    ) -> Result<Json, String> {
+        time: Duration,
+    ) -> Result<Json, CommandFailed> {
+        // Its time runs from now, its wait for its runtime's turn and the
+        // runtime's start included, as a hook's does.
+        let asked = self.parts.clock.monotonic();
+        let time = time.min(crate::commands::MAX_COMMAND_TIME);
         let full_name = format!("{}/command.{command}", self.name());
         let shown = format!("/{}:{command}", self.name());
         let runtime = match self
@@ -508,8 +513,13 @@ impl LoadedExtension {
             Err(Refused {
                 why,
                 stand: Refusal::Plain,
-            }) => return Err(why),
-            Err(Refused { why, stand }) => return Err(format!("{why}; {}", self.remedy(stand))),
+            }) => return Err(CommandFailed::Other(why)),
+            Err(Refused { why, stand }) => {
+                return Err(CommandFailed::Other(format!(
+                    "{why}; {}",
+                    self.remedy(stand)
+                )));
+            }
         };
         let progress = Mutex::new(Vec::new());
         let host = host::CallHost {
@@ -530,26 +540,42 @@ impl LoadedExtension {
                 CallContext {
                     host: &host,
                     capabilities: &self.capabilities,
-                    time: self.approved.manifest.limits.time,
+                    time,
                     timer: self.parts.timer.as_ref(),
                     clock: self.parts.clock.as_ref(),
                     cancel: &cx.cancel,
-                    asked: None,
+                    asked: Some(asked),
                 },
             )
             .await;
         match result {
             Ok(value) => Ok(value),
-            Err(CallError::Cancelled) => Err(format!("`{shown}` was interrupted")),
-            Err(CallError::Stopped(reason)) => Err(format!("`{shown}` was stopped: {reason}")),
-            Err(CallError::Disabled) => Err(format!(
+            Err(CallError::Cancelled) => {
+                Err(CommandFailed::Other(format!("`{shown}` was interrupted")))
+            }
+            Err(CallError::Stopped(reason)) => Err(CommandFailed::Stopped(reason)),
+            Err(CallError::TimedOut) => Err(CommandFailed::Other(format!(
+                "`{shown}` did not end within its {} s",
+                time.as_secs()
+            ))),
+            Err(CallError::Disabled) => Err(CommandFailed::Other(format!(
                 "{}; {}",
                 self.disabled(),
                 self.remedy(Refusal::Disabled)
-            )),
-            Err(error) => Err(format!("`{shown}` failed: {error}")),
+            ))),
+            Err(error) => Err(CommandFailed::Other(format!("`{shown}` failed: {error}"))),
         }
     }
+}
+
+/// How a command's call failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CommandFailed {
+    /// A stop of its own: a program's look at the protected paths, or a
+    /// question answered with a stop, with what the user is told.
+    Stopped(String),
+    /// Anything else, in a sentence that names it.
+    Other(String),
 }
 
 /// What came of one call of an extension's hook.

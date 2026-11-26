@@ -668,9 +668,10 @@ pub async fn serve<H: Host + ?Sized>(
                     // None for a hook's program (the maintainers, after
                     // the early review of the script hooks; a hook that
                     // needs to write is a hook command with `write =
-                    // true`). A command's keeps them, as before: the part
-                    // that wires commands decides them.
-                    write_roots: if phase == Phase::Hook {
+                    // true`), nor for a command's (the maintainers, after
+                    // the early review of the commands): it runs outside
+                    // any round, so nothing it wrote would be recorded.
+                    write_roots: if matches!(phase, Phase::Hook | Phase::Command) {
                         Vec::new()
                     } else {
                         capabilities.write_roots()
