@@ -59,7 +59,8 @@ fn sys_a_job_of_no_harnesss_is_no_sessions() {
         std::mem::forget(made);
     }
     mark().unwrap();
-    assert!(matches!(under_a_session(), Under::Session(_)));
+    let under = under_a_session();
+    assert!(matches!(under, Under::Session(_)), "{under:?}");
 }
 
 /// A job of this process's own name made before it marks itself is not
@@ -232,7 +233,8 @@ fn sys_a_harnesss_job_is_found_among_the_sessions_named_objects() {
     let (found, source) = harnesses(&Taken::new()).unwrap();
     assert_eq!(source, Source::Namespace);
     assert!(found.contains(&own), "{own:?} in {found:?}");
-    assert!(matches!(under_a_session(), Under::Session(_)));
+    let under = under_a_session();
+    assert!(matches!(under, Under::Session(_)), "{under:?}");
 }
 
 /// This test's own name, by which it runs itself again.
