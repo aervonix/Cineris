@@ -24,52 +24,75 @@ caught-by:
     cineris-tui secret::tests::auth_login_is_neither_cancelled_nor_typed_into_by_a_split_reply
 
 [break] a-held-escape-is-not-released-by-the-key-after-it
-rule: A held ESC that has waited its own time and is followed by what begins no sequence is the Escape key at once, before what followed.
+rule: A byte that comes a while after the last byte kept behind a held ESC, and cannot go on from it, ends the ESC's claim: the ESC is the Escape key at once, before what came.
 file: crates/cineris-term/src/terminal.rs
 in: Terminal::next
-find: if self.decoder.kept_escape_stands_alone(&self.bytes) {
-replace: if false {
+find: Some(false) => self.decoder.release_escape(&mut found),
+replace: Some(false) => {},
 caught-by:
     terminal::tests::keys_typed_while_the_replies_are_due_come_in_order
+    terminal::tests::keys_typed_a_while_apart_while_the_replies_are_due_are_those_keys
     terminal::tests::a_reply_that_lost_its_escape_while_the_replies_are_due_types_nothing
     terminal::tests::only_input_behind_a_key_counts_as_queued
 
 [break] a-held-escape-is-released-within-its-own-wait
-rule: Within `ESCAPE_WAIT` of a held ESC, what follows it is read with it, as always (`ESC x` is `Alt+x`).
+rule: Within `ESCAPE_WAIT` of the last byte kept, what follows a held ESC is read with it, as always (`ESC x` is `Alt+x`).
 file: crates/cineris-term/src/terminal.rs
 in: Terminal::next
-find: && now.saturating_duration_since(since) >= ESCAPE_WAIT
-replace: && now >= since
+find: .is_some_and(|at| now.saturating_duration_since(at) >= ESCAPE_WAIT)
+replace: .is_some_and(|at| now >= at)
 caught-by:
     terminal::tests::an_escape_that_waited_alone_is_the_escape_key_at_the_holds_end
 
 [break] a-split-sequence-is-cut-at-its-escape
-rule: A held ESC followed by what may begin a sequence (a focus report, a key's, a paste's mark) is never released early: the sequence is read whole.
+rule: A lone held ESC followed a while later by what may begin a sequence (a focus report, a key's, a paste's mark, a reply) is not released: the sequence is read whole.
 file: crates/cineris-term/src/input.rs
-in: Decoder::kept_escape_stands_alone
-find: None | Some(b'[' | b']' | b'O' | b'P' | b'_' | b'^' | b'X') => false,
-replace: None => false,
+in: Decoder::kept_escape_goes_on
+find: None | Some(b'[' | b']' | b'O' | b'P' | b'_' | b'^' | b'X')
+replace: None
 caught-by:
     terminal::tests::a_sequence_split_after_its_escape_while_the_replies_are_due_is_the_sequence
-    input::tests::a_kept_escape_stands_alone_only_before_what_begins_no_sequence
+    terminal::tests::a_reply_that_comes_a_key_at_a_time_is_the_reply
+    input::tests::what_goes_on_from_a_kept_escape_after_a_while
 
 [break] an-escape-before-a-reply-is-swallowed
-rule: A held ESC followed by a whole reply is the Escape key, then the reply: the reply never swallows it.
+rule: A second ESC a while after a held lone ESC is a fresh one: the first is the Escape key, and a reply or a key's sequence after the second never swallows it.
 file: crates/cineris-term/src/input.rs
-in: Decoder::kept_escape_stands_alone
-find: Some(0x1b) => matches!(reply_shape(&after[1..]), ReplyShape::Whole(_)),
-replace: Some(0x1b) => false,
+in: Decoder::kept_escape_goes_on
+find: None | Some(b'[' | b']' | b'O' | b'P' | b'_' | b'^' | b'X')
+replace: None | Some(b'[' | b']' | b'O' | b'P' | b'_' | b'^' | b'X' | 0x1b)
 caught-by:
     terminal::tests::keys_typed_while_the_replies_are_due_come_in_order
+    terminal::tests::keys_typed_a_while_apart_while_the_replies_are_due_are_those_keys
     terminal::tests::only_input_behind_a_key_counts_as_queued
-    input::tests::a_kept_escape_stands_alone_only_before_what_begins_no_sequence
+    input::tests::what_goes_on_from_a_kept_escape_after_a_while
+
+[break] a-key-a-while-after-a-held-sequence-joins-it
+rule: After more than a held ESC, only the rest of a reply goes on from it a while later: a person's key is that key, and the ESC and what was kept after it are keys too.
+file: crates/cineris-term/src/input.rs
+in: Decoder::kept_escape_goes_on
+find: Some(reply_shape(&after) != ReplyShape::Not)
+replace: Some(true)
+caught-by:
+    terminal::tests::keys_typed_a_while_apart_while_the_replies_are_due_are_those_keys
+    input::tests::what_goes_on_from_a_kept_escape_after_a_while
+
+[break] a-reply-that-comes-a-key-at-a-time-is-cut
+rule: The rest of a reply goes on from its held ESC however late each key of it comes, while the replies are due.
+file: crates/cineris-term/src/input.rs
+in: Decoder::kept_escape_goes_on
+find: Some(reply_shape(&after) != ReplyShape::Not)
+replace: Some(false)
+caught-by:
+    terminal::tests::a_reply_that_comes_a_key_at_a_time_is_the_reply
+    input::tests::what_goes_on_from_a_kept_escape_after_a_while
 
 [break] an-escape-that-waited-alone-becomes-alt
-rule: A held ESC that waited alone before the next byte, whose sequence never ended, is the Escape key at the hold's end, and what came after it is decoded on its own.
+rule: A held ESC that a byte came a while after, whose sequence never ended, is the Escape key at the hold's end, and what came after it is decoded on its own.
 file: crates/cineris-term/src/terminal.rs
 in: Terminal::next
-find: self.split = true;
-replace:
+find: Some(true) => self.split = true,
+replace: Some(true) => {},
 caught-by:
     terminal::tests::an_escape_that_waited_alone_is_the_escape_key_at_the_holds_end
 
@@ -80,7 +103,7 @@ in: Decoder::release_escape
 find: events.push(key(KeyCode::Esc));
 replace:
 caught-by:
-    input::tests::a_kept_escape_stands_alone_only_before_what_begins_no_sequence
+    input::tests::what_goes_on_from_a_kept_escape_after_a_while
     terminal::tests::keys_typed_while_the_replies_are_due_come_in_order
 
 # ------------------------------------------- a reply that lost its ESC
@@ -179,6 +202,42 @@ replace: at
 caught-by:
     app::tests::dialogs::a_held_escape_pressed_before_the_dialog_was_ready_does_not_answer_it
     app::tests::an_escape_the_terminal_held_does_not_answer_a_dialog_it_was_pressed_before
+
+[break] a-first-run-step-judges-a-key-when-it-was-read
+rule: A step of the first run judges a key by when it was pressed: one the terminal held, pressed in its grace and read after, does not answer it.
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_event
+find: if !run.takes_keys(pressed) {
+replace: if !run.takes_keys(at) {
+caught-by:
+    app::tests::first_run::an_escape_pressed_in_the_key_steps_grace_and_read_later_does_not_go_back
+
+[break] a-panel-judges-a-key-when-it-was-read
+rule: A panel judges a key by when it was pressed: one the terminal held, pressed in its grace and read after, does not act.
+file: crates/cineris-tui/src/app/state/panel.rs
+in: App::panel_key
+find: self.panels.ready(id, self.judged(at))
+replace: self.panels.ready(id, at)
+caught-by:
+    app::tests::panels::a_key_pressed_in_the_panels_grace_and_read_after_it_does_not_act
+
+[break] the-rewind-question-judges-a-paste-when-it-was-read
+rule: The rewind's question judges a paste by when it began: one begun before it was ready and read after reaches nothing.
+file: crates/cineris-tui/src/app/state.rs
+in: App::terminal
+find: .is_some_and(|dialog| dialog.swallows(self.judged(at)))
+replace: .is_some_and(|dialog| dialog.swallows(at))
+caught-by:
+    app::tests::rewind::a_paste_begun_before_the_question_was_ready_and_read_after_reaches_nothing
+
+[break] the-full-screen-dialog-judges-tab-when-it-was-read
+rule: In the full screen a dialog judges `Tab` by when it was pressed: one pressed in its grace and read after does not start reading the transcript.
+file: crates/cineris-tui/src/app/state.rs
+in: App::terminal
+find: let ready = dialog.takes_keys(self.judged(at));
+replace: let ready = dialog.takes_keys(at);
+caught-by:
+    app::tests::screen::a_tab_pressed_in_the_grace_and_read_after_it_does_not_start_reading
 
 [break] a-held-key-counts-as-input-when-it-was-pressed
 rule: A held key or a split paste is input from when it was read, the later time: a key just after it waits the quiet second.

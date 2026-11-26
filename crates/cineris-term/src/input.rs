@@ -462,29 +462,30 @@ impl Decoder {
         self.replies = due;
     }
 
-    /// Whether what is kept begins with an ESC that, with `next` (the input
-    /// that came after it), can begin no sequence at all: what follows it
-    /// is a character or a control byte (no introducer: `[`, `]`, `O`, `P`,
-    /// `_`, `^`, `X`), or a second ESC with a whole reply to the capability
-    /// queries after it ([`reply_shape`]). A sequence split after its ESC
-    /// (a focus report, a key's, a paste's mark, as a pseudo-console splits
-    /// them) is never cut there (the early review of small fixes II).
-    pub(crate) fn kept_escape_stands_alone(&self, next: &[u8]) -> bool {
+    /// Whether what is kept begins with an ESC that `next`, input that came
+    /// a while after the last byte kept (the reader says how long), may
+    /// still go on from: `None` when what is kept does not begin with an
+    /// ESC. After a lone ESC, only a byte that may begin a sequence (an
+    /// introducer: `[`, `]`, `O`, `P`, `_`, `^`, `X`) goes on, so that a
+    /// focus report, a key's sequence or a paste's mark split after its ESC
+    /// is still what it is; a character, a control byte or a second ESC
+    /// does not. After more than the ESC, only the rest of a reply to the
+    /// capability queries goes on ([`reply_shape`]): a reply comes a key at
+    /// a time through a pseudo-console, and a person's keys a while apart
+    /// are keys (the reviews of small fixes II).
+    pub(crate) fn kept_escape_goes_on(&self, next: &[u8]) -> Option<bool> {
         if self.paste.is_some() || self.skipping.is_some() || self.buffer.first() != Some(&0x1b) {
-            return false;
+            return None;
+        }
+        if self.buffer.len() == 1 {
+            return Some(matches!(
+                next.first(),
+                None | Some(b'[' | b']' | b'O' | b'P' | b'_' | b'^' | b'X')
+            ));
         }
         let mut after = self.buffer[1..].to_vec();
         after.extend_from_slice(next);
-        match after.first() {
-            None | Some(b'[' | b']' | b'O' | b'P' | b'_' | b'^' | b'X') => false,
-            Some(0x1b) => matches!(reply_shape(&after[1..]), ReplyShape::Whole(_)),
-            Some(_) => true,
-        }
-    }
-
-    /// Whether what is kept is a lone ESC and nothing else.
-    pub(crate) fn kept_lone_escape(&self) -> bool {
-        self.paste.is_none() && self.skipping.is_none() && self.buffer == [0x1b]
+        Some(reply_shape(&after) != ReplyShape::Not)
     }
 
     /// The kept ESC is the Escape key, given now; what was kept after it is
@@ -1367,29 +1368,33 @@ mod tests {
         assert_eq!(events, keys(&chars("[?0u")));
     }
 
-    /// A kept ESC that what came does not go on as a reply is released as
-    /// the Escape key, and what was kept after it is decoded on its own.
+    /// What may go on from a kept ESC after a while: after a lone ESC, a
+    /// sequence's introducer; after more, only the rest of a reply. A kept
+    /// ESC released is the Escape key, and what was kept after it is
+    /// decoded on its own.
     #[test]
-    fn a_kept_escape_stands_alone_only_before_what_begins_no_sequence() {
+    fn what_goes_on_from_a_kept_escape_after_a_while() {
         let mut decoder = Decoder::new();
         decoder.set_replies_due(true);
         let mut events = Vec::new();
-        assert!(!decoder.kept_lone_escape());
+        assert_eq!(decoder.kept_escape_goes_on(b"w"), None, "nothing kept");
         decoder.feed(b"\x1b", &mut events);
-        assert!(decoder.kept_lone_escape());
-        let goes_on: [&[u8]; 12] = [
-            b"", b"[", b"[?0", b"[A", b"[I", b"[200~", b"]11;", b"]2", b"OP", b"\x1b", b"\x1b[?6",
-            b"\x1b[A",
+        let goes_on: [&[u8]; 9] = [
+            b"", b"[", b"[?0", b"[A", b"[I", b"[200~", b"]11;", b"]2", b"OP",
         ];
         for bytes in goes_on {
-            assert!(!decoder.kept_escape_stands_alone(bytes), "{bytes:?}");
+            assert_eq!(decoder.kept_escape_goes_on(bytes), Some(true), "{bytes:?}");
         }
-        for bytes in [&b"w"[..], b"\r", b"\x1b[?62c", b"\x1b]11;x\x07"] {
-            assert!(decoder.kept_escape_stands_alone(bytes), "{bytes:?}");
+        for bytes in [&b"w"[..], b"\r", b"\x1b", b"\x1b[A", b"\x1b[?62c"] {
+            assert_eq!(decoder.kept_escape_goes_on(bytes), Some(false), "{bytes:?}");
         }
         decoder.feed(b"[", &mut events);
-        assert!(!decoder.kept_lone_escape());
-        assert!(!decoder.kept_escape_stands_alone(b"?"));
+        for bytes in [&b"?"[..], b"?0", b"?0u", b"?62;1c", b"?2026;2$y"] {
+            assert_eq!(decoder.kept_escape_goes_on(bytes), Some(true), "{bytes:?}");
+        }
+        for bytes in [&b"x"[..], b"A", b"I", b"\x1b", b"\x1b[?62c"] {
+            assert_eq!(decoder.kept_escape_goes_on(bytes), Some(false), "{bytes:?}");
+        }
         decoder.release_escape(&mut events);
         assert_eq!(events, keys(&[(KeyCode::Esc, N)]));
         assert!(decoder.pending(), "the `[` after it may begin a reply");
@@ -1403,7 +1408,7 @@ mod tests {
             ])
         );
         // Nothing kept, or no ESC: nothing to release.
-        assert!(!decoder.kept_escape_stands_alone(b"w"));
+        assert_eq!(decoder.kept_escape_goes_on(b"w"), None);
         let mut none = Vec::new();
         decoder.release_escape(&mut none);
         assert_eq!(none, []);
