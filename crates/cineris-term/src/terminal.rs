@@ -56,22 +56,33 @@ use crate::sys::{self, Ready};
 /// enough that Escape does not feel late.
 pub const ESCAPE_WAIT: Duration = Duration::from_millis(50);
 
-/// How long a lone ESC waits for the rest of a sequence while the replies
-/// to the capability queries are due ([`REPLIES_DUE`]), in place of
-/// [`ESCAPE_WAIT`]. Through a pseudo-console (ConPTY) a reply comes about a
-/// key at a time, and on a loaded machine its ESC can come more than
-/// [`ESCAPE_WAIT`] before its `[`, which made it the Escape key and typed
-/// the rest (`[?0u`) into the input box. An Escape pressed while the
-/// replies are due comes up to this much late, and one followed by a reply
-/// within it is taken with the reply (as Alt is, an ESC before a sequence);
-/// every dialog at the start waits longer than this before it takes a key.
+/// The least a lone ESC that comes while the replies to the capability
+/// queries are due is held for: one that comes just before [`REPLIES_DUE`]
+/// ends is still held this long after it came. See [`REPLIES_DUE`].
 pub const REPLY_ESCAPE_WAIT: Duration = Duration::from_millis(500);
 
 /// How long after the capability queries their replies are taken to be on
 /// their way, when the last of them (the device attributes, which every
-/// terminal answers) has not come: after it, a lone ESC waits
-/// [`ESCAPE_WAIT`] again, so a terminal that never answers is held to the
-/// longer wait for no more than this.
+/// terminal answers) has not come.
+///
+/// While they are due, a lone ESC is held until the device attributes come
+/// or this has passed since the queries (and at least
+/// [`REPLY_ESCAPE_WAIT`] after it came), in place of [`ESCAPE_WAIT`].
+/// Through a pseudo-console (ConPTY) a reply comes about a key at a time,
+/// and on a loaded machine its ESC came first more than 50 ms, then more
+/// than 500 ms, before its `[`, which made it the Escape key and typed the
+/// rest (`[?0u`) into the input box; since small fixes II the hold ends
+/// with what came, not after a time of its own. A held ESC that has waited
+/// [`ESCAPE_WAIT`] and is then followed by anything that does not go on as
+/// a reply is the Escape key at once, and what followed comes after it, in
+/// order. And while they are due, a reply whose ESC was taken on its own
+/// is the reply, never typed text ([`Decoder`]): a `[` or `]` that may
+/// begin one is held as an ESC is, until what follows says whether it is
+/// one.
+///
+/// So an Escape (or a `[`, or a `]`) pressed while the replies are due
+/// comes when the device attributes come, at once when another key follows
+/// it, and at the latest this long after the queries.
 pub const REPLIES_DUE: Duration = Duration::from_secs(3);
 
 /// The keys of one read that are taken for a paste, where pastes are not
@@ -453,14 +464,15 @@ pub struct Terminal<D: Device = System> {
     win32: bool,
     active: bool,
     /// When the decoder began to keep bytes that more input could complete
-    /// (a lone ESC): they are decoded as they stand once [`ESCAPE_WAIT`] has
-    /// passed, however often the wait is cut short meanwhile.
+    /// (a lone ESC): they are decoded as they stand once their wait has
+    /// passed ([`Self::escape_deadline`]), however often the wait is cut
+    /// short meanwhile.
     pending_since: Option<Instant>,
     /// Whether the reply that ends the capability queries has come.
     answered: bool,
     /// When the capability queries were sent: a lone ESC that comes within
-    /// [`REPLIES_DUE`] of it, while `answered` is not yet true, waits
-    /// [`REPLY_ESCAPE_WAIT`].
+    /// [`REPLIES_DUE`] of it, while `answered` is not yet true, is held for
+    /// the replies ([`REPLIES_DUE`] says how).
     queried: Instant,
     /// When the decoder last had input while inside a paste or a sequence
     /// being dropped: it gives up on it once [`OPEN_WAIT`] has passed.
@@ -820,6 +832,23 @@ impl<D: Device> Terminal<D> {
             }
             match ready {
                 Ready::Input => {
+                    let now = self.device.now();
+                    self.decoder.set_replies_due(
+                        self.held_for_replies(now)
+                            || self
+                                .pending_since
+                                .is_some_and(|since| self.held_for_replies(since)),
+                    );
+                    // An ESC held for the replies, which has waited its own
+                    // wait, and which what came does not go on as a reply:
+                    // it was the Escape key, given before what came.
+                    if let Some(since) = self.pending_since
+                        && self.held_for_replies(since)
+                        && now.saturating_duration_since(since) >= ESCAPE_WAIT
+                        && self.decoder.kept_escape_ends_before(&self.bytes)
+                    {
+                        self.decoder.release_escape(&mut found);
+                    }
                     self.decoder.feed(&self.bytes, &mut found);
                     found = self.pastes(found);
                     // What is kept now waits its own time: from its arrival,
@@ -913,16 +942,25 @@ impl<D: Device> Terminal<D> {
         found
     }
 
-    /// When what the decoder has kept since `since` (a lone ESC) is decoded
-    /// as it stands: [`ESCAPE_WAIT`] after it came, or
-    /// [`REPLY_ESCAPE_WAIT`] after it came when it came while the capability
-    /// replies were due. Bounded both ways: the last reply ends the longer
-    /// wait (the deadline is worked out again on each pass), and a terminal
-    /// that never sends it is held to it only for an ESC that came within
-    /// [`REPLIES_DUE`] of the queries.
+    /// When what the decoder has kept since `since` (a lone ESC, or the `[`
+    /// of a reply that lost its ESC) is decoded as it stands:
+    /// [`ESCAPE_WAIT`] after it came; or, when it came while the capability
+    /// replies were due, [`REPLIES_DUE`] after the queries, and no sooner
+    /// than [`REPLY_ESCAPE_WAIT`] after it came. The last reply ends the
+    /// longer hold: the deadline is worked out again on each pass.
     fn escape_deadline(&self, since: Instant) -> Instant {
-        let due = !self.answered && since < self.queried + REPLIES_DUE;
-        since + if due { REPLY_ESCAPE_WAIT } else { ESCAPE_WAIT }
+        if self.held_for_replies(since) {
+            (self.queried + REPLIES_DUE).max(since + REPLY_ESCAPE_WAIT)
+        } else {
+            since + ESCAPE_WAIT
+        }
+    }
+
+    /// Whether input that came at `at` came while the capability replies
+    /// were due: the last of them has not come, and `at` is within
+    /// [`REPLIES_DUE`] of the queries.
+    fn held_for_replies(&self, at: Instant) -> bool {
+        !self.answered && at < self.queried + REPLIES_DUE
     }
 
     /// Queues decoded events, taking in the replies first.
@@ -2101,12 +2139,11 @@ mod tests {
         );
     }
 
-    /// The longer wait is the ESC's own, counted from when it came, and
-    /// bounded both ways: a reply that never comes holds an ESC no more than
-    /// [`REPLY_ESCAPE_WAIT`]; an ESC that comes just before [`REPLIES_DUE`]
-    /// ends still waits it whole; and once [`REPLIES_DUE`] has passed with
-    /// no last reply (a terminal that never sends it), an ESC waits only
-    /// [`ESCAPE_WAIT`].
+    /// The hold is bounded: a terminal that never sends the last reply
+    /// holds an ESC until [`REPLIES_DUE`] after the queries, and no longer;
+    /// an ESC that comes just before it ends is still held
+    /// [`REPLY_ESCAPE_WAIT`]; and once [`REPLIES_DUE`] has passed with no
+    /// last reply, an ESC waits only [`ESCAPE_WAIT`].
     #[test]
     fn with_no_last_reply_the_longer_wait_ends_when_the_replies_are_no_longer_due() {
         let device = script(&[(Ready::Input, b"\x1b"), (Ready::Timeout, b"")]);
@@ -2116,10 +2153,10 @@ mod tests {
             terminal.next(None).unwrap(),
             Some(Event::Key(Key::plain(KeyCode::Esc)))
         );
-        // The ESC came one step after the queries, and waited its own
-        // longer wait from then.
-        assert_eq!(*waits.lock().unwrap(), vec![None, Some(REPLY_ESCAPE_WAIT)]);
-        assert_eq!(*elapsed.lock().unwrap(), STEP + REPLY_ESCAPE_WAIT);
+        // The ESC came one step after the queries, and was held until the
+        // replies were no longer due.
+        assert_eq!(*waits.lock().unwrap(), vec![None, Some(REPLIES_DUE - STEP)]);
+        assert_eq!(*elapsed.lock().unwrap(), REPLIES_DUE);
 
         // Just before the replies stop being due: the whole longer wait.
         let device = script(&[
@@ -2160,8 +2197,8 @@ mod tests {
     }
 
     /// The last reply ends the longer wait. An ESC held when the reply comes
-    /// is taken with it, as an ESC before any sequence is (Alt); the next
-    /// ESC waits only [`ESCAPE_WAIT`].
+    /// within [`ESCAPE_WAIT`] of it is taken with it, as an ESC before any
+    /// sequence is (Alt); the next ESC waits only [`ESCAPE_WAIT`].
     #[test]
     fn the_last_reply_ends_the_longer_wait_of_the_next_escape() {
         let device = script(&[
@@ -2182,6 +2219,145 @@ mod tests {
         );
         let waits = waits.lock().unwrap().clone();
         assert_eq!(waits.last(), Some(&Some(ESCAPE_WAIT)), "{waits:?}");
+    }
+
+    /// All the events a terminal gives until nothing more comes.
+    fn drain(terminal: &mut Terminal<Script>) -> Vec<Event> {
+        let mut events = Vec::new();
+        while let Some(event) = terminal.next(Some(Duration::ZERO)).unwrap() {
+            events.push(event);
+        }
+        events
+    }
+
+    fn typed(text: &str) -> Vec<Event> {
+        text.chars()
+            .map(|c| Event::Key(Key::plain(KeyCode::Char(c))))
+            .collect()
+    }
+
+    /// The flake of `cineris-cli`'s resumed-session and tools tests on a
+    /// busy Windows runner, and the bug under it: the keyboard reply's ESC
+    /// came, then its rest a second later, past any wait of a time of its
+    /// own. While the replies are due the ESC is held until what comes
+    /// says what it is: here the rest, so it is the reply, and nothing is
+    /// typed.
+    #[test]
+    fn a_reply_whose_escape_comes_a_second_before_its_rest_types_nothing() {
+        let second = Duration::from_secs(1);
+        let device = script(&[
+            (Ready::Input, b"\x1b"),
+            (Ready::Timeout, b""),
+            (Ready::Input, b"[?0u"),
+        ]);
+        let elapsed = device.elapsed.clone();
+        let mut terminal = Terminal::with_device(device, caps()).unwrap();
+        // A second after the ESC, nothing has been given.
+        assert_eq!(terminal.next(Some(second)).unwrap(), None);
+        assert_eq!(*elapsed.lock().unwrap(), STEP + second);
+        assert_eq!(
+            terminal.next(Some(second)).unwrap(),
+            Some(Event::Reply(Reply::Keyboard(0)))
+        );
+        assert_eq!(drain(&mut terminal), []);
+    }
+
+    /// A reply whose ESC was taken on its own, here because a key came
+    /// between them, is still the reply: the ESC is the Escape key, the key
+    /// comes after it, and the rest is never typed.
+    #[test]
+    fn a_reply_that_lost_its_escape_while_the_replies_are_due_types_nothing() {
+        let device = script(&[
+            (Ready::Input, b"\x1b"),
+            (Ready::Timeout, b""),
+            (Ready::Input, b"w"),
+            (Ready::Input, b"[?0"),
+            (Ready::Timeout, b""),
+            (Ready::Input, b"u"),
+        ]);
+        let mut terminal = Terminal::with_device(device, caps()).unwrap();
+        assert_eq!(terminal.next(Some(ESCAPE_WAIT * 2)).unwrap(), None);
+        // The ESC and the `w`; nothing for a second after `[?0`; its `u`.
+        let mut events = Vec::new();
+        for _ in 0..4 {
+            events.extend(terminal.next(Some(Duration::from_secs(1))).unwrap());
+        }
+        events.extend(drain(&mut terminal));
+        assert_eq!(
+            events,
+            [
+                Event::Key(Key::plain(KeyCode::Esc)),
+                Event::Key(Key::plain(KeyCode::Char('w'))),
+                Event::Reply(Reply::Keyboard(0)),
+            ]
+        );
+    }
+
+    /// What a person types while the replies are due comes through, in
+    /// order, and is lost nowhere: an Escape followed by keys is the Escape
+    /// key and the keys, at once; one followed by the last reply is the
+    /// Escape key and the reply; a `[` held as a reply's might be is a `[`
+    /// once what follows it is not a reply, or once the replies are no
+    /// longer due.
+    #[test]
+    fn keys_typed_while_the_replies_are_due_come_in_order() {
+        let escape = Event::Key(Key::plain(KeyCode::Esc));
+        let device = script(&[
+            (Ready::Input, b"\x1b"),
+            (Ready::Timeout, b""),
+            (Ready::Input, b"ab"),
+        ]);
+        let mut terminal = Terminal::with_device(device, caps()).unwrap();
+        assert_eq!(terminal.next(Some(ESCAPE_WAIT * 2)).unwrap(), None);
+        let mut want = vec![escape.clone()];
+        want.extend(typed("ab"));
+        assert_eq!(drain(&mut terminal), want);
+
+        let device = script(&[
+            (Ready::Input, b"\x1b"),
+            (Ready::Timeout, b""),
+            (Ready::Input, LAST_REPLY),
+        ]);
+        let mut terminal = Terminal::with_device(device, caps()).unwrap();
+        assert_eq!(terminal.next(Some(ESCAPE_WAIT * 2)).unwrap(), None);
+        assert_eq!(
+            drain(&mut terminal),
+            [escape.clone(), Event::Reply(Reply::DeviceAttributes)]
+        );
+
+        let device = script(&[
+            (Ready::Input, b"["),
+            (Ready::Timeout, b""),
+            (Ready::Input, b"a"),
+            (Ready::Input, b"["),
+            (Ready::Input, LAST_REPLY),
+        ]);
+        let mut terminal = Terminal::with_device(device, caps()).unwrap();
+        assert_eq!(terminal.next(Some(ESCAPE_WAIT * 2)).unwrap(), None);
+        let mut want = typed("[a[");
+        want.push(Event::Reply(Reply::DeviceAttributes));
+        assert_eq!(drain(&mut terminal), want);
+
+        // A `[` and nothing after it: a `[` once the replies are no longer
+        // due.
+        let device = script(&[(Ready::Input, b"["), (Ready::Timeout, b"")]);
+        let elapsed = device.elapsed.clone();
+        let mut terminal = Terminal::with_device(device, caps()).unwrap();
+        assert_eq!(
+            terminal.next(None).unwrap(),
+            Some(Event::Key(Key::plain(KeyCode::Char('['))))
+        );
+        assert_eq!(*elapsed.lock().unwrap(), REPLIES_DUE);
+    }
+
+    /// Once the last reply has come, a reply-shaped text is typed text:
+    /// nothing is read as a reply without its ESC then.
+    #[test]
+    fn after_the_last_reply_a_reply_without_its_escape_is_typed() {
+        let device = script(&[(Ready::Input, LAST_REPLY), (Ready::Input, b"[?0u")]);
+        let mut terminal = Terminal::with_device(device, caps()).unwrap();
+        answered(&mut terminal);
+        assert_eq!(drain(&mut terminal), typed("[?0u"));
     }
 
     #[test]
