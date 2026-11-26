@@ -215,4 +215,3 @@ One line an item: what it covers and who settles it. It is the place to look fir
 ### Other
 
 - [json-floats-read-within-a-few-units](json-floats-read-within-a-few-units.md): A float a client sends is read to within a few units in its last place, since `serde_json` is built without its exact reading of floats. Owner: the owner.
-- [quickjs-with-the-windows-toolchain](quickjs-with-the-windows-toolchain.md): Confirm QuickJS builds in the real extension crate with the Windows MSVC toolchain, or switch to Lua. Owner: step 28, in its first hour.
