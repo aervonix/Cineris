@@ -1181,11 +1181,6 @@ fn a_switch_and_a_fork_wait_for_a_rewind_under_way() {
     );
 }
 
-/// Keys and a paste that come before the question is ready answer nothing,
-/// and reach nothing: they would wait in the hidden editor and come back in
-/// front of the prompt the rewind gives back, for an `Enter` to send. They
-/// hold the question's quiet, as typing does (the review of step 25's
-/// second pull request).
 /// A paste whose first bytes came before the rewind's question was ready,
 /// read once it takes keys, reaches nothing: the question judges it by when
 /// it began (the full review of small fixes II).
@@ -1222,6 +1217,11 @@ fn a_paste_begun_before_the_question_was_ready_and_read_after_reaches_nothing() 
     );
 }
 
+/// Keys and a paste that come before the question is ready answer nothing,
+/// and reach nothing: they would wait in the hidden editor and come back in
+/// front of the prompt the rewind gives back, for an `Enter` to send. They
+/// hold the question's quiet, as typing does (the review of step 25's
+/// second pull request).
 #[test]
 fn what_is_typed_before_the_question_is_ready_reaches_nothing() {
     let now = Instant::now();
