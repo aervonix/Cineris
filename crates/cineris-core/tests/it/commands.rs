@@ -348,13 +348,15 @@ fn sys_a_commands_programs_write_nothing_and_an_interrupt_stops_them() {
             cineris_protocol::lease::Level::ReadOnly,
         ] {
             front
-                .op(Op::SessionSet(cineris_protocol::methods::SessionSetParams {
-                    session_id: front.session.clone(),
-                    settings: cineris_protocol::session::SessionSettings {
-                        level: Some(level.clone()),
-                        ..Default::default()
+                .op(Op::SessionSet(
+                    cineris_protocol::methods::SessionSetParams {
+                        session_id: front.session.clone(),
+                        settings: cineris_protocol::session::SessionSettings {
+                            level: Some(level.clone()),
+                            ..Default::default()
+                        },
                     },
-                }))
+                ))
                 .await
                 .unwrap();
             // Refused, or run and failing to write: either way nothing is
@@ -365,26 +367,35 @@ fn sys_a_commands_programs_write_nothing_and_an_interrupt_stops_them() {
                 let (text, _) = last_prompt(&front);
                 assert!(!text.ends_with("wrote with 0"), "{level:?}: {text}");
             }
-            assert_eq!(world.read("out.txt"), None, "a command's program wrote at {level:?}");
+            assert_eq!(
+                world.read("out.txt"),
+                None,
+                "a command's program wrote at {level:?}"
+            );
         }
         let interrupt = Op::TurnInterrupt(cineris_protocol::methods::TurnInterruptParams {
             session_id: front.session.clone(),
             now: true,
         });
         front
-            .op(Op::SessionSet(cineris_protocol::methods::SessionSetParams {
-                session_id: front.session.clone(),
-                settings: cineris_protocol::session::SessionSettings {
-                    level: Some(cineris_protocol::lease::Level::Supervised),
-                    ..Default::default()
+            .op(Op::SessionSet(
+                cineris_protocol::methods::SessionSetParams {
+                    session_id: front.session.clone(),
+                    settings: cineris_protocol::session::SessionSettings {
+                        level: Some(cineris_protocol::lease::Level::Supervised),
+                        ..Default::default()
+                    },
                 },
-            }))
+            ))
             .await
             .unwrap();
         let mut sent = std::pin::pin!(sent_answering(&front, "probe:wait"));
         let mut asked = std::pin::pin!(front.approval());
         std::future::poll_fn(|context| {
-            assert!(sent.as_mut().poll(context).is_pending(), "it ended before it was asked");
+            assert!(
+                sent.as_mut().poll(context).is_pending(),
+                "it ended before it was asked"
+            );
             asked.as_mut().poll(context).map(|_| ())
         })
         .await;
