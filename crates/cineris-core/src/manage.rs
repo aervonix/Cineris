@@ -20,7 +20,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use cineris_base::{PathOptions, PathResolver, Secret};
+use cineris_base::{ContentHash, PathOptions, PathResolver, Secret};
 use cineris_config::{
     CredentialStatus, LoadOptions, Loaded, ProjectTrust as ConfigTrust, StateDir, Withheld,
 };
@@ -137,6 +137,14 @@ pub struct ProjectExtension {
     definition: Definition,
 }
 
+impl ProjectExtension {
+    /// The hash approving it pins: what `--extension NAME=HASH` names.
+    #[must_use]
+    pub fn hash(&self) -> ContentHash {
+        self.definition.hash
+    }
+}
+
 /// One of a project's hook commands that `cineris permissions trust` can
 /// approve with the project (since step 28): what the trust question shows
 /// of it, and the definition approving it pins, kind `hook`, the hash of
@@ -150,6 +158,14 @@ pub struct ProjectHookCommand {
     /// Whether it was approved before, as something else.
     pub changed: bool,
     definition: Definition,
+}
+
+impl ProjectHookCommand {
+    /// The hash approving it pins: what `--hook NAME=HASH` names.
+    #[must_use]
+    pub fn hash(&self) -> ContentHash {
+        self.definition.hash
+    }
 }
 
 impl Core {

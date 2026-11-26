@@ -650,6 +650,26 @@ pub(crate) fn write_folders(globs: &[String]) -> Vec<Option<String>> {
 /// where it is between backticks, and with what acts unseen escaped
 /// ([`visible`]) everywhere.
 pub(crate) fn in_words(manifest: &Manifest, confined: bool) -> String {
+    in_words_where(manifest, confined, true)
+}
+
+/// What an extension loaded in every workspace (the user's own) is said to
+/// be able to do where its programs are confined here: that it holds where
+/// a session's sandbox is on, and not where it is off (the early review of
+/// step 28's third pull request, M3).
+pub const CONFINED_WHERE_ON: &str = "That holds where a session's sandbox is on, as it is here. \
+                                     Your extensions are loaded in every workspace: where the \
+                                     sandbox is off (your configuration, or a project you trust, \
+                                     can turn it off), their programs are not confined, and can \
+                                     do anything you can, including changing Cineris's own \
+                                     settings and approvals.";
+
+/// [`in_words`], for an extension loaded only in this workspace
+/// (`everywhere` true: a project's, whose confinement is this workspace's)
+/// or in every workspace (`everywhere` false: the user's own, where a
+/// confinement here is said to hold only where the sandbox is on,
+/// [`CONFINED_WHERE_ON`]).
+pub(crate) fn in_words_where(manifest: &Manifest, confined: bool, everywhere: bool) -> String {
     let listed = |items: &[String]| {
         items
             .iter()
@@ -696,6 +716,9 @@ pub(crate) fn in_words(manifest: &Manifest, confined: bool) -> String {
                 folders.join(", ")
             )
         });
+        if !everywhere {
+            words.push(CONFINED_WHERE_ON.to_owned());
+        }
     } else {
         words.push(NOT_CONFINED.to_owned());
         words.push(format!("It may run {}.", listed(&programs)));
@@ -759,6 +782,12 @@ pub(crate) fn in_words(manifest: &Manifest, confined: bool) -> String {
         ));
     }
     said
+}
+
+/// Text of an author's, as its description is shown: trimmed, quoted so
+/// that it cannot close its quote, then escaped, between double quotes.
+pub(crate) fn quoted_shown(text: &str) -> String {
+    format!("\"{}\"", visible(&quoted(text.trim())))
 }
 
 /// Text put between double quotes it cannot close: a `\`, a `"` and a
@@ -1055,5 +1084,29 @@ mod tests {
             ),
             "the pin store `~/.local/state/cineris/pins.toml` is not understood"
         );
+    }
+
+    /// A user's extension is loaded in every workspace: its words where its
+    /// programs are confined here say that it holds only where the sandbox
+    /// is on; a project's, loaded in its own workspace alone, do not; and
+    /// where they are not confined here, both say so first (the early
+    /// review of step 28's third pull request, M3).
+    #[test]
+    fn a_users_extension_is_said_confined_only_where_the_sandbox_is_on() {
+        let manifest = Manifest::parse(
+            "api = 1\nname = \"x\"\nversion = \"1\"\ndescription = \"d\"\nmain = \"main.js\"\n\
+             [capabilities]\nexec = [\"gh\"]\n",
+        )
+        .unwrap();
+        let users = in_words_where(&manifest, true, false);
+        assert!(users.contains(CONFINED_WHERE_ON), "{users}");
+        assert!(users.contains("Its programs are confined"), "{users}");
+        let projects = in_words_where(&manifest, true, true);
+        assert!(!projects.contains(CONFINED_WHERE_ON), "{projects}");
+        for everywhere in [false, true] {
+            let unconfined = in_words_where(&manifest, false, everywhere);
+            assert!(unconfined.starts_with(NOT_CONFINED), "{unconfined}");
+            assert!(!unconfined.contains(CONFINED_WHERE_ON), "{unconfined}");
+        }
     }
 }

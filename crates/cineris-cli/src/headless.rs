@@ -72,6 +72,7 @@ struct Plan {
 pub(crate) fn run(run: Run, name: &'static str, started: Instant) -> u8 {
     let env = Env::from_process();
     let log = start_log(&run, &env, name);
+    crate::mark_sessions();
     let format = run.format;
     let fail = |kind: ErrorKind, code: &str, message: String| {
         let error = ErrorData::new(kind, code, message);

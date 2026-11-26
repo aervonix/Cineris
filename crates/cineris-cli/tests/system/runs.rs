@@ -8,7 +8,7 @@ use std::process::Stdio;
 
 use serde_json::json;
 
-use crate::{Machine, OTHER_MODEL, jsonl, shown};
+use crate::{Machine, OTHER_MODEL, jsonl, shown, shown_hash};
 
 #[test]
 fn sys_exit_0_in_each_format_with_only_the_result_on_standard_output() {
@@ -226,8 +226,10 @@ fn sys_exit_6_when_an_extensions_host_call_stops_the_last_call_under_fail_on_den
          'went on' } });\n",
     )
     .unwrap();
+    let listed = machine.run(&["permissions", "trust"]);
+    let named = format!("probe={}", shown_hash(&listed.stdout, "`probe` in"));
     machine
-        .run(&["permissions", "trust", "--with-extensions"])
+        .run(&["permissions", "trust", "--extension", &named])
         .expect_code(0);
 
     machine.reply_tool(

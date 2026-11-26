@@ -315,15 +315,18 @@ pub(crate) enum ExtCommand {
     List,
     /// `inspect NAME`
     Inspect { name: String },
-    /// `disable NAME`: `[extensions.<name>] enabled = false` in the user's
-    /// configuration.
-    Disable { name: String },
-    /// `remove NAME [--yes]`: unpinned, and its folder deleted on a yes at a
-    /// terminal, or with `--yes` where there is none to ask at.
-    Remove { name: String, yes: bool },
-    /// `add PATH [--yes]`: shown, and approved on a yes at a terminal, or
-    /// with `--yes` where there is none to ask at.
-    Add { path: String, yes: bool },
+    /// `disable NAME [--hash H]`: `[extensions.<name>] enabled = false` in
+    /// the user's configuration; asked first when it holds gates, and with
+    /// no terminal to ask at, done then only with the hash of its pinned
+    /// version.
+    Disable { name: String, hash: Option<String> },
+    /// `remove NAME [--hash H]`: unpinned and its folder deleted, on one
+    /// yes at a terminal, or with the hash it is shown with where there is
+    /// none to ask at.
+    Remove { name: String, hash: Option<String> },
+    /// `add PATH [--hash H]`: shown, and approved on a yes at a terminal,
+    /// or with the hash of what was shown where there is none to ask at.
+    Add { path: String, hash: Option<String> },
 }
 
 /// `cineris setup …`: a choice the first run asks, made again in the
@@ -470,14 +473,17 @@ pub(crate) enum PermissionsCommand {
     List,
     /// `revoke ID…`
     Revoke { ids: Vec<String> },
-    /// `trust [--with-extensions]`: trust this project, or approve the
-    /// change of its rules; and its extensions and hooks, shown, on a yes
-    /// at a terminal, or with `--with-extensions` where there is none to
-    /// ask at (since step 28).
+    /// `trust [--extension NAME=HASH]… [--hook NAME=HASH]…`: trust this
+    /// project, or approve the change of its rules; and its extensions and
+    /// hooks, shown, on a yes at a terminal, or, where there is none to ask
+    /// at, each one named with the hash it is shown with (since step 28;
+    /// by hash since the owner's answer to the third pull request's early
+    /// review).
     Trust {
-        /// `--with-extensions`: approve the extensions and hooks shown with
-        /// no terminal to ask at.
-        with_extensions: bool,
+        /// `--extension NAME=HASH`, each.
+        extensions: Vec<(String, String)>,
+        /// `--hook NAME=HASH`, each.
+        hooks: Vec<(String, String)>,
     },
     /// `untrust`
     Untrust,
@@ -533,6 +539,19 @@ fn shown(argument: &Arg<'_>) -> String {
 
 fn text(parser: &mut Parser) -> Result<String, UsageError> {
     Ok(parser.value()?.string()?)
+}
+
+/// `NAME=HASH`, split at its last `=`.
+fn named_hash(flag: &str, value: &str) -> Result<(String, String), UsageError> {
+    value
+        .rsplit_once('=')
+        .filter(|(name, hash)| !name.is_empty() && !hash.is_empty())
+        .map(|(name, hash)| (name.to_owned(), hash.to_owned()))
+        .ok_or_else(|| {
+            UsageError(format!(
+                "{flag} takes NAME=HASH, the name and the hash 'permissions trust' shows"
+            ))
+        })
 }
 
 /// Reads the arguments after the program's name.
@@ -943,11 +962,17 @@ fn subcommand(topic: Topic, parser: &mut Parser) -> Result<Command, UsageError> 
         }
         Topic::Permissions => {
             let mut ids = Vec::new();
-            let mut with_extensions = false;
+            let mut extensions = Vec::new();
+            let mut hooks = Vec::new();
             while let Some(argument) = parser.next()? {
                 match argument {
                     Arg::Value(id) if action == "revoke" => ids.push(id.string()?),
-                    Arg::Long("with-extensions") if action == "trust" => with_extensions = true,
+                    Arg::Long("extension") if action == "trust" => {
+                        extensions.push(named_hash("--extension", &text(parser)?)?);
+                    }
+                    Arg::Long("hook") if action == "trust" => {
+                        hooks.push(named_hash("--hook", &text(parser)?)?);
+                    }
                     Arg::Short('h') | Arg::Long("help") => return Ok(Command::Help(topic)),
                     other => return Err(unexpected(&other)),
                 }
@@ -959,7 +984,8 @@ fn subcommand(topic: Topic, parser: &mut Parser) -> Result<Command, UsageError> 
                 )),
                 "revoke" => Ok(Command::Permissions(PermissionsCommand::Revoke { ids })),
                 "trust" => Ok(Command::Permissions(PermissionsCommand::Trust {
-                    with_extensions,
+                    extensions,
+                    hooks,
                 })),
                 "untrust" => Ok(Command::Permissions(PermissionsCommand::Untrust)),
                 "forget" => Ok(Command::Permissions(PermissionsCommand::Forget)),
@@ -1144,12 +1170,14 @@ fn ext(parser: &mut Parser) -> Result<Command, UsageError> {
         Some(Arg::Value(action)) => action.string()?,
         Some(other) => return Err(unexpected(&other)),
     };
-    let mut yes = false;
+    let mut hash = None;
     let mut words: Vec<String> = Vec::new();
     while let Some(argument) = parser.next()? {
         match argument {
             Arg::Short('h') | Arg::Long("help") => return help,
-            Arg::Long("yes") if action == "add" || action == "remove" => yes = true,
+            Arg::Long("hash") if matches!(action.as_str(), "add" | "remove" | "disable") => {
+                hash = Some(text(parser)?);
+            }
             Arg::Value(word) => words.push(word.string()?),
             other => return Err(unexpected(&other)),
         }
@@ -1166,14 +1194,15 @@ fn ext(parser: &mut Parser) -> Result<Command, UsageError> {
         },
         "disable" => ExtCommand::Disable {
             name: one("an extension's name")?,
+            hash,
         },
         "remove" => ExtCommand::Remove {
             name: one("an extension's name")?,
-            yes,
+            hash,
         },
         "add" => ExtCommand::Add {
             path: one("the folder of the extension")?,
-            yes,
+            hash,
         },
         other => {
             return Err(UsageError(format!(
@@ -1572,8 +1601,8 @@ mod tests {
         }
     }
 
-    /// `ext` reads its five subcommands; `--yes` only where something is
-    /// approved or deleted; each takes one word.
+    /// `ext` reads its five subcommands; `--hash` only where something is
+    /// approved, deleted or turned off; each takes one word.
     #[test]
     fn ext_reads_its_subcommands_and_says_what_each_takes() {
         assert_eq!(parse_words(&["ext"]), Ok(Command::Ext(ExtCommand::List)));
@@ -1590,21 +1619,36 @@ mod tests {
         assert_eq!(
             parse_words(&["ext", "disable", "acme.lint"]),
             Ok(Command::Ext(ExtCommand::Disable {
-                name: "acme.lint".to_owned()
+                name: "acme.lint".to_owned(),
+                hash: None
             }))
         );
         assert_eq!(
-            parse_words(&["ext", "remove", "--yes", "tracker"]),
+            parse_words(&["ext", "remove", "--hash", "ab12", "tracker"]),
             Ok(Command::Ext(ExtCommand::Remove {
                 name: "tracker".to_owned(),
-                yes: true
+                hash: Some("ab12".to_owned())
             }))
         );
         assert_eq!(
             parse_words(&["ext", "add", "./tracker"]),
             Ok(Command::Ext(ExtCommand::Add {
                 path: "./tracker".to_owned(),
-                yes: false
+                hash: None
+            }))
+        );
+        assert_eq!(
+            parse_words(&[
+                "permissions",
+                "trust",
+                "--extension",
+                "probe=ab12",
+                "--hook",
+                "a=b=cd"
+            ]),
+            Ok(Command::Permissions(PermissionsCommand::Trust {
+                extensions: vec![("probe".to_owned(), "ab12".to_owned())],
+                hooks: vec![("a=b".to_owned(), "cd".to_owned())],
             }))
         );
         assert_eq!(parse_words(&["ext", "-h"]), Ok(Command::Help(Topic::Ext)));
@@ -1612,9 +1656,18 @@ mod tests {
             (&["ext", "inspect"][..], "takes an extension's name"),
             (&["ext", "add"], "takes the folder"),
             (&["ext", "add", "a", "b"], "takes the folder"),
+            (&["ext", "add", "--yes", "x"], "unexpected argument '--yes'"),
             (
-                &["ext", "disable", "--yes", "x"],
-                "unexpected argument '--yes'",
+                &["ext", "inspect", "--hash", "h", "x"],
+                "unexpected argument '--hash'",
+            ),
+            (
+                &["permissions", "trust", "--extension", "probe"],
+                "takes NAME=HASH",
+            ),
+            (
+                &["permissions", "trust", "--with-extensions"],
+                "unexpected argument '--with-extensions'",
             ),
             (&["ext", "list", "x"], "'list' is not a subcommand"),
             (

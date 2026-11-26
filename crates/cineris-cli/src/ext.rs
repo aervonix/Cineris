@@ -4,9 +4,15 @@
 //!
 //! The core decides; this prints and asks. A question is put only at a
 //! terminal, as `cineris permissions trust` puts its own: a yes (`y` or
-//! `yes`) approves, anything else, an empty line included, does not, and
-//! `--yes` is ignored there; with no terminal to ask at, only `--yes`
-//! approves.
+//! `yes`) approves, anything else, an empty line included, does not. With
+//! no terminal to ask at, only `--hash H` approves, and only what has that
+//! hash: what was shown (the owner's answer to the early review of step
+//! 28's third pull request, which took `--yes` away: a bare yes named
+//! nothing, and the hash names what was shown). A `--hash` given at a
+//! terminal must be the hash too, and the question is still asked.
+//!
+//! **Under a session's command** each of `add`, `remove` and `disable` is
+//! refused before anything is read (`cineris_sandbox::session`).
 
 use std::io::{self, IsTerminal};
 use std::path::Path;
@@ -16,7 +22,7 @@ use cineris_base::in_code;
 use cineris_config::Env;
 use cineris_core::{
     Added, Core, CoreOptions, DisableOutcome, ExtensionListed, ExtensionSource, ExtensionsListing,
-    OpError, Project, Removal, Removed, ToAdd, TokioTimer,
+    Gates, OpError, Project, Removal, Removed, ToAdd, TokioTimer,
 };
 use cineris_protocol::ErrorKind;
 
@@ -68,20 +74,50 @@ fn project(name: &str, core: &Core) -> Result<Project, Done> {
     core.project(&here.root).map_err(|error| fail(name, &error))
 }
 
-/// Whether the person said yes: at a terminal, only to the question, `--yes`
-/// ignored; with no terminal to ask at, only with `--yes`, nothing read.
-fn approved(at_terminal: bool, yes: bool, answer: impl FnOnce() -> io::Result<String>) -> bool {
-    if at_terminal {
-        answer().is_ok_and(|line| matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes"))
-    } else {
-        yes
+/// What the person answered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Answer {
+    Yes,
+    No,
+    /// A `--hash` was given that is not the hash of what was shown, or
+    /// where there is none to name it by: nothing is asked or done.
+    HashDiffers,
+}
+
+/// Whether the person approved what was shown with the hash `shown`: a
+/// `--hash` given must be it, wherever it is given; then at a terminal only
+/// the question decides, and with no terminal to ask at the hash given is
+/// the approval, nothing read.
+fn approved(
+    at_terminal: bool,
+    given: Option<&str>,
+    shown: Option<&str>,
+    answer: impl FnOnce() -> io::Result<String>,
+) -> Answer {
+    match (given, shown) {
+        (Some(given), Some(shown)) if !given.trim().eq_ignore_ascii_case(shown) => {
+            Answer::HashDiffers
+        }
+        (Some(_), None) => Answer::HashDiffers,
+        _ if at_terminal => {
+            if answer()
+                .is_ok_and(|line| matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes"))
+            {
+                Answer::Yes
+            } else {
+                Answer::No
+            }
+        }
+        (Some(_), Some(_)) => Answer::Yes,
+        (None, _) => Answer::No,
     }
 }
 
-/// Asks `question` at the terminal, or takes `yes` where there is none.
-fn asked(question: &str, yes: bool) -> (bool, bool) {
+/// Asks `question` at the terminal, or takes the hash given where there is
+/// none; and whether there was a terminal.
+fn asked(question: &str, given: Option<&str>, shown: Option<&str>) -> (Answer, bool) {
     let at_terminal = io::stdin().is_terminal() && io::stdout().is_terminal();
-    let answer = approved(at_terminal, yes, || {
+    let answer = approved(at_terminal, given, shown, || {
         out(&format!("{question} [y/N] "));
         let mut line = String::new();
         io::stdin().read_line(&mut line).map(|_| line)
@@ -89,9 +125,68 @@ fn asked(question: &str, yes: bool) -> (bool, bool) {
     (answer, at_terminal)
 }
 
+/// What is said when the answer was not a yes: `what` is what was not
+/// done, `how` the flag that does it with no terminal.
+fn not_done(
+    answer: Answer,
+    at_terminal: bool,
+    given: Option<&str>,
+    shown: Option<&str>,
+    what: &str,
+) -> String {
+    match (answer, shown) {
+        (Answer::HashDiffers, Some(shown)) => format!(
+            "{what}: --hash {} is not the hash of what is shown ({shown})",
+            crate::visible(given.unwrap_or_default())
+        ),
+        (Answer::HashDiffers, None) => {
+            format!(
+                "{what}: it has no hash to name it by here, so only a yes at a terminal does it"
+            )
+        }
+        _ if at_terminal => what.to_owned(),
+        (_, Some(shown)) => format!(
+            "{what}: with no terminal to ask at, `--hash {shown}` does it, naming exactly what is \
+             shown"
+        ),
+        (_, None) => format!("{what}: with no terminal to ask at, nothing can say yes to it"),
+    }
+}
+
+/// A current-thread runtime, for what the core evaluates and writes.
+fn runtime(name: &str) -> Result<tokio::runtime::Runtime, Done> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .map_err(|error| {
+            say(name, &format!("the runtime did not start: {error}"));
+            exit::INTERNAL
+        })
+}
+
+/// `path` with a leading `~` (alone, or before a `/`, or a `\` on Windows)
+/// as the home directory: a shell expands it, PowerShell and `cmd` do not
+/// for a program's argument (the early review of step 28's third pull
+/// request).
+fn expanded(path: &str, home: Option<&Path>) -> std::path::PathBuf {
+    let rest = path.strip_prefix('~').filter(|rest| {
+        rest.is_empty() || rest.starts_with('/') || (cfg!(windows) && rest.starts_with('\\'))
+    });
+    match (rest, home) {
+        (Some(rest), Some(home)) => home.join(rest.trim_start_matches(['/', '\\'])),
+        _ => std::path::PathBuf::from(path),
+    }
+}
+
 /// `cineris ext …`
 pub(crate) fn ext(command: ExtCommand, name: &'static str) -> Done {
     let run = || -> Result<Done, Done> {
+        match &command {
+            ExtCommand::Add { .. } => crate::not_under_a_session(name, "ext add")?,
+            ExtCommand::Remove { .. } => crate::not_under_a_session(name, "ext remove")?,
+            ExtCommand::Disable { .. } => crate::not_under_a_session(name, "ext disable")?,
+            ExtCommand::List | ExtCommand::Inspect { .. } => {}
+        }
         let core = core(name)?;
         let project = project(name, &core)?;
         let fail = |error: OpError| fail(name, &error);
@@ -122,7 +217,32 @@ pub(crate) fn ext(command: ExtCommand, name: &'static str) -> Done {
                 out(&text.join("\n"));
                 Ok(exit::COMPLETED)
             }
-            ExtCommand::Disable { name: wanted } => {
+            ExtCommand::Disable { name: wanted, hash } => {
+                // One that holds gates is turned off only on a yes naming
+                // them (the early review's M1).
+                let gates = core.extension_gates(&project, &wanted).map_err(fail)?;
+                if !gates.held.is_empty() || gates.unknown {
+                    out(&gates_text(&wanted, &gates));
+                    let shown = gates.hash.map(|hash| hash.to_string());
+                    let (answer, at_terminal) = asked(
+                        &format!("Turn `{}` off, letting its gates go?", in_code(&wanted)),
+                        hash.as_deref(),
+                        shown.as_deref(),
+                    );
+                    if answer != Answer::Yes {
+                        say(
+                            name,
+                            &not_done(
+                                answer,
+                                at_terminal,
+                                hash.as_deref(),
+                                shown.as_deref(),
+                                &format!("`{}` was not turned off", in_code(&wanted)),
+                            ),
+                        );
+                        return Err(exit::USAGE);
+                    }
+                }
                 let outcome = core.disable_extension(&project, &wanted).map_err(fail)?;
                 let (text, done) = disabled_text(&outcome, &wanted, name);
                 if done {
@@ -133,7 +253,7 @@ pub(crate) fn ext(command: ExtCommand, name: &'static str) -> Done {
                     Err(exit::USAGE)
                 }
             }
-            ExtCommand::Remove { name: wanted, yes } => {
+            ExtCommand::Remove { name: wanted, hash } => {
                 let removal = core.extension_removal(&project, &wanted).map_err(fail)?;
                 if removal.project_only {
                     // The core refuses it, naming the commands for a
@@ -144,18 +264,47 @@ pub(crate) fn ext(command: ExtCommand, name: &'static str) -> Done {
                     };
                 }
                 out(&removal_text(&removal));
-                let mut delete = false;
-                let mut at_terminal = true;
-                if let Some((folder, link)) = &removal.folder {
-                    (delete, at_terminal) = asked(&removal_question(folder, *link), yes);
+                // Its pin and its folder go on one yes that names both (the
+                // early review's M1), and nothing goes without it.
+                let shown = removal.hash.map(|hash| hash.to_string());
+                let (answer, at_terminal) = asked(
+                    &removal_question(&removal),
+                    hash.as_deref(),
+                    shown.as_deref(),
+                );
+                if answer != Answer::Yes {
+                    say(
+                        name,
+                        &not_done(
+                            answer,
+                            at_terminal,
+                            hash.as_deref(),
+                            shown.as_deref(),
+                            &format!(
+                                "`{}` was not removed, and nothing was changed",
+                                in_code(&removal.name)
+                            ),
+                        ),
+                    );
+                    return Err(exit::USAGE);
                 }
-                let removed = core.remove_extension(&removal, delete).map_err(fail)?;
-                out(&removed_text(&removal, removed, at_terminal, name));
+                let removed = core
+                    .remove_extension(&removal, removal.folder.is_some())
+                    .map_err(fail)?;
+                out(&removed_text(&removal, removed));
                 Ok(exit::COMPLETED)
             }
-            ExtCommand::Add { path, yes } => {
-                let to_add = core
-                    .extension_to_add(&project, Path::new(&path))
+            ExtCommand::Add { path, hash } => {
+                let home = Env::from_process().home();
+                let mut to_add = core
+                    .extension_to_add(&project, &expanded(&path, home.as_deref()))
+                    .map_err(fail)?;
+                // Evaluated before the question, so that what it registers
+                // is shown with the rest (the early review's M2): one that
+                // cannot be is not asked about.
+                let runtime = runtime(name)?;
+                runtime
+                    .block_on(core.evaluate_extension(&mut to_add))
                     .map_err(fail)?;
                 out(&to_add_text(&to_add));
                 if to_add.pinned && to_add.unchanged {
@@ -165,29 +314,25 @@ pub(crate) fn ext(command: ExtCommand, name: &'static str) -> Done {
                     ));
                     return Ok(exit::COMPLETED);
                 }
-                let (answer, at_terminal) = asked(&add_question(&to_add), yes);
-                if !answer {
+                let shown = to_add.hash.to_string();
+                let (answer, at_terminal) =
+                    asked(&add_question(&to_add), hash.as_deref(), Some(&shown));
+                if answer != Answer::Yes {
                     say(
                         name,
-                        &format!(
-                            "`{}` was not added: nothing was written or pinned{}",
-                            in_code(&to_add.name),
-                            if at_terminal {
-                                ""
-                            } else {
-                                "; with no terminal to ask at, --yes approves it"
-                            }
+                        &not_done(
+                            answer,
+                            at_terminal,
+                            hash.as_deref(),
+                            Some(&shown),
+                            &format!(
+                                "`{}` was not added, and nothing was written or pinned",
+                                in_code(&to_add.name)
+                            ),
                         ),
                     );
                     return Err(exit::USAGE);
                 }
-                let runtime = tokio::runtime::Builder::new_current_thread()
-                    .enable_time()
-                    .build()
-                    .map_err(|error| {
-                        say(name, &format!("the runtime did not start: {error}"));
-                        exit::INTERNAL
-                    })?;
                 let added = runtime.block_on(core.add_extension(to_add)).map_err(fail)?;
                 out(&added_text(&added));
                 Ok(exit::COMPLETED)
@@ -340,6 +485,27 @@ fn to_add_text(to_add: &ToAdd) -> String {
     for line in to_add.words.lines() {
         text.push_str(&format!("  {line}\n"));
     }
+    for (heading, items) in [
+        ("Its tools:", &to_add.tools),
+        ("Its commands:", &to_add.commands),
+    ] {
+        if items.is_empty() {
+            continue;
+        }
+        text.push_str(&format!("{heading}\n"));
+        for (item, description) in items {
+            text.push_str(&format!("  `{item}`, which its author describes as:\n"));
+            for line in description.lines() {
+                text.push_str(&format!("    {line}\n"));
+            }
+        }
+    }
+    if let Some(prompt) = &to_add.prompt {
+        text.push_str("What it adds to the system prompt, whole, in its author's words:\n");
+        for line in prompt.lines() {
+            text.push_str(&format!("  {line}\n"));
+        }
+    }
     let total: u64 = to_add.files.iter().map(|(_, size)| size).sum();
     text.push_str(&format!(
         "Its files, {} in all, {total} bytes:\n",
@@ -413,6 +579,9 @@ fn added_text(added: &Added) -> String {
         "It registered {}.\n",
         registered_line(&added.registered)
     ));
+    if let Some(why) = &added.left_aside {
+        text.push_str(&format!("It is in place; {why}.\n"));
+    }
     if let Some(why) = &added.not_cached {
         text.push_str(&format!(
             "What it registered was not kept in the registration cache ({why}): the next session \
@@ -498,54 +667,96 @@ fn disabled_text(outcome: &DisableOutcome, wanted: &str, name: &str) -> (String,
     }
 }
 
-/// What `ext remove` takes away, said before its question.
+/// What `ext remove` takes away, said before its question, with the hash
+/// that `--hash` names it by.
 fn removal_text(removal: &Removal) -> String {
     let code = in_code(&removal.name);
     let pin = removal.pin.as_ref().map_or_else(
         || "it is not pinned".to_owned(),
-        |(hash, at)| format!("its pin ({hash}, {at}) is taken away"),
+        |(hash, at)| {
+            format!(
+                "its pin ({hash}, {at}) is taken away, so no session loads it and its gates no \
+                 longer hold"
+            )
+        },
     );
     let folder = match &removal.folder {
         None => "its folder is gone already".to_owned(),
-        Some((folder, false)) => format!("its folder `{folder}` is deleted on a yes"),
-        Some((folder, true)) => format!(
-            "`{folder}`, a link, is unlinked on a yes, and what it leads to is left as it is"
-        ),
+        Some((folder, false)) => format!("its folder `{folder}` is deleted"),
+        Some((folder, true)) => {
+            format!("`{folder}`, a link, is unlinked, and what it leads to is left as it is")
+        }
     };
-    format!("Removing your extension `{code}`: {pin}, and {folder}.\n")
+    let hash = match (&removal.pin, removal.hash) {
+        (Some(_), _) => String::new(),
+        (None, Some(hash)) => format!(" Its folder's hash is {hash}."),
+        (None, None) => String::new(),
+    };
+    format!("Removing your extension `{code}`: {pin}, and {folder}.{hash}\n")
 }
 
-/// `ext remove`'s question, naming the folder under `~`.
-fn removal_question(folder: &str, link: bool) -> String {
-    if link {
-        format!("Unlink `{folder}`, which is a link, leaving what it leads to?")
-    } else {
-        format!("Delete `{folder}` and everything in it?")
+/// `ext remove`'s one question, naming the pin and the folder under `~`.
+fn removal_question(removal: &Removal) -> String {
+    let code = in_code(&removal.name);
+    let folder = match &removal.folder {
+        None => None,
+        Some((folder, true)) => Some(format!(
+            "unlink `{folder}`, which is a link, leaving what it leads to"
+        )),
+        Some((folder, false)) => Some(format!("delete `{folder}` and everything in it")),
+    };
+    match (removal.pin.is_some(), folder) {
+        (true, Some(folder)) => format!("Unpin `{code}` and {folder}?"),
+        (true, None) => format!("Unpin `{code}`?"),
+        (false, Some(folder)) => {
+            let mut chars = folder.chars();
+            let first = chars
+                .next()
+                .map(|c| c.to_ascii_uppercase())
+                .unwrap_or_default();
+            format!("{first}{}?", chars.as_str())
+        }
+        (false, None) => format!("Remove `{code}`?"),
     }
 }
 
 /// What `ext remove` says it did.
-fn removed_text(removal: &Removal, removed: Removed, at_terminal: bool, name: &str) -> String {
+fn removed_text(removal: &Removal, removed: Removed) -> String {
     let code = in_code(&removal.name);
     let mut text = if removed.unpinned {
         format!("Unpinned `{code}`: no session loads it, and its gates no longer hold.\n")
     } else {
         format!("`{code}` was not pinned.\n")
     };
-    match (&removal.folder, removed.deleted) {
-        (Some((folder, _)), true) => text.push_str(&format!("Deleted `{folder}`.\n")),
-        (Some((folder, _)), false) => text.push_str(&format!(
-            "`{folder}` is left as it is{}: not approved, it is not loaded, and `{name} ext add \
-             {folder}` approves it again.\n",
-            if at_terminal {
-                ""
-            } else {
-                " (with no terminal to ask at, --yes deletes it)"
-            }
-        )),
-        (None, _) => {}
+    if let (Some((folder, link)), true) = (&removal.folder, removed.deleted) {
+        text.push_str(&if *link {
+            format!("Unlinked `{folder}`.\n")
+        } else {
+            format!("Deleted `{folder}`.\n")
+        });
     }
     text
+}
+
+/// What `ext disable` says of the gates it would let go, before asking.
+fn gates_text(wanted: &str, gates: &Gates) -> String {
+    let code = in_code(wanted);
+    let hash = gates
+        .hash
+        .map(|hash| format!(" (its approved version's hash is {hash})"))
+        .unwrap_or_default();
+    if gates.held.is_empty() {
+        format!(
+            "What `{code}`{hash} registered is not known, and it may hold gates: hooks that can \
+             refuse a prompt or a tool call. Turned off, none of them holds.\n"
+        )
+    } else {
+        format!(
+            "`{code}`{hash} holds gates, hooks that can refuse what they are on: {}. Turned off, \
+             they no longer hold, and what they would refuse goes ahead.\n",
+            gates.held.join(", ")
+        )
+    }
 }
 
 #[cfg(test)]

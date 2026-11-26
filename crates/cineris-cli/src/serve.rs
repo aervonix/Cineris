@@ -74,6 +74,7 @@ pub(crate) fn run(serve: Serve, name: &'static str) -> u8 {
     }
     let env = Env::from_process();
     let log = crate::headless::start_log(&serve.run, &env, name);
+    crate::mark_sessions();
     let mut load = LoadOptions::new(env.clone());
     load.profile.clone_from(&serve.run.common.profile);
     load.overrides = crate::headless::overrides(&serve.run);

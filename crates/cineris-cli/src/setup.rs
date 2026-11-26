@@ -59,6 +59,9 @@ pub(crate) fn first_run_due(env: &Env) -> Option<PathBuf> {
 pub(crate) fn command(command: crate::args::SetupCommand, name: &'static str) -> u8 {
     use std::io::IsTerminal as _;
     let crate::args::SetupCommand::SkillFolders { value } = command;
+    if let Err(code) = crate::not_under_a_session(name, "setup skill-folders") {
+        return code;
+    }
     let env = Env::from_process();
     let Some(file) = cineris_config::Dirs::from_env(&env).user_config else {
         eprintln!(
