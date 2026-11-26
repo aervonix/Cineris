@@ -1173,8 +1173,9 @@ fn a_hooks_program_has_no_write_root_and_a_tools_has_the_manifests() {
         &CancelToken::new(),
     ));
     assert_eq!(tool, Ok(json!("ok")));
-    // A command's keeps them, as before: the part that wires commands
-    // decides them (the full review of the script hooks, L9).
+    // Nor has a command's: it runs outside any round, so nothing its
+    // programs wrote would be recorded (the maintainers, after the early
+    // review of the commands).
     let cancel = CancelToken::new();
     let command = block_on(runtime.call(
         Target::Command("c".to_owned()),
@@ -1205,7 +1206,7 @@ fn a_hooks_program_has_no_write_root_and_a_tools_has_the_manifests() {
         "{execs:?}"
     );
     assert!(
-        execs[2].contains("from-the-command") && execs[2].contains("roots=1"),
+        execs[2].contains("from-the-command") && execs[2].contains("roots=0"),
         "{execs:?}"
     );
 }
