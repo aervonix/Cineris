@@ -214,7 +214,7 @@ caught-by:
 rule: With statistics off a usage report changes nothing on the disk: nothing is written, so no month is pruned, whatever the retention.
 file: crates/cineris-core/src/usage.rs
 in: report
-find: recording.then_some(retention),
-replace: Some(retention),
+find: recording.then_some(retention)
+replace: Some(retention)
 caught-by:
     cineris-core::it usage::a_report_with_statistics_off_prunes_nothing
