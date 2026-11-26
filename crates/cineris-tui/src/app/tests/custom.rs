@@ -11,6 +11,7 @@ use cineris_protocol::methods::{
 };
 
 use super::*;
+use crate::app::state::COMMANDS_WAIT;
 
 fn command(name: &str, source: CommandSource, extension: Option<&str>, about: &str) -> CommandInfo {
     CommandInfo {
@@ -436,4 +437,217 @@ fn commands_not_used_are_said_once_and_typed_go_as_commands() {
     let (_, sent) = started(&link);
     assert!(sent.input.is_empty(), "{sent:#?}");
     assert_eq!(sent.command, call("broken", "now"));
+}
+
+/// The list the open asked for, answered with `result` at `now`.
+fn list_answered(
+    app: &mut App,
+    link: &Scripted,
+    result: Result<OpResult, ErrorData>,
+    now: Instant,
+) {
+    let (asked, _) = list_asked(link);
+    link.give(Inbound::Done(asked.expect("asked at the open"), result));
+    drain(app, now);
+}
+
+/// Types `text` and sends it with `Enter`.
+fn entered(app: &mut App, text: &str, now: Instant) {
+    type_text(app, text, now);
+    key(app, "enter", now);
+}
+
+/// A `/name` typed right after the header, before the session's first list
+/// answers, waits for it, the loop due to wake at the wait's bound; the
+/// list answering within it, the name goes as the command it lists, and a
+/// `/name` typed behind it that the list does not have goes after it, as
+/// text.
+#[test]
+fn a_typed_command_waits_for_the_first_list_and_goes_as_it_says() {
+    let now = Instant::now();
+    let (mut app, link) = app(now);
+    opened(&mut app, &link, now);
+    let (asked, _) = list_asked(&link);
+    entered(&mut app, "/deploy prod", now);
+    let later = now + COMMANDS_WAIT / 2;
+    drain(&mut app, later);
+    assert!(turn_start(&link.take_sent()).is_empty(), "it waits");
+    assert!(app.running(), "running from the moment it was sent");
+    assert_eq!(app.deadline(), Some(now + COMMANDS_WAIT));
+    entered(&mut app, "/tmp is full", later);
+    link.give(Inbound::Done(asked.expect("asked"), Ok(listed())));
+    drain(&mut app, later);
+    let (ticket, sent) = started(&link);
+    assert!(sent.input.is_empty(), "{sent:#?}");
+    assert_eq!(sent.command, call("deploy", "prod"));
+    assert_eq!(sent.delivery, None);
+    assert_eq!(app.deadline(), None, "nothing waits");
+    link.give(Inbound::Done(
+        ticket,
+        Ok(OpResult::TurnStart(TurnStartResult {
+            turn_id: TurnId::from("t_1"),
+            disposition: Disposition::Started,
+        })),
+    ));
+    drain(&mut app, later);
+    let (_, sent) = started(&link);
+    assert_eq!(sent.command, None, "not in the list: text");
+    assert_eq!(sent.input, vec![Part::text("/tmp is full")]);
+    assert_eq!(sent.delivery, Some(ItemDelivery::Queue));
+}
+
+/// With no answer by the wait's bound, the `/name` goes then, as a command
+/// for the core to judge, never as text, and the late list sends nothing.
+/// After a list that failed, the same: the session has no list to say it
+/// is text.
+#[test]
+fn a_typed_command_goes_as_a_command_at_the_bound_or_after_a_failed_list() {
+    let now = Instant::now();
+    let bound = now + COMMANDS_WAIT;
+    let (mut app, link) = app(now);
+    opened(&mut app, &link, now);
+    let (asked, _) = list_asked(&link);
+    entered(&mut app, "/deploy prod", now);
+    assert_eq!(app.deadline(), Some(bound), "the loop wakes at the bound");
+    drain(&mut app, bound - Duration::from_millis(1));
+    assert!(turn_start(&link.take_sent()).is_empty(), "it waits");
+    drain(&mut app, bound);
+    let (_, sent) = started(&link);
+    assert!(sent.input.is_empty(), "{sent:#?}");
+    assert_eq!(sent.command, call("deploy", "prod"));
+    assert_eq!(sent.delivery, None);
+    assert_eq!(app.deadline(), None);
+    link.give(Inbound::Done(asked.expect("asked"), Ok(listed())));
+    drain(&mut app, bound);
+    assert!(turn_start(&link.take_sent()).is_empty(), "sent once");
+
+    let (mut app, link) = crate::testkit::app(now);
+    opened(&mut app, &link, now);
+    let (asked, _) = list_asked(&link);
+    entered(&mut app, "/deploy prod", now);
+    link.give(Inbound::Done(
+        asked.expect("asked"),
+        Err(ErrorData::new(ErrorKind::Internal, "x", "No list here.")),
+    ));
+    drain(&mut app, now);
+    let (_, sent) = started(&link);
+    assert_eq!(sent.command, call("deploy", "prod"), "the core decides");
+}
+
+/// Any `/a:b`, an extension's command's form, goes as a command though no
+/// list has it: an extension held, changed or turned off is in neither
+/// list, and the core says why.
+#[test]
+fn an_extensions_form_goes_as_a_command_whatever_the_list_says() {
+    let now = Instant::now();
+    let (mut app, link) = app(now);
+    opened(&mut app, &link, now);
+    list_answered(&mut app, &link, Ok(listed()), now);
+    entered(&mut app, "/linter:fix all of it", now);
+    let (_, sent) = started(&link);
+    assert!(sent.input.is_empty(), "{sent:#?}");
+    assert_eq!(sent.command, call("linter:fix", "all of it"));
+}
+
+/// An interrupt while held prompts are on their way: a custom command among
+/// them comes back into the editor as it was typed, never sent after the
+/// stop, and the plain one behind it is queued ahead of the interrupt, as
+/// before.
+#[test]
+fn an_interrupt_gives_the_held_commands_back_and_queues_the_rest() {
+    let now = Instant::now();
+    let (mut app, link) = app_with(now, Some("look at the lexer"));
+    entered(&mut app, "/review security", now);
+    entered(&mut app, "and the parser", now);
+    opened(&mut app, &link, now);
+    list_answered(&mut app, &link, Ok(listed()), now);
+    key(&mut app, "esc", now);
+    let sent = link.take_sent();
+    let starts = turn_start(&sent);
+    assert_eq!(starts.len(), 1, "{sent:#?}");
+    assert_eq!(starts[0].command, None);
+    assert_eq!(starts[0].input, vec![Part::text("and the parser")]);
+    assert_eq!(starts[0].delivery, Some(ItemDelivery::Queue));
+    assert!(
+        matches!(sent.last(), Some((_, Op::TurnInterrupt(_)))),
+        "{sent:#?}"
+    );
+    assert_eq!(app.input().editor().text(), "/review security");
+}
+
+/// A command refused `turn_running` comes back into the editor with why,
+/// and is not sent again queued: its script ran, and would run twice.
+#[test]
+fn a_command_refused_because_a_turn_runs_comes_back_and_is_not_sent_again() {
+    let now = Instant::now();
+    let (mut app, link) = app(now);
+    opened(&mut app, &link, now);
+    list_answered(&mut app, &link, Ok(listed()), now);
+    entered(&mut app, "/review x", now);
+    let (ticket, _) = started(&link);
+    link.give(Inbound::Done(
+        ticket,
+        Err(ErrorData::new(
+            ErrorKind::Usage,
+            code::TURN_RUNNING,
+            "A turn is running.",
+        )),
+    ));
+    drain(&mut app, now);
+    assert!(turn_start(&link.take_sent()).is_empty(), "not sent again");
+    assert_eq!(app.input().editor().text(), "/review x");
+    assert!(notices(&mut app, now).contains("A turn is running."));
+}
+
+/// A left-out file's raw name and path pass through the transcript's
+/// sanitiser, in the notice and in `/help`: an escape shows as its picture
+/// and a bidirectional override as an escape, and neither reaches a frame.
+#[test]
+fn a_left_out_files_name_and_path_are_sanitised() {
+    let now = Instant::now();
+    let (mut app, link) = app(now);
+    opened(&mut app, &link, now);
+    let OpResult::CommandsList(mut list) = listed() else {
+        unreachable!("a list");
+    };
+    list.not_used = vec![
+        CommandNotUsed {
+            name: "ship\u{1b}[2J\u{202e}it".to_owned(),
+            source: CommandSource::Project,
+            extension: None,
+            path: Some(".cineris/commands/ship\u{1b}[2J\u{202e}it.md".to_owned()),
+            reason: "Its front matter is not TOML.".to_owned(),
+        },
+        CommandNotUsed {
+            name: String::new(),
+            source: CommandSource::User,
+            extension: None,
+            path: Some("~/.cineris/commands/\u{202e}\u{1b}]0;x.md".to_owned()),
+            reason: "It has no name.".to_owned(),
+        },
+    ];
+    list_answered(&mut app, &link, Ok(OpResult::CommandsList(list)), now);
+    let words = |all: &str| all.split_whitespace().collect::<Vec<_>>().join(" ");
+    let said = words(&notices(&mut app, now));
+    run_command(&mut app, "/help", now);
+    let help = words(&notices(&mut app, now));
+    for all in [&said, &help] {
+        assert!(!all.contains(['\u{1b}', '\u{202e}']), "{all:?}");
+    }
+    assert!(
+        said.contains("/ship\u{241b}[2J\\u{202e}it (the project's command) is not used"),
+        "{said}"
+    );
+    assert!(
+        said.contains("~/.cineris/commands/\\u{202e}\u{241b}]0;x.md (your command) is not used"),
+        "{said}"
+    );
+    assert!(
+        help.contains("/ship\u{241b}[2J\\u{202e}it (project's) not used:"),
+        "{help}"
+    );
+    assert!(
+        help.contains("~/.cineris/commands/\\u{202e}\u{241b}]0;x.md not used:"),
+        "{help}"
+    );
 }
