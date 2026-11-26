@@ -230,3 +230,41 @@ fn the_help_is_safe_only_in_words_that_are_the_programs_own() {
         Standing::Refused(_)
     ));
 }
+
+/// A line built to nest or repeat without end is refused, and soon, on a
+/// thread as small as the core's (the full review of the third part, M1).
+#[test]
+fn a_line_that_nests_or_repeats_without_end_is_refused_soon() {
+    let lines = [
+        (format!("{}cin", "nohup ".repeat(1000)), Posix),
+        (
+            format!("{}cin", "start ".repeat(5000)),
+            ShellSyntax::PowerShell,
+        ),
+        (format!("find . {}cin", "-exec ".repeat(5000)), Posix),
+        (format!("echo {}", "a=cin=b=cin=".repeat(2000)), Posix),
+        (format!("echo {} cin", "x".repeat(60 * 1024)), Posix),
+    ];
+    let checked = std::thread::Builder::new()
+        .stack_size(2 * 1024 * 1024)
+        .spawn(move || {
+            lines
+                .iter()
+                .map(|(line, shell)| {
+                    let started = std::time::Instant::now();
+                    let refusal = refused(line, *shell, None);
+                    (line.len(), refusal.is_some(), started.elapsed())
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap()
+        .join()
+        .expect("no line overflows the stack");
+    for (length, refused_too, took) in checked {
+        assert!(refused_too, "a line of {length} bytes was not refused");
+        assert!(
+            took < std::time::Duration::from_secs(2),
+            "{length} bytes took {took:?}"
+        );
+    }
+}
