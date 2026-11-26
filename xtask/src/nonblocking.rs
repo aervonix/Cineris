@@ -731,7 +731,7 @@ pub(crate) fn size(arguments: &[String]) -> Result<()> {
     }
     steps::append_job_summary(&report.summary);
     if let Err(message) = &paths {
-        steps::append_job_summary(&format!("**Home paths:** {message}\n\n"));
+        steps::append_job_summary(&format!("**Home paths or test hooks:** {message}\n\n"));
     }
 
     // The record, for the workflow to keep as an artifact: of this tree's own
