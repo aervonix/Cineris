@@ -219,3 +219,13 @@ find: let first = open(FILE_FLAG_OPEN_REPARSE_POINT)?;
 replace: let first = open(0)?;
 caught-by:
     cineris-sandbox unfollowed::tests::a_link_at_any_name_is_refused_and_never_followed
+
+[break] listing-stops-at-an-unread-trust-store
+rule: `cineris ext list` lists what it can while the trust store cannot be read, and says the store could not be read.
+file: crates/cineris-core/src/ext/manage.rs
+in: Core::configuration_here
+find: Err(failure) if failure.kind == ErrorKind::Internal =>
+replace: Err(failure) if false && failure.kind == ErrorKind::Internal =>
+packages: cineris-cli
+caught-by:
+    cineris-cli::bin/cineris ext::tests::what_cannot_be_added_or_removed_is_refused_first

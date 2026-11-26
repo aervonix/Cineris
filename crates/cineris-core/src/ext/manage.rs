@@ -622,6 +622,20 @@ impl Core {
         in_code(&shown_path(path, home.as_deref())).into_owned()
     }
 
+    /// The configuration a session in `project` would have, as
+    /// [`Core::configuration`] gives it; where the trust store cannot be read
+    /// (which that refuses), the project's layers read untrusted, as a
+    /// session would take them then: a listing still says what it can, and
+    /// says the store could not be read.
+    fn configuration_here(&self, project: &Project) -> Result<cineris_config::Loaded, OpError> {
+        match self.configuration(project, false) {
+            Err(failure) if failure.kind == ErrorKind::Internal => {
+                self.load(project, cineris_config::ProjectTrust::Untrusted)
+            }
+            other => other,
+        }
+    }
+
     fn pin_store(&self) -> Result<PinStore, OpError> {
         Ok(PinStore::new(
             self.state()?.pins_file(),
@@ -639,7 +653,7 @@ impl Core {
     pub fn extensions(&self, project: &Project) -> Result<ExtensionsListing, OpError> {
         let options = &self.inner.options;
         let resolver = self.resolver(&project.root)?;
-        let loaded = self.configuration(project, false)?;
+        let loaded = self.configuration_here(project)?;
         let state = self.state_dir();
         let mut listing = ExtensionsListing::default();
         let home = options.env.home();
@@ -882,7 +896,7 @@ impl Core {
                 in_code(theirs)
             ));
         }
-        let loaded = self.configuration(project, false)?;
+        let loaded = self.configuration_here(project)?;
         if loaded
             .settings
             .extensions
@@ -1076,7 +1090,7 @@ impl Core {
             .find(|key| key.path == "extensions.*.enabled")
             .and_then(|key| key.effect)
             .unwrap_or(Effect::NextSession);
-        let in_force = self.configuration(project, false).is_ok_and(|loaded| {
+        let in_force = self.configuration_here(project).is_ok_and(|loaded| {
             loaded
                 .settings
                 .extensions
