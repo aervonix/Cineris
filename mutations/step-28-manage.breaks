@@ -906,7 +906,7 @@ replace:
         if true {
             Standing::Safe
 caught-by:
-    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+    cineris-policy approving::tests::the_help_is_safe_only_in_words_that_are_the_programs_own
 
 [break] approving-text-comment-kept
 rule: In a line read as text, a comment is left out.
