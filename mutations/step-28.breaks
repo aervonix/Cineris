@@ -1466,6 +1466,7 @@ packages: cineris-ext,cineris-core
 caught-by:
     cineris-ext::it engine::a_loop_the_interrupt_never_reaches_leaves_its_thread_and_is_counted
     cineris-core::it extensions::an_extension_whose_thread_would_not_stop_is_not_started_again
+    cineris-core::it extensions_hooks::an_extension_whose_runtime_cannot_start_fails_its_gates
 
 [break] a-call-cancelled-before-its-turn-stops-the-runtime
 rule: A call cancelled before its turn is withdrawn, and the runtime's running call goes on.
@@ -10667,7 +10668,7 @@ caught-by:
     cineris-tui app::tests::first_run::the_first_run_reaches_a_session_made_with_what_was_chosen
 
 [break] call-stopped-as-it-starts-runs
-rule: A call whose runtime is stopped as the call starts runs nothing of its script, and is told it never ran.
+rule: A call whose runtime is stopped as the call starts runs nothing of its script, and is told it never ran, so that it leaves no thread running and its extension stays startable.
 file: crates/cineris-ext/src/engine/thread.rs
 find:
         cineris_base::hook::point(super::A_CALL_IS_STARTED);
@@ -10675,8 +10676,10 @@ find:
 replace:
         cineris_base::hook::point(super::A_CALL_IS_STARTED);
         if false {
+packages: cineris-ext,cineris-core
 caught-by:
     cineris-ext::it engine::a_call_stopped_as_it_starts_and_one_queued_behind_it_never_run
+    cineris-core::it extensions_hooks::a_call_stopped_before_it_runs_leaves_its_extension_startable
 
 [break] folder-read-follows-a-swapped-link
 rule: The folder `ext add` reads is opened through handles that follow no link: one swapped for a link between the look and the read is refused.

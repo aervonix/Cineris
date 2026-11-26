@@ -997,6 +997,11 @@ fn an_extensions_gates_are_held_while_it_does_not_stand_approved() {
     });
 }
 
+/// The longest a test waits for a thread of the engine to reach a point: a
+/// bound, never waited for on the way to a passing test, and within the time
+/// a test is given.
+const REACHED: Duration = Duration::from_secs(5);
+
 /// A tool whose script never looks at the interrupt, and a gating hook of
 /// the same extension.
 const ABANDONED: &str = "cineris.tool({ name: 'spin', run: () => \
@@ -1006,7 +1011,18 @@ const ABANDONED: &str = "cineris.tool({ name: 'spin', run: () => \
 /// An extension whose runtime cannot start again fails its gates closed,
 /// turns of one session (`docs/steps/28/answered.md`, point 5): once its
 /// tool's thread was left running, its gating hook's run fails, saying why
-/// and the setting that turns it off, and the call it gates is refused.
+/// and the setting that turns it off, before a runtime of it is made, and
+/// the call it gates is refused.
+///
+/// The tool's thread is held where it has said its call started and has not
+/// yet looked whether its runtime was stopped, through the call's time and
+/// the grace: a thread that does not come back, as one in the script's loop
+/// would not, whatever the runner's speed. Let go to the real thread, one
+/// stress run in thirty on a Windows runner had it look only after the
+/// deadline had stopped its runtime, run nothing, and end within the grace:
+/// nothing was left running, so the gate ran in a fresh runtime and had no
+/// opinion (that order is
+/// `a_call_stopped_before_it_runs_leaves_its_extension_startable`).
 #[test]
 fn an_extension_whose_runtime_cannot_start_fails_its_gates() {
     let mut responses = Vec::new();
@@ -1026,18 +1042,30 @@ fn an_extension_whose_runtime_cannot_start_fails_its_gates() {
         ABANDONED,
     );
     let core = world.core_with(|options| options.extensions = vec![extension]);
+    let made = cineris_ext::engine::runtimes_made();
+    let abandoned = cineris_ext::engine::abandoned_threads();
+    let started = Hold::new(cineris_ext::engine::A_CALL_IS_STARTED);
     world.run(async {
         let front = start(&world, &core).await;
         front.prompt("spin").await;
+        assert!(
+            started.wait_reached_times_async(1, REACHED).await,
+            "the tool's call never started"
+        );
         // The call's time, then the grace its thread is given.
         world.timer.sleeping_for(Duration::from_secs(5)).await;
         world.timer.advance(Duration::from_secs(5));
         world.timer.sleeping_for(cineris_ext::engine::GRACE).await;
         world.timer.advance(cineris_ext::engine::GRACE);
         front.turns(1).await;
+        assert_eq!(cineris_ext::engine::abandoned_threads(), abandoned + 1);
+        // Let go, it finds its runtime stopped, and ends having run nothing.
+        started.release();
         front.turn("list it").await;
         let (outcome, text) = last(&front);
         assert_eq!(outcome, "denied", "{text}");
+        // Refused before a runtime was made: the tool's was the only one.
+        assert_eq!(cineris_ext::engine::runtimes_made(), made + 1);
         // Only a new hash or a new process helps: the engine's own sentence,
         // which says approving it again does, is not given (the re-check of
         // the full review, L-c).
@@ -1055,6 +1083,111 @@ fn an_extension_whose_runtime_cannot_start_fails_its_gates() {
         }
         front.close().await;
     });
+    assert_eq!(
+        started.timed_out(),
+        0,
+        "the tool's thread went on by itself"
+    );
+}
+
+/// [`ABANDONED`]'s tool, and a gate that refuses a call on the path
+/// `refused` and has no opinion on any other.
+const STOPPED_FIRST: &str = "cineris.tool({ name: 'spin', run: () => \
+       Array.prototype.reverse.call({ length: 2 ** 53 - 1 }) });\n\
+     cineris.on('tool.before', { tools: ['list'] }, (e) => e.arguments.path === 'refused' \
+       ? { decision: 'deny', reason: 'a fresh runtime refuses it' } : undefined);\n";
+
+/// A call whose runtime its deadline stopped before the call's script began
+/// runs none of it and leaves no thread running, so its extension stays
+/// startable and its gates are run, not failed, turns of one session (the
+/// order of the one failure in thirty of
+/// `an_extension_whose_runtime_cannot_start_fails_its_gates`, pinned): the
+/// tool's thread, held where it has said the call started, looks only once
+/// the deadline has stopped its runtime, finds it so, and ends within its
+/// grace; then the grace is up, and nothing is counted as left running.
+/// - the gate runs in a fresh runtime, and its refusal is heard;
+/// - its no opinion lets the call run.
+#[test]
+fn a_call_stopped_before_it_runs_leaves_its_extension_startable() {
+    let mut responses = Vec::new();
+    responses.extend(one_call(
+        "c1",
+        "tool_call",
+        json!({"tool": "probe/spin", "arguments": {}}),
+    ));
+    responses.extend(one_call("c2", "list", json!({"path": "refused"})));
+    responses.extend(one_call("c3", "list", json!({"path": "."})));
+    let world = World::new("ext_hooks_stopped_first", responses);
+    world.user_config(
+        "[[permissions.rules]]\neffect = \"ext\"\nmatch = \"probe/*\"\naction = \"allow\"\n",
+    );
+    // Held from before any runtime's thread is made: the first to end is the
+    // one that registers the extension, let go as soon as it is there.
+    let ends = Hold::new(cineris_ext::engine::A_THREAD_ENDS);
+    let extension = handed(
+        &world,
+        "hooks = [\"tool.before\"]\n\n[limits]\ntime = 5",
+        STOPPED_FIRST,
+    );
+    assert!(
+        ends.wait_reached(REACHED),
+        "the registering thread never ended"
+    );
+    ends.let_one_go();
+    assert!(ends.wait_stopped(0, REACHED));
+    let core = world.core_with(|options| options.extensions = vec![extension]);
+    let made = cineris_ext::engine::runtimes_made();
+    let abandoned = cineris_ext::engine::abandoned_threads();
+    let started = Hold::new(cineris_ext::engine::A_CALL_IS_STARTED);
+    world.run(async {
+        let front = start(&world, &core).await;
+        front.prompt("spin").await;
+        assert!(
+            started.wait_reached_times_async(1, REACHED).await,
+            "the tool's call never started"
+        );
+        // Its time is up: the deadline stops its runtime, whose grace is
+        // waited for, and the thread looks only now.
+        world.timer.sleeping_for(Duration::from_secs(5)).await;
+        world.timer.advance(Duration::from_secs(5));
+        world.timer.sleeping_for(cineris_ext::engine::GRACE).await;
+        started.release();
+        assert!(
+            ends.wait_reached_times_async(2, REACHED).await,
+            "the tool's thread ran its script, and never ended"
+        );
+        ends.release();
+        world.timer.advance(cineris_ext::engine::GRACE);
+        front.turns(1).await;
+        let (_, spun) = last(&front);
+        assert!(spun.contains("ran out of its time"), "{spun}");
+        assert_eq!(cineris_ext::engine::abandoned_threads(), abandoned);
+        assert_eq!(cineris_ext::engine::runtimes_made(), made + 1);
+
+        front.turn("list what it refuses").await;
+        let (outcome, text) = last(&front);
+        assert_eq!(outcome, "denied", "{text}");
+        assert!(
+            text.contains(
+                "the hook `probe/hook.tool.before` refused it: a fresh runtime refuses it"
+            ),
+            "{text}"
+        );
+        assert_eq!(cineris_ext::engine::runtimes_made(), made + 2);
+
+        front.turn("list it").await;
+        let (outcome, text) = last(&front);
+        assert_eq!(outcome, "success", "{text}");
+        assert_eq!(cineris_ext::engine::runtimes_made(), made + 2);
+        front.close().await;
+    });
+    assert_eq!(cineris_ext::engine::abandoned_threads(), abandoned);
+    assert_eq!(
+        started.timed_out(),
+        0,
+        "the tool's thread went on by itself"
+    );
+    assert_eq!(ends.timed_out(), 0, "a thread's end went on by itself");
 }
 
 /// A gate on `prompt.submit` and one on `tool.before` that have no

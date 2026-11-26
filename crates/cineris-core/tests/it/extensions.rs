@@ -1102,9 +1102,20 @@ fn a_host_call_nobody_can_answer_as_the_last_call_ends_the_turn_without_asking_a
 /// call fails at once, saying why and how it is started again, in that
 /// session and in another (the reviews of step 28: each call made a new
 /// thread that would not stop either, and then each session).
+///
+/// The tool's thread is held where it has said its call started and has not
+/// yet looked whether its runtime was stopped, through the call's time and
+/// the grace: a thread that does not come back, whatever the runner's speed.
+/// Let go, a thread that looks only after the deadline stopped its runtime
+/// runs nothing and ends within the grace, and its extension stays
+/// startable, rightly
+/// (`a_call_stopped_before_it_runs_leaves_its_extension_startable`, in
+/// `extensions_hooks`).
 #[test]
 fn an_extension_whose_thread_would_not_stop_is_not_started_again() {
     use std::time::Duration;
+
+    use cineris_testkit::Hold;
 
     let world = World::new(
         "ext_abandoned",
@@ -1125,9 +1136,16 @@ fn an_extension_whose_thread_would_not_stop_is_not_started_again() {
         "cineris.tool({ name: 'spin', run: () => Array.prototype.reverse.call({ length: 2 ** 53 - 1 }) });",
     );
     let core = world.core_with(|options| options.extensions = vec![extension]);
+    let started = Hold::new(cineris_ext::engine::A_CALL_IS_STARTED);
     world.run(async {
         let front = Front::start(&world, &core).await;
         front.prompt("spin twice").await;
+        assert!(
+            started
+                .wait_reached_times_async(1, Duration::from_secs(5))
+                .await,
+            "the tool's call never started"
+        );
         // The call's time, then the grace its thread is given.
         world.timer.sleeping_for(Duration::from_secs(5)).await;
         world.timer.advance(Duration::from_secs(5));
@@ -1135,6 +1153,8 @@ fn an_extension_whose_thread_would_not_stop_is_not_started_again() {
         let made = cineris_ext::engine::runtimes_made();
         world.timer.advance(cineris_ext::engine::GRACE);
         front.turns(1).await;
+        // Left running; let go now, it ends having run nothing.
+        started.release();
         let results = front.results();
         assert!(results[0].2.contains("ran out of its time"), "{results:?}");
         assert!(
@@ -1155,6 +1175,11 @@ fn an_extension_whose_thread_would_not_stop_is_not_started_again() {
         assert_eq!(cineris_ext::engine::runtimes_made(), made);
         other.close().await;
     });
+    assert_eq!(
+        started.timed_out(),
+        0,
+        "the tool's thread went on by itself"
+    );
 }
 
 /// Every built-in tool's schema, as the model is given it, is checked well

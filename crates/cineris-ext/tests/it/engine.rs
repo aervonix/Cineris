@@ -849,12 +849,21 @@ fn text_a_script_registers_holds_nothing_that_acts_unseen() {
 /// A native function of the engine that loops without looking at the
 /// interrupt cannot be stopped: its thread is left running when its grace
 /// is up, said so, and counted (the review of step 28).
+///
+/// The clock is moved only once the script has said it is about to loop:
+/// its thread has looked whether its runtime was stopped, and the engine's
+/// next looks at the interrupt, before the loop, are at the same places on
+/// every run. Moved as soon as the call had started, a thread that had not
+/// yet looked found its runtime stopped, ran nothing, and was not left
+/// running (the order that failed once in thirty in a stress run of the
+/// core's `an_extension_whose_runtime_cannot_start_fails_its_gates`).
 #[test]
 fn a_loop_the_interrupt_never_reaches_leaves_its_thread_and_is_counted() {
     let timer = timer();
     let snapshot = tool(
         "",
-        "() => Array.prototype.reverse.call({ length: 2 ** 53 - 1 })",
+        "() => { cineris.notify('spinning'); \
+         return Array.prototype.reverse.call({ length: 2 ** 53 - 1 }); }",
     );
     let runtime = start(&snapshot, &timer).unwrap();
     let before = cineris_ext::engine::abandoned_threads();
@@ -862,6 +871,18 @@ fn a_loop_the_interrupt_never_reaches_leaves_its_thread_and_is_counted() {
     let (result, ()) = block_on(join(
         call_async(&runtime, &snapshot, &host, &timer),
         async {
+            while !host.asked().iter().any(|asked| asked == "notify spinning") {
+                let mut yielded = false;
+                std::future::poll_fn(|context| {
+                    if yielded {
+                        return std::task::Poll::Ready(());
+                    }
+                    yielded = true;
+                    context.waker().wake_by_ref();
+                    std::task::Poll::Pending
+                })
+                .await;
+            }
             // Its time, then the grace given to its thread, which does not
             // come back.
             timer.sleeping_for(TIME).await;
@@ -1606,6 +1627,13 @@ fn a_call_stopped_as_it_starts_and_one_queued_behind_it_never_run() {
 /// A runtime of an extension whose other runtime left its thread running
 /// takes no more calls: each live runtime could otherwise leave one more
 /// (the review of step 28's fixes).
+///
+/// The first runtime's thread is held where it has said its call started
+/// and has not yet looked whether its runtime was stopped, through the
+/// call's time and the grace: a thread that does not come back, whatever
+/// the machine's speed. Let go to the real thread, one that looks only once
+/// the deadline has stopped its runtime runs nothing and is not left
+/// running (`a_call_stopped_as_it_starts_and_one_queued_behind_it_never_run`).
 #[test]
 fn a_live_runtime_of_a_disabled_extension_takes_no_more_calls() {
     let timer = timer();
@@ -1616,19 +1644,25 @@ fn a_live_runtime_of_a_disabled_extension_takes_no_more_calls() {
     let first = start(&snapshot, &timer).unwrap();
     let second = start(&snapshot, &timer).unwrap();
     let host = FakeHost::new();
+    let started = cineris_testkit::Hold::new(cineris_ext::engine::A_CALL_IS_STARTED);
     let (result, ()) = block_on(join(call_async(&first, &snapshot, &host, &timer), async {
+        started.reach();
         timer.sleeping_for(TIME).await;
         timer.advance(TIME);
         timer.sleeping_for(cineris_ext::engine::GRACE).await;
         timer.advance(cineris_ext::engine::GRACE);
     }));
     assert_eq!(result, Err(CallError::TimedOut));
+    assert!(first.was_abandoned());
+    // Let go, it finds its runtime stopped, and ends having run nothing.
+    started.release();
     let before = cineris_ext::engine::abandoned_threads();
     assert_eq!(
         block_on(call_async(&second, &snapshot, &host, &timer)),
         Err(CallError::Disabled)
     );
     assert_eq!(cineris_ext::engine::abandoned_threads(), before);
+    assert_eq!(started.timed_out(), 0, "the first thread went on by itself");
 }
 
 /// A call whose future is given up while it waits its turn is withdrawn:
