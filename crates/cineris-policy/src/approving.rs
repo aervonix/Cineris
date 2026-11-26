@@ -73,7 +73,11 @@
 //!   flag (`-Ic`, `-we`), and the shells `nu`, `xonsh`, `elvish`, `yash`,
 //!   `oksh`, `osh`, `rc` and `hush`; an interpreter's lists and maps are
 //!   words (`["cin","ext","add"]`); PowerShell's arrays, groups and casts are
-//!   a native program's words (`cin ext @('add','C:\x')`);
+//!   a native program's words (`cin ext @('add','C:\x')`); and in a line
+//!   read as text, in any shell, a native program's words are read as code
+//!   too, `\"` a quote and a list's brackets and commas blanks, as
+//!   PowerShell, `cmd` and a service told to start `python -c "…"` hand
+//!   them on;
 //! - with line continuations taken out (`ci\⏎neris`), and look-alike letters
 //!   read as the Latin ones (`ｃｉｎ`, `cın`, `cinerıſ`).
 //!
@@ -554,19 +558,33 @@ fn folded(text: &str) -> String {
 }
 
 /// `command` with its line continuations taken out, as its shell joins
-/// them: `\` before a line break in POSIX, `^` in `cmd`, a backtick in
-/// PowerShell, and all of them where the shell is not known (the full
-/// review of the third part: `ci\⏎neris` is `cineris`).
+/// them: `\` before a line break (`⏎` or `\r⏎`) in POSIX, `^` in `cmd`, a
+/// backtick in PowerShell, and all of them where the shell is not known
+/// (the full review of the third part: `ci\⏎neris` is `cineris`). A mark
+/// that a join brings before another line break joins that one too
+/// (`ci\\⏎⏎neris`), so the result has no continuation left: it is made in
+/// one pass, as a stack, with no reading again (the narrow re-check of the
+/// third part, M1': a line of 3,000 `\` and 3,000 line breaks was read
+/// again once for each, and overflowed the stack).
 fn joined(command: &str, shell: ShellSyntax) -> String {
-    let marks: &[&str] = match shell {
-        ShellSyntax::Posix => &["\\\r\n", "\\\n"],
-        ShellSyntax::Cmd => &["^\r\n", "^\n"],
-        ShellSyntax::PowerShell => &["`\r\n", "`\n"],
-        ShellSyntax::Unknown => &["\\\r\n", "\\\n", "^\r\n", "^\n", "`\r\n", "`\n"],
+    let marks: &[char] = match shell {
+        ShellSyntax::Posix => &['\\'],
+        ShellSyntax::Cmd => &['^'],
+        ShellSyntax::PowerShell => &['`'],
+        ShellSyntax::Unknown => &['\\', '^', '`'],
     };
-    let mut out = command.to_owned();
-    for mark in marks {
-        out = out.replace(mark, "");
+    let mut out = String::with_capacity(command.len());
+    let mut characters = command.chars().peekable();
+    while let Some(character) = characters.next() {
+        let breaks = character == '\n' || (character == '\r' && characters.peek() == Some(&'\n'));
+        if breaks && out.ends_with(marks) {
+            if character == '\r' {
+                characters.next();
+            }
+            out.pop();
+            continue;
+        }
+        out.push(character);
     }
     out
 }
@@ -1471,26 +1489,42 @@ fn typed(name: &str, words: &[String]) -> String {
     keys
 }
 
+/// The brace expansions of `text` (`{cin,}`, `{a..b}`), each as where its
+/// `{` and its `}` are: from the first `{` after a blank or the last `}`,
+/// to the next `}`, with no blank between and a `,` or a `..` inside. Of
+/// the `{`s before one `}`, the first's text holds each later one's, so
+/// only it is looked at. One pass, remembering that `{` (the narrow
+/// re-check of the third part, M1': a search for the `}` from each `{` was
+/// quadratic, and `cin ` and 32,000 `{` took more than 10 s).
+fn brace_expansions(text: &str) -> Vec<(usize, usize)> {
+    let mut found = Vec::new();
+    let mut open = None;
+    for (at, character) in text.char_indices() {
+        match character {
+            blank if blank.is_whitespace() => open = None,
+            '{' if open.is_none() => open = Some(at),
+            '}' => {
+                if let Some(start) = open.take() {
+                    let inside = &text[start + 1..at];
+                    if inside.contains(',') || inside.contains("..") {
+                        found.push((start, at));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    found
+}
+
 /// A brace expansion in `text` (`{cin,}`, `{a..b}`), with no blank in it,
 /// one of whose words is a name of Cineris: `{cin,} ext add` runs it, and
-/// the reading here does not expand braces.
+/// the reading here does not expand braces. A word is split at a `{` too,
+/// so that a brace inside (`{a{cin,x}`) is read.
 fn braced_name(text: &str, own: impl Fn(&str) -> bool) -> bool {
-    let mut rest = text;
-    while let Some(open) = rest.find('{') {
-        let after = &rest[open + 1..];
-        let Some(close) = after.find('}') else {
-            return false;
-        };
-        let inside = &after[..close];
-        if !inside.contains(char::is_whitespace)
-            && (inside.contains(',') || inside.contains(".."))
-            && inside.split([',', '.']).any(&own)
-        {
-            return true;
-        }
-        rest = after;
-    }
-    false
+    brace_expansions(text)
+        .into_iter()
+        .any(|(open, close)| text[open + 1..close].split(['{', ',', '.']).any(&own))
 }
 
 /// Whether `word` names Cineris once what the shell expands in it is taken
@@ -1504,26 +1538,23 @@ fn names_through_expansion(word: &str, own: impl Fn(&str) -> bool) -> bool {
 }
 
 /// PowerShell text with its type literals taken out: `[string]'add'` is
-/// the word `add`.
+/// the word `add`. A literal's name is looked at only as far as it goes,
+/// so that each character is read at most twice (a search for the `]`
+/// from each `[` was quadratic).
 fn without_casts(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(open) = rest.find('[') {
         out.push_str(&rest[..open]);
         let after = &rest[open + 1..];
-        match after.find(']') {
-            Some(close)
-                if close > 0
-                    && after[..close]
-                        .chars()
-                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_')) =>
-            {
-                rest = &after[close + 1..];
-            }
-            _ => {
-                out.push('[');
-                rest = after;
-            }
+        let name = after
+            .find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '_')))
+            .unwrap_or(after.len());
+        if name > 0 && after[name..].starts_with(']') {
+            rest = &after[name + 1..];
+        } else {
+            out.push('[');
+            rest = after;
         }
     }
     out.push_str(rest);
@@ -1534,6 +1565,16 @@ fn without_casts(text: &str) -> String {
 /// blanks: `["cin","ext","add"]` and `{args:["ext"]}` are read as words.
 fn code_words(text: &str) -> String {
     text.replace(['[', ']', ',', '{', '}'], " ")
+}
+
+/// Text as a native program's words are read where it may be code (the
+/// narrow re-check of the third part, M2'): `\"` is a quote, as Windows's
+/// programs read their command line, and lists, maps and blocks are blanks
+/// ([`code_words`]). PowerShell, `cmd`, and a line a service is told to
+/// start (`Invoke-WmiMethod … 'python -c "…[\"cin\",\"ext\",\"add\"]…"'`)
+/// hand a runtime's code on as it is written.
+fn native_code_words(text: &str) -> String {
+    code_words(&without_casts(&text.replace("\\\"", "\"")))
 }
 
 /// `cmd`'s `/c` or `/k` with what follows glued to it (`/ccin`) written as
@@ -2153,7 +2194,8 @@ impl<'a> Reader<'a> {
         }
         self.note_set_by_dotnet(text);
         let was = self.exact.replace(false);
-        let text = braced(&unquoted(text));
+        let written = unquoted(text);
+        let text = braced(&written);
         let mut found = match syntax {
             ShellSyntax::Posix => self.in_plain(&plain(&text, "\\'\"`")),
             ShellSyntax::PowerShell => self.in_plain(&plain(&text, "'\"`")),
@@ -2180,6 +2222,19 @@ impl<'a> Reader<'a> {
             if escapes != text {
                 found = self.in_plain(&plain(&escapes, "\\'\"`"));
             }
+        }
+        // The words a native program is handed, read as a runtime's code
+        // reads them (the narrow re-check of the third part, M2'): `python
+        // -c '…run(["cin","ext","add"])'` in PowerShell, which does not
+        // model it, or `wmic process call create "python -c \"…['cin','ext',
+        // 'add']…\""`. A `\` stays a separator but in POSIX.
+        if found.is_none() && written.contains(['[', ',', '{', '"']) {
+            let quotes = if matches!(syntax, ShellSyntax::Posix) {
+                "\\'\"`"
+            } else {
+                "'\"`^"
+            };
+            found = self.in_plain(&plain(&native_code_words(&written), quotes));
         }
         self.exact.set(was);
         found
@@ -2395,13 +2450,18 @@ fn after_a_name(rest: &[String]) -> Option<Refusal> {
 /// the end of its line, and PowerShell's `<#…#>`) and the target of an
 /// output's redirection are left out.
 fn segments(text: &str) -> Vec<Vec<String>> {
-    let mut text = text.to_owned();
-    while let Some(start) = text.find("<#") {
-        let end = text[start..]
+    // PowerShell's block comments, taken out in one pass.
+    let mut uncommented = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find("<#") {
+        uncommented.push_str(&rest[..start]);
+        uncommented.push(' ');
+        rest = rest[start..]
             .find("#>")
-            .map_or(text.len(), |end| start + end + 2);
-        text.replace_range(start..end, " ");
+            .map_or("", |end| &rest[start + end + 2..]);
     }
+    uncommented.push_str(rest);
+    let text = uncommented;
     let mut segments = Vec::new();
     let mut words: Vec<String> = Vec::new();
     let mut word = String::new();
@@ -2454,27 +2514,13 @@ fn segments(text: &str) -> Vec<Vec<String>> {
 /// the shell expands, so that it is not split at its braces.
 fn braced(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(open) = rest.find('{') {
-        let after = &rest[open + 1..];
-        let close = after.find('}');
-        let inside = close.map(|close| &after[..close]);
-        out.push_str(&rest[..open]);
-        match (close, inside) {
-            (Some(close), Some(inside))
-                if !inside.contains(char::is_whitespace)
-                    && (inside.contains(',') || inside.contains("..")) =>
-            {
-                out.push_str("$brace");
-                rest = &after[close + 1..];
-            }
-            _ => {
-                out.push('{');
-                rest = after;
-            }
-        }
+    let mut from = 0;
+    for (open, close) in brace_expansions(text) {
+        out.push_str(&text[from..open]);
+        out.push_str("$brace");
+        from = close + 1;
     }
-    out.push_str(rest);
+    out.push_str(&text[from..]);
     out
 }
 
@@ -2504,25 +2550,39 @@ pub fn refused(command: &str, shell: ShellSyntax, own: Option<&OwnCommands>) -> 
         }
     };
     // A line with no line break has no continuation: most are passed over
-    // here, before anything is made of them.
-    if command.contains('\n')
-        && let joined = joined(command, shell)
-        && joined != command
-        && let Some(refusal) = refused(&joined, shell, Some(own))
+    // here, before anything is made of them. The join is one pass, and the
+    // line it makes is read once, beside the line as written (the narrow
+    // re-check of the third part, M1').
+    let joined = command
+        .contains('\n')
+        .then(|| joined(command, shell))
+        .filter(|joined| joined != command);
+    if let Some(joined) = &joined
+        && let Some(refusal) = read_line(joined, shell, own)
     {
         return Some(refusal);
     }
+    read_line(command, shell, own)
+}
+
+/// One line, as written or with its continuations joined: what of it is
+/// refused.
+fn read_line(command: &str, shell: ShellSyntax, own: &OwnCommands) -> Option<Refusal> {
     let reader = Reader::new(own);
     let typing = ["tmux", "screen", "xdotool", "ydotool", "wtype"]
         .iter()
         .any(|typer| command.contains(typer));
-    if !reader.mentioned(command)
-        && !(typing && reader.mentioned(&command.replace(char::is_whitespace, "")))
-    {
-        return None;
-    }
+    let names = |text: &str| {
+        reader.mentioned(text)
+            || (typing && reader.mentioned(&text.replace(char::is_whitespace, "")))
+    };
+    // Past the longest line read, nothing more than whether it names
+    // Cineris is asked of it: each of those looks is one pass.
     if command.len() > LONGEST {
-        return Some(Refusal::new("cineris", Kind::Hidden));
+        return names(command).then(|| Refusal::new("cineris", Kind::Hidden));
+    }
+    if !names(command) {
+        return None;
     }
     // A carriage return ends a line in PowerShell and `cmd`, and the
     // analysis is not trusted to say so: it ends one here everywhere.
