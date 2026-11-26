@@ -38,7 +38,7 @@
 )]
 
 use std::io::Read as _;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use cineris_base::{
     AbsPath, OpenError, PathResolver, ResolvedPath, location_within, open_regular,
@@ -502,7 +502,7 @@ fn command_name(file_name: &str) -> Option<&str> {
 /// Reads a command file, opened so that nothing at its name but a regular
 /// file is read: one over [`MAX_FILE_BYTES`] by its length is refused
 /// unread.
-fn read_file(path: &PathBuf) -> Result<String, Reason> {
+fn read_file(path: &Path) -> Result<String, Reason> {
     let (file, metadata) = match open_regular(path) {
         Ok(opened) => opened,
         Err(OpenError::Link) => return Err(Reason::Link),

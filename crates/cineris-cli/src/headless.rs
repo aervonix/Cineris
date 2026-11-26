@@ -410,14 +410,23 @@ async fn in_core(core: &Core, front: &mut Front<'_>) -> u8 {
         )
         .await;
     }
+    // A prompt that is `/name …`, `name` one of the session's custom
+    // commands, is sent as that command, as the interface sends it: the
+    // core expands it before any hook (step 28). Anything else is text.
+    let command = command_in(core, client.id, &session, &front.plan.prompt).await;
+    let input = if command.is_some() {
+        Vec::new()
+    } else {
+        vec![Part::text(front.plan.prompt.clone())]
+    };
     let started = core
         .handle(
             client.id,
             Op::TurnStart(TurnStartParams {
                 session_id: session.clone(),
-                input: vec![Part::text(front.plan.prompt.clone())],
+                input,
                 delivery: None,
-                command: None,
+                command,
             }),
         )
         .await;
@@ -468,6 +477,41 @@ async fn in_core(core: &Core, front: &mut Front<'_>) -> u8 {
 
 /// Writes the result in the run's format, says what went wrong on standard
 /// error, and returns the exit code that agrees with the outcome.
+/// The custom command `prompt` names, when it is `/name …` and `name` is
+/// one of the session's (`commands/list`): what follows the name is its
+/// arguments. `None` for any other prompt, which is sent as text.
+async fn command_in(
+    core: &Core,
+    client: cineris_core::ClientId,
+    session: &SessionId,
+    prompt: &str,
+) -> Option<cineris_protocol::methods::CommandCall> {
+    let named = prompt.strip_prefix('/')?;
+    let (name, args) = named.split_once(char::is_whitespace).unwrap_or((named, ""));
+    if name.is_empty() {
+        return None;
+    }
+    let listed = core
+        .handle(
+            client,
+            Op::CommandsList(cineris_protocol::methods::CommandsListParams {
+                session_id: session.clone(),
+            }),
+        )
+        .await;
+    let Ok(OpResult::CommandsList(listed)) = listed else {
+        return None;
+    };
+    listed
+        .commands
+        .iter()
+        .any(|command| command.name == name)
+        .then(|| cineris_protocol::methods::CommandCall {
+            name: name.to_owned(),
+            args: args.trim().to_owned(),
+        })
+}
+
 async fn finish(
     core: &Core,
     front: &mut Front<'_>,
