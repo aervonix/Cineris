@@ -65,7 +65,7 @@ Step 28's own, by pull request (Linux, then Windows): #117, the engine and its h
 | Steps 29 to 34 | Linux musl | Windows | Against what is left |
 |---|---:|---:|---|
 | The outlook as written | +1.65 to +3.8 MB | +2.35 to +5.3 MB | within at the low end on both; over at the high end by 0.34 MB on Linux and 0.31 MB on Windows |
-| Every step's range taken again | +2.7 to +7.6 MB | +3.8 to +10.6 MB | within at the low end on both; over at the high end by 4.1 MB on Linux and 5.6 MB on Windows |
+| Every step's range taken again | +2.6 to +7.6 MB | +3.8 to +10.6 MB | within at the low end on both; over at the high end by 4.1 MB on Linux and 5.6 MB on Windows |
 | The guesses taken again, step 30 as written | +1.9 to +5.0 MB | +2.6 to +7.0 MB | within at the low end, by 1.6 MB on Linux and 2.4 MB on Windows; over at the high end by 1.5 MB and 2.0 MB |
 
 Step 30's range is mostly a library's recorded cost (`rmcp`), which the ratio for our own code does not fit; the third row leaves it as written, and is the one the maintainers take as likely. On it, the reserves in their order cover the high end: an MCP client of our own at step 30, then `opt-level = "z"` for the whole profile (1.1 MB on Linux, 1.7 MB on Windows), then `panic = "abort"` (2.0 MB, 6.4 MB).
