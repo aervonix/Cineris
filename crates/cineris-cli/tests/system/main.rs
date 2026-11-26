@@ -16,7 +16,7 @@
 //! |---|---|
 //! | `names` | `--version`, help and usage errors under both names. |
 //! | `runs` | Every exit code, each output format, and that standard output carries only the result. |
-//! | `signals` | Ctrl-C, SIGTERM and Ctrl-Break; the second Ctrl-C; the guard of a killed harness; a run with no console. |
+//! | `signals` | Ctrl-C, SIGTERM and Ctrl-Break, in a turn and in an extension's running command; the second Ctrl-C; the guard of a killed harness; a run with no console. |
 //! | `commands` | The subcommands, and a project trusted through one. |
 //! | `live` | The one run against a real model, ignored: `cargo xtask live` starts it. |
 //! | `tools` | The real toolbox as a strict variant declares it. |
