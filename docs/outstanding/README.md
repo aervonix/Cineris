@@ -35,6 +35,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 
 ### cineris-base
 
+- [a-break-of-the-test-hooks-permits-caught-only-sometimes](a-break-of-the-test-hooks-permits-caught-only-sometimes.md): The break `tooling-7/one-let-go-lets-every-thread-go` is caught by its own test only some of the time: a break run can call it not caught, and say so again, with nothing changed. Owner: the next small-fix session.
 - [a-windows-program-lookup-takes-a-file-with-no-extension](a-windows-program-lookup-takes-a-file-with-no-extension.md): On Windows, looking a program up by name takes a file of that name with no extension before a later folder's `.exe`, and then fails to start it. Owner: step 32 (hardening pass).
 - [log-crate-bridge](log-crate-bridge.md): The logging subscriber has no bridge for dependencies that log through the `log` crate at `warn` and above. Owner: step 32, or the first step whose dependency needs it.
 

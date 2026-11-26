@@ -347,3 +347,50 @@ The pull request's `pr-size` jobs in run 45760658901, each against `main`'s own 
 | Windows, `x86_64-pc-windows-msvc` | 20,715,520 bytes (19.76 MiB) | 20,428,800 bytes | + 286,720 bytes (280.0 KiB) | 25 MiB |
 
 On Linux the crates that grew most are the standard library (+55.2 KB), `cineris_core` (+38.7 KB) and `cineris_ext` (+32.1 KB), from `cargo xtask size` in `try --final` (run 45757355503). Neither binary holds a path under a home folder.
+
+## The eighth pull request: managing extensions
+
+<!-- written by cargo xtask ci-times, section "The eighth pull request: managing extensions": it replaces this up to the end mark -->
+Pull request 131, on `main` at `159f2e0`. "Main" is main's own run at `159f2e0` (run 45793423936).
+The PR's run is 45848374802, at `93d8286`.
+
+| Job | Main, `159f2e0` | The PR at `93d8286` |
+|---|---|---|
+| `lint-linux` | 85 s | 96 s |
+| `test-linux` | 177 s | 184 s |
+| `lint-windows` | 115 s | 189 s |
+| `test-windows` | 266 s | 306 s |
+| `ts-client` (blocks nothing) | — | 0 s |
+
+| Time above process start, against the budget | Linux, main (4 ms) | Linux, `93d8286` (4 ms) | Windows, main (6 ms) |
+|---|---|---|---|
+| Tier 1, unit (20 s on Linux, 25 s on Windows) | 19.4 s | 12.4 s | 18.0 s |
+| Tier 2, integration (40 s) | 30.7 s | 24.3 s | 39.0 s |
+| Tier 3, system (60 s on Linux, 90 s on Windows) | 41.3 s | 40.3 s | 73.5 s |
+
+<!-- end of what cargo xtask ci-times wrote, section "The eighth pull request: managing extensions" -->
+
+`test-windows` at `93d8286` (306 s above) was cut by the job's five minutes while it still built, on a slow runner, and ran no test; at the commit before it, `0fcfe4c` (run 45846004731), it was cut twice after tiers 1 and 2 had passed (5,399 tests in 48 s), seconds into the system tests. A change to `cineris-base` builds every crate again, which runs out the job's five minutes on a slow runner ([main-windows-tiers-over-budget-on-slow-runners](../../outstanding/main-windows-tiers-over-budget-on-slow-runners.md)). `pr-size` and `ts-client` hang on the test jobs, and did not run. The maintainers merged the pull request past the cut, on `try --final` at its head with nothing failed (below) and the other three blocking jobs.
+
+## The eighth pull request, both trees on one runner
+
+`try --final` at the head (run 45848437204, at `93d8286`): Windows, the median of 5 runs each, on one runner at 8.0 ms a process start. Copied from `cargo xtask try-result 45848437204`.
+
+| Tier | The PR | Main | Change | Budget |
+|---|---|---|---|---|
+| 1, unit | 25.8 s (3,560 tests) | 25.1 s (3,487) | +0.7 s | 25 s |
+| 2, integration | 53.9 s (1,839 tests) | 54.4 s (1,833) | −0.5 s | 40 s |
+| 3, system | 93.8 s (265 tests) | 89.8 s (235) | +4.0 s | 90 s |
+
+Tier 3 grows with the runner's speed. On a runner at 5.0 ms (`try --final` 45814858623, at `346b844`, before the last of the start-up's and B's fixes) it was +2.7 s (59.5 s against 56.8), the part's own new tests about 1.2 s; on one at 9.0 ms (45840677286, at `727c847`), +4.4 s (97.7 s against 93.3), the part's own about 2.4 s; the rest, tests the part does not change. The maintainers accepted it, a warning against tier 3's line of failure at 135 s, with no further fold ([the part's record](parts/pr3b-manage.md)). The same run's tests on Linux 22.04 used 101%, 79% and 76% of the three tiers' budgets, tier 1 led by `cineris-tui`'s unit tests, which are `main`'s.
+
+## The eighth pull request: the binary's size
+
+`try` 45847904472, at `0fcfe4c` (the one commit after it changes a test alone), each against `main`'s own size record (run 45793423685). The shipped `dist` build:
+
+| System | The PR | Main | Change | Budget |
+|---|---|---|---|---|
+| Linux, `x86_64-unknown-linux-musl` | 17,513,528 bytes (16.70 MiB) | 17,144,888 bytes | + 368,640 bytes (360.0 KiB) | 20 MiB |
+| Windows, `x86_64-pc-windows-msvc` | 21,224,448 bytes (20.24 MiB) | 20,720,128 bytes | + 504,320 bytes (492.5 KiB) | 25 MiB |
+
+On Linux the crates that grew most are `cineris_policy` (+67.1 KB), `cineris` (+66.5 KB) and `cineris_core` (+43.5 KB), from `cargo xtask size` in `try --final`. Neither binary holds a path under a home folder.

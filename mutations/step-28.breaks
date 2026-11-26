@@ -9776,3 +9776,2054 @@ find: live.command_hooks.scripts.why_not_loaded(extension)
 replace: None::<String>
 caught-by:
     cineris-core::it commands::a_command_runs_nothing_where_its_prompt_would_be_refused_and_its_stop_is_the_sessions
+
+# From mutations/step-28-manage.breaks (part `manage`).
+# Step 28, the management of extensions (the first half of the third pull
+# request): `cineris ext list|inspect|disable|remove|add <path>`, the read
+# through handles that follow no link, the way out naming the commands, and
+# `extensions/status`. Each rule broken on purpose, with the tests that must
+# fail. Written with the code (docs/steps/28/answered.md, point 10).
+
+[break] unfollowed-opens-follow-a-link
+rule: A folder read for `cineris ext add` follows no link at any name: every open relative to a folder's descriptor, and the folder's own, has `O_NOFOLLOW`.
+os: linux
+file: crates/cineris-sandbox/src/unfollowed.rs
+find: const UNFOLLOWED: i32 = libc::O_NOFOLLOW | libc::O_NONBLOCK
+replace: const UNFOLLOWED: i32 = libc::O_NONBLOCK
+caught-by:
+    cineris-sandbox unfollowed::tests::a_link_at_any_name_is_refused_and_never_followed
+
+[break] unfollowed-takes-the-parent-as-a-name
+rule: A name opened relative to a folder is one name: `..` is refused before the system is asked, so nothing above the folder is reached through its handle.
+file: crates/cineris-sandbox/src/unfollowed.rs
+in: one_name
+find: || bytes == b".."
+replace: || false
+caught-by:
+    cineris-sandbox unfollowed::tests::a_folder_is_read_one_name_at_a_time_through_its_handle
+
+[break] snapshot-passes-over-a-link
+rule: A link anywhere in a folder read through handles refuses the extension, never passed over: what is shown, written and pinned is the folder whole.
+file: crates/cineris-ext/src/folder.rs
+in: read_unfollowed_into
+find: Kind::Link => return Err(FolderError::Link(relative)),
+replace: Kind::Link => continue,
+packages: cineris-ext, cineris-cli
+caught-by:
+    cineris-ext folder::tests::the_read_through_handles_is_the_plain_reads_and_follows_no_link
+    cineris-cli::bin/cineris ext::tests::what_cannot_be_added_or_removed_is_refused_first
+
+[break] add-pins-another-hash
+rule: `cineris ext add` pins the hash of the snapshot it showed, so that the folder it wrote stands approved.
+file: crates/cineris-core/src/ext/manage.rs
+in: Core::add_extension
+find: hash: to_add.hash
+replace: hash: ContentHash::of(b"another")
+packages: cineris-cli
+caught-by:
+    cineris-cli::bin/cineris ext::tests::an_extension_is_added_listed_turned_off_and_removed
+
+[break] add-takes-a-name-of-another-case
+rule: `cineris ext add` refuses a name that differs only in case from a folder of the user's own: on Windows they are one name, and discovery refuses both.
+file: crates/cineris-core/src/ext/manage.rs
+in: Core::extension_to_add
+find: *other != name && other.eq_ignore_ascii_case(&name)
+replace: false && other.eq_ignore_ascii_case(&name)
+packages: cineris-cli
+caught-by:
+    cineris-cli::bin/cineris ext::tests::what_cannot_be_added_or_removed_is_refused_first
+
+[break] add-takes-a-dotted-folder-name
+rule: An extension's name that a session would never look in (one beginning with `.`) cannot be a folder of the user's.
+file: crates/cineris-core/src/ext/manage.rs
+in: folder_name_refused
+find: if name.starts_with('.') {
+replace: if false {
+caught-by:
+    cineris-core ext::manage::tests::a_name_must_be_one_a_session_finds_on_every_system
+
+[break] add-takes-a-device-name
+rule: An extension's name that Windows keeps for a device (`con`, `nul`, `com1`) cannot be a folder of the user's, on any system.
+file: crates/cineris-core/src/ext/manage.rs
+in: folder_name_refused
+find: if DEVICES.contains(&base.as_str()) || numbered {
+replace: if false {
+caught-by:
+    cineris-core ext::manage::tests::a_name_must_be_one_a_session_finds_on_every_system
+
+[break] add-question-hides-the-replacement
+rule: An existing folder of another hash at the destination is replaced only on a yes to a question that names it.
+file: crates/cineris-cli/src/ext.rs
+in: add_question
+find: Some(what) => format!("Approve `{code}` as shown, and replace {what} with it?"),
+replace: Some(_) => format!("Approve `{code}` as shown?"),
+caught-by:
+    cineris-cli::bin/cineris ext::tests::what_cannot_be_added_or_removed_is_refused_first
+
+[break] remove-deletes-outside-the-folder
+rule: `cineris ext remove` deletes only a name directly in the user's folder of extensions, judged where both lead after resolving.
+file: crates/cineris-core/src/ext/manage.rs
+in: within
+find: (Ok(parent), Ok(root)) => same_location(&parent, &root),
+replace: (Ok(_), Ok(_)) => true,
+caught-by:
+    cineris-core ext::manage::tests::a_path_that_leads_out_of_the_folder_of_extensions_is_not_deleted
+
+[break] remove-deletes-without-a-yes
+rule: `cineris ext remove` deletes the folder only after a yes naming it; without one it unpins alone.
+file: crates/cineris-core/src/ext/manage.rs
+in: Core::remove_extension
+find: if delete && std::fs::symlink_metadata(&removal.target).is_ok() {
+replace: if std::fs::symlink_metadata(&removal.target).is_ok() {
+packages: cineris-cli
+caught-by:
+    cineris-cli::bin/cineris ext::tests::an_extension_is_added_listed_turned_off_and_removed
+
+[break] remove-takes-a-projects
+rule: `cineris ext remove` refuses a project's extension, naming `cineris permissions trust`.
+file: crates/cineris-core/src/ext/manage.rs
+in: Core::remove_extension
+find: if removal.project_only {
+replace: if false {
+packages: cineris-cli
+caught-by:
+    cineris-cli::bin/cineris ext::tests::an_extension_is_added_listed_turned_off_and_removed
+
+[break] disable-takes-a-projects
+rule: `cineris ext disable` of a project's extension writes nothing and says how instead: `cineris permissions trust`.
+file: crates/cineris-core/src/ext/manage.rs
+in: Core::disable_extension
+find: return Ok(DisableOutcome::Project);
+replace: return Err(usage(String::new()));
+packages: cineris-cli
+caught-by:
+    cineris-cli::bin/cineris ext::tests::an_extension_is_added_listed_turned_off_and_removed
+
+[break] disable-writes-again-what-is-off
+rule: `cineris ext disable` of an extension the user's file turns off already writes nothing.
+file: crates/cineris-config/src/write/extension.rs
+in: disabled_text
+find: Some(Value::Boolean(false)) => return Ok(None),
+replace: Some(Value::Boolean(false)) => None,
+caught-by:
+    cineris-config write::extension::tests::the_users_file_is_edited_by_one_change_that_reads_back
+
+[break] listing-gives-a-projects-the-users-name
+rule: A project's extension of a name the user's folder of extensions takes is listed as not used.
+file: crates/cineris-core/src/ext/manage.rs
+in: judged
+find: Source::Project if users.takes(&name) =>
+replace: Source::Project if false =>
+caught-by:
+    cineris-core ext::manage::tests::each_extension_stands_as_a_session_would_judge_it
+
+[break] listing-ignores-the-users-word
+rule: The user's own extension turned off in their configuration is listed as turned off, whatever its pin.
+file: crates/cineris-core/src/ext/manage.rs
+in: judged
+find: Source::User if judging.disabled.contains(&name) =>
+replace: Source::User if false =>
+caught-by:
+    cineris-core ext::manage::tests::each_extension_stands_as_a_session_would_judge_it
+
+[break] listing-judges-an-untrusted-projects
+rule: A project's extension, the project not trusted, is listed as such: nothing of it is used.
+file: crates/cineris-core/src/ext/manage.rs
+in: judged
+find: Source::Project if !judging.project_trusted =>
+replace: Source::Project if false =>
+caught-by:
+    cineris-core ext::manage::tests::each_extension_stands_as_a_session_would_judge_it
+
+[break] listing-says-a-gone-one-is-approved
+rule: A pinned extension whose folder is gone is listed as gone, its gates held.
+file: crates/cineris-core/src/ext/manage.rs
+in: judged
+find: } else { ExtensionStanding::Gone };
+replace: } else { ExtensionStanding::Approved };
+caught-by:
+    cineris-core ext::manage::tests::each_extension_stands_as_a_session_would_judge_it
+
+[break] way-out-names-no-disable
+rule: The way out of the user's own extension names `cineris ext disable <name>` beside the table it writes.
+file: crates/cineris-core/src/ext/script_hooks.rs
+in: way_out
+find: let disable = format!("`cineris ext disable {name}`");
+replace: let disable = table.clone();
+caught-by:
+    cineris-core ext::script_hooks::tests::the_way_out_of_the_users_own_names_the_commands
+    cineris-core::it extensions_hooks::an_extensions_gates_hold_while_it_does_not_stand_approved
+
+[break] way-out-names-no-remove
+rule: The way out of the user's own extension whose folder is gone names `cineris ext remove <name>`.
+file: crates/cineris-core/src/ext/script_hooks.rs
+in: way_out
+find: let remove = format!("`cineris ext remove {name}`");
+replace: let remove = table.clone();
+caught-by:
+    cineris-core ext::script_hooks::tests::the_way_out_of_the_users_own_names_the_commands
+    cineris-core::it extensions_hooks::an_extensions_gates_hold_while_it_does_not_stand_approved
+
+[break] status-holds-no-gate
+rule: `extensions/status` gives each gating hook the session holds of an extension, with why it refuses.
+file: crates/cineris-core/src/ext/manage.rs
+in: status
+find: .filter(|(extension, ..)| *extension == one.name)
+replace: .filter(|_| false)
+caught-by:
+    cineris-core::it extensions_hooks::an_extensions_gates_hold_while_it_does_not_stand_approved
+
+[break] status-says-a-gone-one-is-ready
+rule: `extensions/status` says an extension that does not stand approved, and is not off or waiting for approval, has failed.
+file: crates/cineris-core/src/ext/manage.rs
+in: component_state
+find: _ => (ComponentState::Failed, Some(standing.words()))
+replace: _ => (ComponentState::Ready, None)
+caught-by:
+    cineris-core::it extensions_hooks::an_extensions_gates_hold_while_it_does_not_stand_approved
+
+[break] unfollowed-windows-opens-follow-a-reparse-point
+rule: On Windows a name opened relative to a folder's handle is opened as the reparse point itself (`FILE_OPEN_REPARSE_POINT`), so that a link or a junction is refused and never followed.
+os: windows
+file: crates/cineris-sandbox/src/unfollowed.rs
+find: if follow { 0 } else { FILE_OPEN_REPARSE_POINT }
+replace: if follow { 0 } else { 0 }
+caught-by:
+    cineris-sandbox unfollowed::tests::a_link_at_any_name_is_refused_and_never_followed
+
+[break] listing-stops-at-an-unread-trust-store
+rule: `cineris ext list` lists what it can while the trust store cannot be read, and says the store could not be read.
+file: crates/cineris-core/src/ext/manage.rs
+in: Core::configuration_here
+find: Err(failure) if failure.kind == ErrorKind::Internal =>
+replace: Err(failure) if false && failure.kind == ErrorKind::Internal =>
+packages: cineris-cli
+caught-by:
+    cineris-cli::bin/cineris ext::tests::what_cannot_be_added_or_removed_is_refused_first
+
+# The engine's refusal of the harness's own approving commands (the owner's
+# answer to the early review's H1), as its early review left it (A's H1 to
+# H3, M1 to M3, L1 to L6).
+
+[break] approving-commands-not-refused
+rule: A command line that runs Cineris's approving subcommands is refused at every level, `unrestricted` included, before any rule is read, so that no allow rule lifts it.
+file: crates/cineris-policy/src/engine.rs
+in: Engine::judge_command
+find: crate::approving::refused(command, self.shell, self.own_commands.as_deref())
+replace: None::<crate::approving::Refusal>
+caught-by:
+    cineris-policy::it commands::the_harnesss_approving_commands_are_refused_at_every_level_whatever_the_rules
+    cineris-policy::it commands::the_engine_without_a_grammar_refuses_the_tables_lines
+
+[break] approving-wrapper-not-read
+rule: What a wrapper runs (`sudo -u me`, `timeout -s KILL 5`, `xargs -a list`) is a simple command of its own, read past the wrapper's options and their values.
+file: crates/cineris-policy/src/approving.rs
+find: let found = self.in_words(&words[next..], depth + 1);
+replace: let found = None;
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+    cineris-policy::it commands::the_engine_without_a_grammar_refuses_the_tables_lines
+
+[break] approving-env-split-string-unread
+rule: `env -S`, attached or not, and `--split-string` give a line, read again.
+file: crates/cineris-policy/src/approving.rs
+in: Reader::env_lines
+find: && let Some(refusal) = self.read(line, Line::Shell, depth)
+replace: && let Some(refusal) = None::<Refusal>
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] approving-glued-name-passed
+rule: A name of Cineris in a piece of a word split at `=`, `!`, `,` and `:` (`--bin=cin`, `EXEC:cineris,pty`) is a run of it.
+file: crates/cineris-policy/src/approving.rs
+in: Reader::in_words
+find: if self.is_own(piece) {
+replace: if false {
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] approving-text-after-equals-unread
+rule: The text after an `=` or a `!` in a word (`alias.x=!cineris ...`, `core.pager=...`) is read as a line.
+file: crates/cineris-policy/src/approving.rs
+in: Reader::in_words
+find: for (count, (mark, _)) in word.match_indices(['=', '!']).enumerate() {
+replace: for (count, (mark, _)) in word.match_indices(['=', '!']).enumerate().take(0) {
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] approving-unmodelled-passed
+rule: A line the analysis cannot model fails closed: read as text, its quotes and escapes taken out as its shell takes them.
+file: crates/cineris-policy/src/approving.rs
+in: read_line
+find: Analysis::NotModelled { .. } => reader.in_text(&command, shell)
+replace: Analysis::NotModelled { .. } => None
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+    cineris-policy::it commands::the_engine_without_a_grammar_refuses_the_tables_lines
+
+[break] approving-case-kept
+rule: Cineris's name is matched in any case, as Windows finds a program.
+file: crates/cineris-policy/src/approving.rs
+in: folded
+find: return text.to_ascii_lowercase();
+replace: return text.to_owned();
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] approving-windows-dots-kept
+rule: A name is matched with the trailing dots and blanks Windows takes off a file's name.
+file: crates/cineris-policy/src/approving.rs
+in: name_of
+find: let name = name.trim_end_matches(['.', ' ']);
+replace: let name = name.as_str();
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] approving-short-name-passed
+rule: Cineris's 8.3 short name (`CINERI~1.EXE`) is its name.
+file: crates/cineris-policy/src/approving.rs
+in: Reader::is_own
+find: || short_name(&name)
+replace: || false
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] approving-pattern-passed
+rule: A pattern at a program's place that could match a name of Cineris (`cineri?`, `cin[e]ris`) is that name.
+file: crates/cineris-policy/src/approving.rs
+in: Reader::could_be_own
+find: .any(|name| pattern.could_match_name(name, false))
+replace: .any(|_| false)
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] approving-expansion-taken-as-known
+rule: What follows a word the shell expands is not known: the run is judged as open, safe only after a subcommand that only reads.
+file: crates/cineris-policy/src/approving.rs
+in: Reader::run
+find: (Some(at), _) => (rest[..at].to_vec(), true)
+replace: (Some(at), _) => (rest[..at].to_vec(), open)
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] approving-stores-moved-passed
+rule: A run of Cineris in a line that sets or unsets a variable that moves its stores is refused.
+file: crates/cineris-policy/src/approving.rs
+in: Reader::note_moved
+find: *self.moved.borrow_mut() = Some(name);
+replace: let _ = name;
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] approving-widening-flag-passed
+rule: A headless run that trusts the project or widens what it may do is refused.
+file: crates/cineris-policy/src/approving.rs
+in: fallback
+find: if WIDENING.contains(&long) && !narrows {
+replace: if false {
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] approving-narrowing-mode-refused
+rule: A headless run's `--permission-mode` no wider than `supervised` narrows, and is not refused.
+file: crates/cineris-policy/src/approving.rs
+in: fallback
+find: && value.is_some_and(|mode| matches!(mode, "read-only" | "supervised"));
+replace: && false;
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] approving-short-c-passed
+rule: `-c`, alone or in a cluster of short flags, widens a run.
+file: crates/cineris-policy/src/approving.rs
+in: fallback
+find: widens = Some("-c".to_owned());
+replace: let _ = 0;
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] approving-help-refused
+rule: The help and the version, before `--`, are safe.
+file: crates/cineris-policy/src/approving.rs
+in: fallback
+find: "-h" | "--help" | "-V" | "--version" => return help_or()
+replace: "-V" | "--version" => return help_or()
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] approving-flag-value-read-as-a-flag
+rule: A run's flag that takes a value takes the next word with it (`--system-append -p` is no `-p`).
+file: crates/cineris-policy/src/approving.rs
+in: fallback
+find: if VALUE_FLAGS.contains(&long) && !attached {
+replace: if false {
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] approving-start-process-arguments-unread
+rule: PowerShell's `Start-Process` runs its program with its `-ArgumentList`.
+file: crates/cineris-policy/src/approving.rs
+find: arguments.extend(words.get(at + 1).cloned());
+replace: let _ = 0;
+caught-by:
+    cineris-policy approving::tests::each_refusal_names_the_run_it_refuses
+
+[break] approving-find-exec-unread
+rule: What `find -exec` runs is a simple command of its own.
+file: crates/cineris-policy/src/approving.rs
+in: Reader::in_words
+occurrence: 2
+find: "-exec" | "-execdir" | "-ok" | "-okdir" | "--args"
+replace: "-never"
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] approving-cargo-run-passed
+rule: `cargo run` of Cineris (`--bin cineris`, `-p cineris-cli`) is a run of it, with the words after `--`.
+file: crates/cineris-policy/src/approving.rs
+find: && let Some(refusal) = self.cargo_run(&words[program + 1..])
+replace: && let Some(refusal) = None::<Refusal>
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] approving-xargs-words-known
+rule: A run `xargs` starts takes more words from its input: it is judged as open.
+file: crates/cineris-policy/src/approving.rs
+in: Reader::in_words
+occurrence: 1
+find: self.adds.set(true);
+replace: let _ = 0;
+packages: cineris-cli
+caught-by:
+    cineris-cli::bin/cineris nested::tests::the_engines_table_reads_the_same_with_this_grammar
+
+[break] approving-pair-in-text-passed
+rule: A line read as text that names Cineris and holds an approving pair anywhere is refused.
+file: crates/cineris-policy/src/approving.rs
+in: Reader::in_plain
+find: if approves {
+replace: if false {
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] grammar-project-change-safe
+rule: The CLI's grammar refuses `project accept`, `disable`, `delete` and `promote`.
+file: crates/cineris-cli/src/nested.rs
+in: standing
+find: ProjectCommand::Change { action, .. } => approves(&format!("project {action}"))
+replace: ProjectCommand::Change { .. } => Standing::Safe
+caught-by:
+    cineris-cli::bin/cineris nested::tests::each_command_is_refused_by_the_engine_exactly_when_its_standing_says
+
+[break] grammar-trust-project-safe
+rule: The CLI's grammar refuses a headless run with `--trust-project`.
+file: crates/cineris-cli/src/args.rs
+find: "Treat the project as trusted, for this run", Nested::Refused
+replace: "Treat the project as trusted, for this run", Nested::Safe
+caught-by:
+    cineris-cli::bin/cineris nested::tests::each_flag_after_p_stands_by_its_own_choice
+
+[break] grammar-application-safe
+rule: The CLI's grammar refuses the application itself.
+file: crates/cineris-cli/src/nested.rs
+in: run_standing
+find: if !run.print {
+replace: if false {
+caught-by:
+    cineris-cli::bin/cineris nested::tests::each_command_is_refused_by_the_engine_exactly_when_its_standing_says
+
+[break] grammar-open-taken-as-closed
+rule: With more words that only the shell knows, the CLI's grammar takes a run as safe only once its subcommand and action are written out.
+file: crates/cineris-cli/src/nested.rs
+in: closed
+find: _ => written.iter().filter(|word| !word.starts_with('-')).count() >= 2
+replace: _ => true
+caught-by:
+    cineris-cli::bin/cineris nested::tests::what_only_the_shell_knows_is_safe_only_after_a_reading_action
+
+[break] grammar-internal-safe
+rule: The CLI's grammar refuses its internal subcommands.
+file: crates/cineris-cli/src/nested.rs
+in: grammar
+find: && (first == SANDBOX || first == GUARD)
+replace: && false
+caught-by:
+    cineris-cli::bin/cineris nested::tests::each_command_is_refused_by_the_engine_exactly_when_its_standing_says
+
+[break] hook-built-in-refusal-said-a-rule
+rule: A hook the engine's own refusal keeps from starting is not said to be refused by a permission rule.
+file: crates/cineris-core/src/ext/hook_command.rs
+find: NotRun::Denied(reason) if reason.starts_with(cineris_policy::approving::REFUSED) =>
+replace: NotRun::Denied(reason) if false && reason.starts_with(cineris_policy::approving::REFUSED) =>
+caught-by:
+    cineris-core::it hook_wiring::a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back
+
+# The approving subcommands under a session's command, and approval by the
+# hash shown (the owner's answer to the early review's H1: B, C, M1, E),
+# and the early review's M2, M3, L3 and L4.
+
+[break] session-line-passes-a-harness
+rule: A line of parents that reaches a process of Cineris that runs sessions is under a session's command.
+file: crates/cineris-sandbox/src/session.rs
+in: line
+find: Seen::Of { harness: true, .. } => {
+replace: Seen::Of { harness: true, .. } if false => {
+packages: cineris-sandbox,cineris-cli
+caught-by:
+    cineris-sandbox session::tests::a_line_of_parents_reaches_a_harness_ends_elsewhere_or_is_not_known
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
+
+[break] session-unread-line-is-nothing
+rule: A line of parents that cannot be read is taken as under a session's command.
+file: crates/cineris-sandbox/src/session.rs
+in: line
+find: return Under::Unknown(format!("process {at} of its line could not be read"));
+replace: return Under::Nothing;
+caught-by:
+    cineris-sandbox session::tests::a_line_of_parents_reaches_a_harness_ends_elsewhere_or_is_not_known
+
+[break] session-bare-run-runs-no-session
+rule: A process of Cineris with no argument, or one that is not a subcommand that runs no session, runs sessions.
+file: crates/cineris-sandbox/src/session.rs
+in: runs_sessions
+find: .is_none_or(|first| !NO_SESSION.contains(&first.as_str()))
+replace: .is_some_and(|first| !NO_SESSION.contains(&first.as_str()))
+caught-by:
+    cineris-sandbox session::tests::a_process_of_cineris_runs_sessions_unless_it_is_a_subcommand_that_runs_none
+
+[break] session-names-not-told
+rule: On Linux a process of Cineris is told by its names `cineris` and `cin`, beside this binary's own.
+os: linux
+file: crates/cineris-sandbox/src/session.rs
+in: named
+find: name == "cineris" || name == "cin" ||
+replace: false ||
+caught-by:
+    cineris-sandbox session::sys::tests::cineris_is_told_by_its_names
+
+# The CLI's nested run no longer catches this one: its harness is on its line
+# of parents, which refuses whatever the job says (the maintainers' rule for
+# the third part). The job holds a command that has left that line.
+
+[break] session-windows-job-not-asked
+rule: On Windows a process in the job of a running harness's own sessions' commands is under a session's command; in any other job it is not.
+os: windows
+file: crates/cineris-sandbox/src/session.rs
+find: if inside == 0 {
+replace: if inside != 0 {
+caught-by:
+    cineris-sandbox session::sys::tests::sys_a_job_of_no_harnesss_is_no_sessions
+
+[break] session-windows-harness-unmarked
+rule: On Windows a headless run joins the job of sessions' commands before it starts any process.
+os: windows
+file: crates/cineris-cli/src/headless.rs
+in: standing
+find: Ok((capped, crate::mark_sessions()))
+replace: Ok((capped, None))
+caught-by:
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
+
+[break] headless-core-starts-before-its-standing
+rule: A headless run's core starts only once its standing is known (since step 28's third pull request it is asked on a thread of its own beside the start): under a session's command the run is held to `read-only` from its core's start.
+file: crates/cineris-cli/src/headless.rs
+in: core_thread
+find: match plan.standing.wait(plan.name) {
+replace: match Ok::<_, u8>((false, None::<String>)) {
+caught-by:
+    cineris-cli::system commands::sys_a_harness_whose_mark_failed_holds_its_sessions_at_supervised_and_says_so
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
+
+[break] headless-refused-run-goes-on
+rule: A headless run refused under a session's command ends before its core starts, and reads none of the configuration its moved stores name: the refusal is all it says.
+file: crates/cineris-cli/src/headless.rs
+in: core_thread
+find: Err(code) => return code
+replace: Err(_) => {}
+caught-by:
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
+
+[break] headless-early-end-said-before-its-refusal
+rule: A headless run refused under a session's command says that, and not what else would have ended it before its core: an end before the core waits for its standing.
+file: crates/cineris-cli/src/headless.rs
+in: run
+find: let refused = || standing.borrow_mut().wait(name).err();
+replace: let refused = || None::<u8>;
+caught-by:
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
+
+[break] ext-add-runs-under-a-session
+rule: `cineris ext add` refuses under a session's command, before anything is read.
+file: crates/cineris-cli/src/ext.rs
+find: ExtCommand::Add { .. } => crate::not_under_a_session(name, "ext add")?,
+replace: ExtCommand::Add { .. } => {}
+caught-by:
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
+
+[break] ext-remove-runs-under-a-session
+rule: `cineris ext remove` refuses under a session's command, before anything is read.
+file: crates/cineris-cli/src/ext.rs
+find: ExtCommand::Remove { .. } => crate::not_under_a_session(name, "ext remove")?,
+replace: ExtCommand::Remove { .. } => {}
+caught-by:
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
+
+[break] ext-disable-runs-under-a-session
+rule: `cineris ext disable` refuses under a session's command, before anything is read.
+file: crates/cineris-cli/src/ext.rs
+find: ExtCommand::Disable { .. } => crate::not_under_a_session(name, "ext disable")?,
+replace: ExtCommand::Disable { .. } => {}
+caught-by:
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
+
+[break] permissions-revoke-runs-under-a-session
+rule: `cineris permissions revoke` refuses under a session's command, before anything is read.
+file: crates/cineris-cli/src/commands.rs
+find: crate::not_under_a_session(name, "permissions revoke")?;
+replace: let _ = name;
+caught-by:
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
+
+[break] permissions-trust-runs-under-a-session
+rule: `cineris permissions trust` refuses under a session's command, before anything is read.
+file: crates/cineris-cli/src/commands.rs
+find: crate::not_under_a_session(name, "permissions trust")?;
+replace: let _ = name;
+caught-by:
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
+
+[break] permissions-untrust-runs-under-a-session
+rule: `cineris permissions untrust` refuses under a session's command, before anything is read.
+file: crates/cineris-cli/src/commands.rs
+find: crate::not_under_a_session(name, "permissions untrust")?;
+replace: let _ = name;
+caught-by:
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
+
+[break] permissions-forget-runs-under-a-session
+rule: `cineris permissions forget` refuses under a session's command, before anything is read.
+file: crates/cineris-cli/src/commands.rs
+find: crate::not_under_a_session(name, "permissions forget")?;
+replace: let _ = name;
+caught-by:
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
+
+[break] setup-runs-under-a-session
+rule: `cineris setup skill-folders` refuses under a session's command, before anything is read.
+file: crates/cineris-cli/src/setup.rs
+find: if let Err(code) = crate::not_under_a_session(name, "setup skill-folders") {
+replace: if let Err(code) = Ok::<(), u8>(()) {
+caught-by:
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
+
+[break] hash-given-not-compared
+rule: A `--hash` given that is not the hash of what was shown refuses, at a terminal too.
+file: crates/cineris-cli/src/ext.rs
+in: approved
+find: (Some(given), Some(shown)) if !given.trim().eq_ignore_ascii_case(shown) => {
+replace: (Some(given), Some(shown)) if false && !given.trim().eq_ignore_ascii_case(shown) => {
+caught-by:
+    cineris-cli::bin/cineris ext::tests::a_yes_is_the_persons_at_a_terminal_and_the_shown_hash_without_one
+    cineris-cli::system commands::sys_ext_add_disable_and_remove_act_only_on_the_hash_shown
+
+[break] hash-does-not-approve-without-a-terminal
+rule: With no terminal to ask at, the hash of what was shown approves it.
+file: crates/cineris-cli/src/ext.rs
+in: approved
+find: (Some(_), Some(_)) => Answer::Yes
+replace: (Some(_), Some(_)) => Answer::No
+caught-by:
+    cineris-cli::bin/cineris ext::tests::a_yes_is_the_persons_at_a_terminal_and_the_shown_hash_without_one
+    cineris-cli::system commands::sys_ext_add_disable_and_remove_act_only_on_the_hash_shown
+
+[break] remove-without-a-yes
+rule: `ext remove` unpins and deletes only on its one yes, or the hash shown with no terminal.
+file: crates/cineris-cli/src/ext.rs
+occurrence: 2
+find: if answer != Answer::Yes {
+replace: if false {
+caught-by:
+    cineris-cli::system commands::sys_ext_add_disable_and_remove_act_only_on_the_hash_shown
+
+[break] disable-of-a-gate-not-asked
+rule: `ext disable` of an extension that holds gates asks first, naming them, and with no terminal needs its pinned version's hash.
+file: crates/cineris-cli/src/ext.rs
+find: if !gates.held.is_empty() || gates.unknown {
+replace: if false {
+caught-by:
+    cineris-cli::system commands::sys_ext_add_disable_and_remove_act_only_on_the_hash_shown
+
+[break] add-not-evaluated-before-the-question
+rule: `ext add` evaluates the extension before its question, and shows what it registers.
+file: crates/cineris-cli/src/ext.rs
+find: .block_on(core.evaluate_extension(&mut to_add))
+replace: .block_on(async { Ok::<(), OpError>(()) })
+caught-by:
+    cineris-cli::system commands::sys_ext_add_disable_and_remove_act_only_on_the_hash_shown
+
+[break] tilde-not-expanded
+rule: A leading `~` of `ext add`'s path is the home directory.
+file: crates/cineris-cli/src/ext.rs
+in: expanded
+find: rest.is_empty() || rest.starts_with('/')
+replace: false
+caught-by:
+    cineris-cli::bin/cineris ext::tests::a_leading_tilde_is_the_home_directory
+
+[break] trust-named-hash-not-compared
+rule: `permissions trust` refuses an extension or hook named with a hash that is not the one shown.
+file: crates/cineris-cli/src/commands.rs
+in: named_not_shown
+find: Some((_, shown)) if !hash.trim().eq_ignore_ascii_case(shown) => Some(format!(
+replace: Some((_, shown)) if false && !hash.trim().eq_ignore_ascii_case(shown) => Some(format!(
+caught-by:
+    cineris-cli::bin/cineris commands::tests::a_projects_extensions_are_named_by_the_hashes_shown
+    cineris-cli::system commands::sys_permissions_trust_approves_a_projects_extensions_only_with_the_flag_where_none_can_ask
+
+[break] trust-approves-what-is-not-named
+rule: With no terminal, `permissions trust` approves only the extensions and hooks named with their hashes.
+file: crates/cineris-cli/src/commands.rs
+find: .filter(|one| is_named(&named_extensions, &one.name))
+replace: .filter(|_| true)
+caught-by:
+    cineris-cli::system commands::sys_permissions_trust_approves_a_projects_extensions_only_with_the_flag_where_none_can_ask
+
+[break] gates-not-told
+rule: An extension's hooks on a gating event are the gates turning it off lets go.
+file: crates/cineris-core/src/ext/manage.rs
+in: Core::extension_gates
+find: .is_some_and(cineris_ext::event::Event::gates)
+replace: .is_some_and(|_| false)
+packages: cineris-cli
+caught-by:
+    cineris-cli::system commands::sys_ext_add_disable_and_remove_act_only_on_the_hash_shown
+
+[break] add-tools-not-shown
+rule: What `ext add` shows names each tool and its description, evaluated before the question.
+file: crates/cineris-core/src/ext/manage.rs
+in: Core::evaluate_extension
+find: to_add.tools = registration
+replace: to_add.tools = Vec::new(); let _: Vec<(String, String)> = registration
+packages: cineris-cli
+caught-by:
+    cineris-cli::bin/cineris ext::tests::ext_add_shows_what_it_registers_and_its_prompt_before_the_question
+    cineris-cli::system commands::sys_ext_add_disable_and_remove_act_only_on_the_hash_shown
+
+[break] add-prompt-not-shown
+rule: What `ext add` shows holds the whole text the extension adds to the system prompt.
+file: crates/cineris-core/src/ext/manage.rs
+in: Core::extension_to_add
+find: .map(|bytes| quoted_shown(&String::from_utf8_lossy(bytes)));
+replace: .map(|_| String::new());
+packages: cineris-cli
+caught-by:
+    cineris-cli::bin/cineris ext::tests::ext_add_shows_what_it_registers_and_its_prompt_before_the_question
+
+[break] add-place-not-looked-at-again
+rule: At the yes, the place an extension is written to is looked at again, and anything changed there since is put back as shown.
+file: crates/cineris-core/src/ext/manage.rs
+in: Core::add_extension
+find: let written = !holds_it;
+replace: let written = !holds_it && !to_add.unchanged;
+packages: cineris-cli
+caught-by:
+    cineris-cli::bin/cineris ext::tests::the_place_is_looked_at_again_at_the_yes_and_leftovers_are_cleared
+
+[break] leftovers-not-cleared
+rule: A write of an extension's folder removes what an earlier write left beside it.
+file: crates/cineris-core/src/ext/manage.rs
+in: write_folder
+find:     clear_leftovers(target);
+replace:     let _ = target;
+packages: cineris-cli
+caught-by:
+    cineris-cli::bin/cineris ext::tests::the_place_is_looked_at_again_at_the_yes_and_leftovers_are_cleared
+
+[break] set-aside-fails-the-write
+rule: Once the new folder is in place the write is done: what was set aside and cannot be removed is said, not an error.
+os: linux
+file: crates/cineris-core/src/ext/manage.rs
+in: write_folder
+find: return Ok(Some((aside, error)));
+replace: return Err(error);
+packages: cineris-cli
+caught-by:
+    cineris-cli::bin/cineris ext::tests::a_folder_set_aside_that_cannot_be_removed_does_not_fail_the_write
+
+[break] users-extension-said-confined-everywhere
+rule: A user's extension, loaded in every workspace, is said confined only where the sandbox is on.
+file: crates/cineris-core/src/ext/found.rs
+in: in_words_where
+find: if !everywhere {
+replace: if false {
+caught-by:
+    cineris-core ext::found::tests::a_users_extension_is_said_confined_only_where_the_sandbox_is_on
+
+[break] sandbox-off-notice-says-no-more
+rule: The opening notice of a session whose commands are not confined says what else runs with the user's rights.
+file: crates/cineris-core/src/assemble.rs
+find: message: format!("{message} {SANDBOX_OFF_TOO}")
+replace: message
+caught-by:
+    cineris-core::it start::a_session_is_refused_at_a_level_that_cannot_be_held_and_told_when_there_is_no_sandbox
+
+# Under a session's command: the application, `serve` and `attach` refuse to
+# start, and a headless run is held to `read-only` and says so (B, the
+# maintainers' conditions).
+
+[break] interactive-starts-under-a-session
+rule: The application does not start under a session's command: it answers a project's trust question and the approvals.
+file: crates/cineris-cli/src/interactive.rs
+find: if let Err(code) = crate::not_under_a_session(name, "") {
+replace: if let Err(code) = Ok::<(), u8>(()) {
+caught-by:
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
+
+[break] serve-starts-under-a-session
+rule: `cineris serve` does not start under a session's command: it answers a project's trust question and the approvals.
+file: crates/cineris-cli/src/serve.rs
+find: if let Err(code) = crate::not_under_a_session(name, "serve") {
+replace: if let Err(code) = Ok::<(), u8>(()) {
+caught-by:
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
+
+[break] attach-starts-under-a-session
+rule: `cineris attach` does not start under a session's command: it answers a project's trust question and the approvals.
+file: crates/cineris-cli/src/attach.rs
+find: if let Err(code) = crate::not_under_a_session(name, "attach") {
+replace: if let Err(code) = Ok::<(), u8>(()) {
+caught-by:
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
+
+[break] nested-run-takes-refused-flags
+rule: A headless run under a session's command takes no flag the CLI's grammar refuses there.
+file: crates/cineris-cli/src/main.rs
+in: nested_run
+find: crate::nested::standing(&command)
+replace: cineris_core::approving::Standing::Safe
+caught-by:
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
+
+[break] nested-run-not-held
+rule: A headless run under a session's command is held to `read-only`.
+file: crates/cineris-cli/src/headless.rs
+find: options.level_at_most = Some(cineris_protocol::lease::Level::ReadOnly);
+replace: let _ = &options;
+caught-by:
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
+
+[break] nested-run-not-said-held
+rule: A headless run held to `read-only` says so on standard error and in its result.
+file: crates/cineris-cli/src/headless.rs
+find: if front.plan.capped {
+replace: if false {
+caught-by:
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
+
+[break] level-cap-not-applied
+rule: A session's level is no wider than the core's cap.
+file: crates/cineris-core/src/assemble.rs
+in: at_most
+find: Some(most) if rank(most) < rank(level) => most.clone()
+replace: Some(most) if false => most.clone()
+packages: cineris-core,cineris-cli
+caught-by:
+    cineris-core assemble::level_tests::a_level_is_capped_at_the_most_given
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
+
+# The second round: the socket's refusal of the hooks' and extensions'
+# programs, the first run's question, and the engine's calls stopped as they
+# start.
+
+[break] socket-own-command-answered
+rule: A peer whose line of parents reaches the server's process is refused: a hook's, an extension's program, a program the model's shell runs.
+os: linux
+file: crates/cineris-rpc/src/socket/unix.rs
+find:
+        return Ok(Accepted::Refused(format!(
+                    "one of the server's own commands (pid {pid})"
+                )));
+replace: {}
+caught-by:
+    cineris-rpc::it socket::sys_a_hook_and_an_extensions_program_are_refused_as_the_servers_own_commands
+    cineris-rpc::it socket::sys_one_of_the_servers_own_commands_is_refused
+
+[break] pipe-own-command-answered
+rule: A client in the job of the server's own commands is refused: a hook's, an extension's program, a program the model's shell runs.
+os: windows
+file: crates/cineris-rpc/src/socket/windows.rs
+find: if own {
+replace: if false {
+caught-by:
+    cineris-rpc::it pipe::sys_a_hook_and_an_extensions_program_are_refused_as_the_servers_own_commands
+
+[break] first-run-skill-folders-yes-lost
+rule: The first run's answer to the skill folders' question is what is written: a yes reads the user's own without asking.
+file: crates/cineris-tui/src/app/state/first_run.rs
+find: run.chosen.read_skill_folders = yes;
+replace: run.chosen.read_skill_folders = false;
+caught-by:
+    cineris-tui app::tests::first_run::the_first_run_reaches_a_session_made_with_what_was_chosen
+
+[break] call-stopped-as-it-starts-runs
+rule: A call whose runtime is stopped as the call starts runs nothing of its script, and is told it never ran.
+file: crates/cineris-ext/src/engine/thread.rs
+find:
+        cineris_base::hook::point(super::A_CALL_IS_STARTED);
+        if self.stop.load(Ordering::SeqCst) {
+replace:
+        cineris_base::hook::point(super::A_CALL_IS_STARTED);
+        if false {
+caught-by:
+    cineris-ext::it engine::a_call_stopped_as_it_starts_and_one_queued_behind_it_never_run
+
+[break] folder-read-follows-a-swapped-link
+rule: The folder `ext add` reads is opened through handles that follow no link: one swapped for a link between the look and the read is refused.
+file: crates/cineris-ext/src/folder.rs
+find: Self::read_through(Folder::open(folder))
+replace: Self::read_through(Folder::open_following(folder))
+caught-by:
+    cineris-ext folder::tests::the_read_through_handles_is_the_plain_reads_and_follows_no_link
+
+# The re-look at the early review of the refusal (H1, H2, M1, M2, the lows,
+# and B's moved stores).
+
+[break] approving-any-word-passed
+rule: A name of Cineris at any word of a simple command, past its program's place, is a run of it, refused where it approves, widens or is internal.
+file: crates/cineris-policy/src/approving.rs
+in: Reader::in_words
+find: !prints && self.is_own(word)
+replace: false && self.is_own(word)
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] approving-any-word-takes-the-application
+rule: A name of Cineris that is not at a program's place is not refused as the application or for what follows it: `grep cineris file` runs nothing of it.
+file: crates/cineris-policy/src/approving.rs
+in: Reader::run
+find: placed || !matches!(refusal.kind, Kind::Application | Kind::Hidden)
+replace: true
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] approving-help-in-text-taken
+rule: The help or the version, in words that may not be the program's own, is not taken as asked.
+file: crates/cineris-policy/src/approving.rs
+in: fallback
+find:
+        if exact {
+            Standing::Safe
+replace:
+        if true {
+            Standing::Safe
+caught-by:
+    cineris-policy approving::tests::the_help_is_safe_only_in_words_that_are_the_programs_own
+
+[break] approving-text-comment-kept
+rule: In a line read as text, a comment is left out.
+file: crates/cineris-policy/src/approving.rs
+in: segments
+find: '#' if word.is_empty() => comment = true
+replace: '#' if false => comment = true
+packages: cineris-cli
+caught-by:
+    cineris-cli::bin/cineris nested::tests::the_engines_table_reads_the_same_with_this_grammar
+
+[break] approving-redirection-target-kept
+rule: In a line read as text, an output's redirection target is no word of the run.
+file: crates/cineris-policy/src/approving.rs
+in: segments
+find:
+        finish(&mut word, &mut words, &mut target);
+                target = true;
+replace:
+        finish(&mut word, &mut words, &mut target);
+                target = false;
+packages: cineris-cli
+caught-by:
+    cineris-cli::bin/cineris nested::tests::the_engines_table_reads_the_same_with_this_grammar
+
+[break] approving-glob-taken-as-known
+rule: A word the analysis says is a pattern is one the shell expands.
+file: crates/cineris-policy/src/approving.rs
+in: Reader::in_parts
+find: if word.glob {
+replace: if false {
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] approving-cluster-value-passed
+rule: A wrapper's cluster of short options whose last takes a value (`-Eu root`) takes that value.
+file: crates/cineris-policy/src/approving.rs
+in: wrapped
+find: || last.is_some_and(|last| values.contains(&last.as_str()))
+replace: || false
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] approving-shell-cluster-unread
+rule: A shell's line follows its `-c` in a cluster (`-lc`), past options and the values of `-o`.
+file: crates/cineris-policy/src/approving.rs
+in: shell_line
+find: if word == "--command" || (cluster && word.contains('c')) {
+replace: if word == "--command" {
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] approving-awk-value-taken-as-program
+rule: An `awk`'s program is past the values of `-v`, `-F` and `-W`.
+file: crates/cineris-policy/src/approving.rs
+in: awk_program
+find: "-v" | "-F" | "-W" | "--assign" | "--field-separator" => at += 2
+replace: "-v" | "-F" | "-W" | "--assign" | "--field-separator" => at += 1
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] approving-directory-change-passed
+rule: A headless run of Cineris after the line changes the directory is refused.
+file: crates/cineris-policy/src/approving.rs
+in: Reader::note_program
+find: self.moved_dir.set(true);
+replace: let _ = 0;
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] approving-source-passed
+rule: A run of Cineris in a line that sources a file or evaluates one is refused.
+file: crates/cineris-policy/src/approving.rs
+in: Reader::note_program
+find: self.sources.set(true);
+replace: let _ = 0;
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] approving-attached-unset-passed
+rule: `env -uHOME`, an unset attached to its flag, moves the stores.
+file: crates/cineris-policy/src/approving.rs
+in: moved
+find: .filter(|name| !name.is_empty())
+replace: .filter(|_| false)
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] approving-prompt-after-dashes-hidden
+rule: After `--`, every word of a headless run is its prompt's: what the shell makes of one changes no flag.
+file: crates/cineris-policy/src/approving.rs
+in: Reader::run
+find: (Some(at), Some(dash)) if dash < at => {
+replace: (Some(at), Some(dash)) if false && dash < at => {
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] approving-start-process-words-exact
+rule: `Start-Process`'s argument list is no program's own words: what the grammar cannot read there is not safe.
+file: crates/cineris-policy/src/approving.rs
+in: Reader::start_process
+find:
+        let was = self.exact.replace(false);
+        let mut line = vec![program];
+replace:
+        let was = self.exact.get();
+        let mut line = vec![program];
+packages: cineris-cli
+caught-by:
+    cineris-cli::bin/cineris nested::tests::the_engines_table_reads_the_same_with_this_grammar
+
+[break] approving-text-after-equals-unread-in-text
+rule: In a line read as text, the text after an `=` or a `!` is read as a line.
+file: crates/cineris-policy/src/approving.rs
+in: Reader::in_plain
+find: && let Some(refusal) = self.read(text, Line::Shell, DEPTH - 2)
+replace: && let Some(refusal) = None::<Refusal>
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] approving-text-topic-passed
+rule: In a line read as text that names Cineris, `setup`, `serve` or `attach` anywhere is refused.
+file: crates/cineris-policy/src/approving.rs
+in: Reader::in_plain
+find: matches!(word.to_ascii_lowercase().as_str(), "setup" | "serve" | "attach")
+replace: false
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] approving-printer-names-cineris
+rule: In a line read as text, a name a printer's words hold (`git commit -m …`) is no run, and names nothing.
+file: crates/cineris-policy/src/approving.rs
+in: Reader::in_plain
+find: if prints && at != program {
+replace: if false {
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] approving-text-exec-not-placed
+rule: In a line read as text, the word after `-exec` is a program's place.
+file: crates/cineris-policy/src/approving.rs
+in: Reader::in_plain
+find: let placed = at == program || executes || (runs_words && at > program);
+replace: let placed = at == program || (runs_words && at > program);
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] approving-ansi-quotes-kept
+rule: `$'…'`, `$"…"` and an empty `$()` build nothing, and are read as quotes.
+file: crates/cineris-policy/src/approving.rs
+in: unquoted
+find: text.replace("$()", "").replace("$'", "'").replace("$\"", "\"")
+replace: text.to_owned()
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] grammar-unread-words-safe
+rule: Where its words may not be the program's own, the CLI's grammar does not take words it cannot read as safe.
+file: crates/cineris-cli/src/nested.rs
+in: grammar
+find: Err(_) if !open && exact => Standing::Safe
+replace: Err(_) if !open => Standing::Safe
+caught-by:
+    cineris-cli::bin/cineris nested::tests::the_engines_table_reads_the_same_with_this_grammar
+    cineris-cli::bin/cineris nested::tests::the_help_and_unread_words_are_safe_only_as_the_programs_own
+
+[break] nested-run-moved-stores-passed
+rule: A headless run under a session's command with a variable that moves its stores is refused.
+file: crates/cineris-cli/src/main.rs
+in: nested_run
+find: if let Some(moved) = cineris_sandbox::session::moved_stores() {
+replace: if let Some(moved) = None::<String> {
+caught-by:
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
+
+[break] session-linux-moved-store-same
+rule: On Linux, a store's variable set otherwise than in the session's own environment is moved.
+os: linux
+file: crates/cineris-sandbox/src/session.rs
+occurrence: 1
+find: mine != theirs(name)
+replace: false
+packages: cineris-cli
+caught-by:
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
+
+[break] session-windows-moved-store-same
+rule: On Windows, a store's variable set otherwise than the session told what it starts moves the stores.
+os: windows
+file: crates/cineris-sandbox/src/session.rs
+occurrence: 2
+find: mine != theirs(name)
+replace: false
+packages: cineris-cli
+caught-by:
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
+
+[break] remove-takes-the-name-as-typed
+rule: A removal goes by the name its folder holds, or its pin's, whatever its case: its pin and its folder are one extension's.
+file: crates/cineris-core/src/ext/manage.rs
+in: Core::extension_removal
+find: || (found.is_none() && entry.eq_ignore_ascii_case(name))
+replace: || false
+caught-by:
+    cineris-core ext::manage::tests::a_path_that_leads_out_of_the_folder_of_extensions_is_not_deleted
+
+[break] session-windows-one-job-for-all
+rule: On Windows each harness makes a job of its own, named for its process id: a job shared by harnesses started under different jobs could be joined by the first alone.
+os: windows
+file: crates/cineris-sandbox/src/session.rs
+find: let name = wide(&job_name(std::process::id(), made));
+replace: let name = wide(super::JOB_PREFIX);
+caught-by:
+    cineris-sandbox session::sys::tests::sys_a_job_of_no_harnesss_is_no_sessions
+
+# The early review's L7: the read's own guards, and the write's.
+
+[break] unfollowed-waits-for-a-fifo
+rule: A file is opened without waiting (`O_NONBLOCK`): a FIFO opens at once and is refused as no file.
+os: linux
+file: crates/cineris-sandbox/src/unfollowed.rs
+find: const UNFOLLOWED: i32 = libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY | libc::O_CLOEXEC;
+replace: const UNFOLLOWED: i32 = libc::O_NOFOLLOW | libc::O_NOCTTY | libc::O_CLOEXEC;
+caught-by:
+    cineris-sandbox unfollowed::tests::a_fifo_is_refused_without_waiting
+
+[break] unfollowed-windows-shares-delete
+rule: On Windows a folder held for its read is shared without delete: it cannot be renamed or replaced while it is read.
+os: windows
+file: crates/cineris-sandbox/src/unfollowed.rs
+find: const SHARED: u32 = FILE_SHARE_READ | FILE_SHARE_WRITE;
+replace: const SHARED: u32 = FILE_SHARE_READ | FILE_SHARE_WRITE | 4;
+caught-by:
+    cineris-sandbox unfollowed::tests::a_folder_held_cannot_be_renamed
+
+[break] write-folder-writes-in-place
+rule: An extension's folder is written whole or not at all: into a folder of its own beside it, then put in its place.
+file: crates/cineris-core/src/ext/manage.rs
+in: write_folder
+find: let new = beside(target, "new");
+replace: let new = target.to_path_buf();
+caught-by:
+    cineris-core ext::manage::tests::the_folder_is_written_whole_in_place_of_what_was_there
+
+[break] approving-nesting-unbounded
+rule: One check nests and reads a bounded number of simple commands: past it, a line that names Cineris is refused, and soon.
+file: crates/cineris-policy/src/approving.rs
+in: Reader::in_words
+find: if depth > NESTING || steps > STEPS {
+replace: if false {
+caught-by:
+    cineris-policy approving::tests::a_line_that_nests_or_repeats_without_end_is_refused_soon
+
+# The full review of the third part's fixes: B on Windows (a service's start
+# of a command, the job's own name and security, a mark that fails closed),
+# B's names on Linux, the bounded store lock, and A's general rules.
+
+[break] session-windows-service-start-not-seen
+rule: On Windows a process that WMI's provider host, the task host or the task scheduler's service host started for a command, directly or through command interpreters, is under a session's command.
+file: crates/cineris-sandbox/src/session.rs
+in: started_by_a_service
+find: if SERVICE_STARTERS.contains(&name) || schedules {
+replace: if false {
+caught-by:
+    cineris-sandbox session::tests::a_process_a_service_started_for_a_command_is_under_a_session
+
+[break] session-windows-any-host-not-counted
+rule: Where which service host runs the task scheduler cannot be asked, any service host counts as it.
+file: crates/cineris-sandbox/src/session.rs
+in: started_by_a_service
+find: scheduler.is_none_or(|scheduler| scheduler == parent)
+replace: scheduler.is_some_and(|scheduler| scheduler == parent)
+caught-by:
+    cineris-sandbox session::tests::a_process_a_service_started_for_a_command_is_under_a_session
+
+[break] session-windows-line-past-other-programs
+rule: The line of parents is followed up through command interpreters and runtimes alone: any other program (the desktop, a CI runner's test runner) ends it, so that what a service started long before is not taken for a service's start of a command.
+file: crates/cineris-sandbox/src/session.rs
+in: started_by_a_service
+find: Opened::Made(then) if passes_through(name) => {
+replace: Opened::Made(then) => {
+caught-by:
+    cineris-sandbox session::tests::a_process_a_service_started_for_a_command_is_under_a_session
+
+[break] session-windows-later-parent-taken
+rule: A parent made after its child has the id of a parent that has gone, and ends the line.
+file: crates/cineris-sandbox/src/session.rs
+in: started_by_a_service
+find: && then > made
+replace: && then > made && false
+caught-by:
+    cineris-sandbox session::tests::a_process_a_service_started_for_a_command_is_under_a_session
+
+[break] session-windows-job-named-by-id-alone
+rule: A harness's job is named for its process's instance, its id and when it was made, so that a gone harness's job is not taken for the one with its id now.
+file: crates/cineris-sandbox/src/session.rs
+in: job_name
+find: format!("{JOB_PREFIX}{pid}.{made}")
+replace: format!("{JOB_PREFIX}{pid}")
+caught-by:
+    cineris-sandbox session::tests::a_harnesss_job_is_named_for_its_processs_instance
+
+[break] session-windows-squatted-job-joined
+rule: On Windows a job of the harness's own name that was there already is not joined: the mark fails.
+os: windows
+file: crates/cineris-sandbox/src/session.rs
+find: if said.raw_os_error() == i32::try_from(ERROR_ALREADY_EXISTS).ok() {
+replace: if false {
+caught-by:
+    cineris-sandbox session::sys::tests::sys_a_job_made_ahead_of_the_harness_is_not_joined
+
+[break] session-windows-job-open-to-all-rights
+rule: On Windows the harness's job may be opened by its name, by its user and its owner, only to ask about it.
+os: windows
+file: crates/cineris-sandbox/src/session.rs
+in: OwnerOnly::new
+find: ACL_REVISION, BY_NAME, user_sid
+replace: ACL_REVISION, 0x001F_001F, user_sid
+caught-by:
+    cineris-sandbox session::sys::tests::sys_the_harnesss_job_is_open_by_its_name_only_to_ask
+    cineris-sandbox session::sys::tests::sys_the_jobs_security_is_its_text
+
+[break] session-windows-leaving-not-told
+rule: On Windows a job that lets the processes in it leave is told, and the mark refuses it.
+os: windows
+file: crates/cineris-sandbox/src/session.rs
+find: Ok(limits.BasicLimitInformation.LimitFlags & leave != 0)
+replace: Ok(false)
+caught-by:
+    cineris-sandbox session::sys::tests::sys_a_job_that_lets_its_processes_leave_is_told
+
+[break] session-windows-denied-job-taken-for-none
+rule: On Windows a harness's job that cannot be opened, for any reason but there being none, is not known, which refuses (when the process it is named for is Cineris).
+os: windows
+file: crates/cineris-sandbox/src/session.rs
+in: in_the_job_of
+find: if error.raw_os_error() == i32::try_from(ERROR_FILE_NOT_FOUND).ok() {
+replace: if true {
+caught-by:
+    cineris-sandbox session::sys::tests::sys_a_harnesss_job_that_cannot_be_opened_is_not_known
+
+[break] session-linux-name-alone
+rule: On Linux a process is Cineris by this very file, or by its name and its file's name together, never by its name alone.
+os: linux
+file: crates/cineris-sandbox/src/session.rs
+find: let cineris = same_binary(own, pid) || (named(own, name) && file_named(own, pid));
+replace: let cineris = same_binary(own, pid) || named(own, name);
+caught-by:
+    cineris-sandbox session::sys::tests::sys_a_program_named_cin_that_is_another_is_not_cineris
+
+[break] core-level-raised-past-the-cap
+rule: A core that holds its sessions at a level at most refuses a change of a session's level past it.
+file: crates/cineris-core/src/core.rs
+find: inner.within_the_cap(&level)?;
+replace: let _ = &level;
+caught-by:
+    cineris-core::it settings::a_level_change_past_the_cores_cap_is_refused
+
+[break] store-lock-waited-for-without-end
+rule: A store's lock held by another process is waited for no longer than asked, then refused, naming the file.
+file: crates/cineris-base/src/private/mod.rs
+find: Err(TryLockError::WouldBlock) if Instant::now() < deadline => {
+replace: Err(TryLockError::WouldBlock) if Instant::now() < deadline + Duration::from_secs(3600) => {
+caught-by:
+    cineris-base private::tests::a_held_lock_is_waited_for_no_longer_than_asked
+
+[break] store-lock-file-not-named
+rule: A lock held too long names its store's file, under `~` where it is in the home directory.
+file: crates/cineris-base/src/private/mod.rs
+in: under_home
+find: Some(rest) => format!("~{}{}", std::path::MAIN_SEPARATOR, rest.display()),
+replace: Some(_) => file.display().to_string(),
+caught-by:
+    cineris-base private::tests::a_file_in_the_home_directory_is_shown_under_the_tilde
+
+[break] approving-fed-line-unread
+rule: What a line feeds a program that runs it (a pipe into a shell, a substitution `eval`s) is read as a line: the line's printers are no printers.
+file: crates/cineris-policy/src/approving.rs
+in: Reader::in_parts
+find: .replace(lines.iter().any(|words| reads_a_line(words)));
+replace: .replace(false);
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+    cineris-policy::it commands::the_engine_without_a_grammar_refuses_the_tables_lines
+
+[break] approving-fed-text-unread
+rule: In a line read as text, what is fed to a program that runs it is read as a line.
+file: crates/cineris-policy/src/approving.rs
+find: let fed = self.fed.get() || segments.iter().any(|words| reads_a_line(words));
+replace: let fed = self.fed.get();
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+    cineris-policy::it commands::the_engine_without_a_grammar_refuses_the_tables_lines
+
+[break] approving-daemon-runners-not-runners
+rule: The runners of a line that reach a daemon or a service (`at`, `crontab`, `schtasks`, `wmic`, `Invoke-WmiMethod`…) run what their words say.
+file: crates/cineris-policy/src/approving.rs
+find: "schtasks"
+replace: "schtasks-not"
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+    cineris-policy::it commands::the_engine_without_a_grammar_refuses_the_tables_lines
+
+[break] approving-typed-keys-unread
+rule: The keys `tmux`, `screen`, `xdotool`, `ydotool` and `wtype` are told to type are read as a line, joined.
+file: crates/cineris-policy/src/approving.rs
+find: let keys = typed(&name, &words[program + 1..]);
+replace: let keys = String::new();
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+    cineris-policy::it commands::the_engine_without_a_grammar_refuses_the_tables_lines
+
+[break] approving-version-suffix-kept
+rule: A shell or an interpreter with a version after its name (`python3.12`, `lua5.4`, `bash5`) is the shell or the interpreter.
+file: crates/cineris-policy/src/approving.rs
+in: kind_of
+find: let bare = name.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.');
+replace: let bare = name;
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+    cineris-policy::it commands::the_engine_without_a_grammar_refuses_the_tables_lines
+
+[break] approving-code-cluster-unread
+rule: An interpreter's code flag last in a cluster of short flags (`-Ic`, `-we`) gives its code.
+file: crates/cineris-policy/src/approving.rs
+in: gives_code
+find: let cluster = flag.len() > 2
+replace: let cluster = false && flag.len() > 2
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+    cineris-policy::it commands::the_engine_without_a_grammar_refuses_the_tables_lines
+
+[break] approving-missing-shells-unread
+rule: `nu`, `xonsh`, `elvish`, `yash`, `oksh`, `osh`, `rc` and `hush` are shells, whose `-c` line is read.
+file: crates/cineris-policy/src/approving.rs
+find: "su", "runuser", "nu", "xonsh", "elvish", "yash", "oksh", "osh", "rc", "hush"
+replace: "su", "runuser"
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+    cineris-policy::it commands::the_engine_without_a_grammar_refuses_the_tables_lines
+
+[break] approving-line-flags-unread
+rule: A line one word of a program's flag gives (`flock -c`, `rsync -e`, `tar -I`, `zip -TT`, `man -P`…) is read as a line.
+file: crates/cineris-policy/src/approving.rs
+find: if let Some((_, flags, line)) = LINE_FLAGS.iter().find(|(name, _, _)| *name == owner)
+replace: if let Some((_, flags, line)) = LINE_FLAGS.iter().find(|_| false)
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+    cineris-policy::it commands::the_engine_without_a_grammar_refuses_the_tables_lines
+
+[break] approving-git-lines-unread
+rule: `git`'s configuration values that are lines (`core.pager`, `core.fsmonitor`, an `alias.*` with `!`) are read as lines; `git` otherwise only prints.
+file: crates/cineris-policy/src/approving.rs
+in: Reader::git_lines
+find: if !alias && !GIT_LINES.contains(&key.as_str()) {
+replace: if true {
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+    cineris-policy::it commands::the_engine_without_a_grammar_refuses_the_tables_lines
+
+[break] approving-sed-edit-read-as-a-line
+rule: A `sed` script that runs no line (no `e`) is no line: its words are not read as one (a false refusal of the review).
+file: crates/cineris-policy/src/approving.rs
+find: && (name != "sed" || self.fed.get() || sed_runs(word));
+replace: ;
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+    cineris-policy::it commands::the_engine_without_a_grammar_refuses_the_tables_lines
+
+[break] approving-braced-name-passed
+rule: A brace expansion one of whose words is a name of Cineris (`{cin,} ext add`) is refused as hidden. Since the narrow re-check of the third part (M2'), a line read as text also has its words read as code, a brace and a comma as blanks, which refuses each such line by the subcommand it names, so no line of the table tells this reading's refusal apart: it is kept as a second reading, and the break survives.
+file: crates/cineris-policy/src/approving.rs
+find: if posix && braced_name(&plain(text, "\\'\"`"), |word| self.is_own(word)) {
+replace: if false {
+expect: survives
+
+[break] approving-expanded-name-passed
+rule: A word the shell completes that names Cineris at a program's place (`cin${IFS}ext`) is refused as hidden.
+file: crates/cineris-policy/src/approving.rs
+find: if placed && names_through_expansion(word, |piece| self.is_own(piece)) {
+replace: if false {
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+    cineris-policy::it commands::the_engine_without_a_grammar_refuses_the_tables_lines
+
+[break] approving-continuations-kept
+rule: A line's continuations are taken out before it is read (`ci\\⏎neris`).
+file: crates/cineris-policy/src/approving.rs
+in: refused
+find: .filter(|joined| joined != command)
+replace: .filter(|_| false)
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+    cineris-policy::it commands::the_engine_without_a_grammar_refuses_the_tables_lines
+
+[break] approving-powershell-arrays-unread
+rule: PowerShell's arrays, groups and casts are a native program's words (`cin ext @('add','C:\\x')`).
+file: crates/cineris-policy/src/approving.rs
+find: found = self.in_plain(&arrays);
+replace: let _ = arrays;
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+    cineris-policy::it commands::the_engine_without_a_grammar_refuses_the_tables_lines
+
+[break] approving-look-alikes-kept
+rule: Look-alike letters in a name are read as the Latin ones of Cineris's names (`ｃｉｎ`, `cın`, `cinerıſ`).
+file: crates/cineris-policy/src/approving.rs
+in: folded
+find: 'ſ' | 'ѕ' | 'ꜱ' | 'ś' | 'š' | 'ş' | 'ș' => Some('s'),
+replace: 'ѕ' | 'ꜱ' | 'ś' | 'š' | 'ş' | 'ș' => Some('s'),
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+    cineris-policy::it commands::the_engine_without_a_grammar_refuses_the_tables_lines
+
+[break] approving-cmd-glued-switch-unread
+rule: `cmd`'s `/c` with its line glued to it (`/ccin`) is read as `/c` and the line.
+file: crates/cineris-policy/src/approving.rs
+in: cmd_switches
+find: if (lower.starts_with("/c") || lower.starts_with("/k")) && word.len() > 2 {
+replace: if false {
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+    cineris-policy::it commands::the_engine_without_a_grammar_refuses_the_tables_lines
+
+[break] approving-lone-version-refused
+rule: The help or the version alone, with nothing after it, runs nothing that is refused, however the line was read (the review's false refusals).
+file: crates/cineris-policy/src/approving.rs
+in: Reader::run
+find: && matches!(only.as_str(), "-h" | "--help" | "-V" | "--version")
+replace: && false
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+    cineris-policy::it commands::the_engine_without_a_grammar_refuses_the_tables_lines
+
+[break] approving-printed-escapes-unread
+rule: What `printf` prints of a line fed to a program, `\\n` and `\\t` read as a break and a tab, is read as a line.
+file: crates/cineris-policy/src/approving.rs
+in: Reader::read
+find: if text.contains("\\n") || text.contains("\\t") {
+replace: if false {
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+    cineris-policy::it commands::the_engine_without_a_grammar_refuses_the_tables_lines
+
+# The narrow re-check of the third part's fixes: M1', a line's continuations
+# joined in one pass and read once, the longest line first, and the braces'
+# scans in one pass; M2', a native program's words read as code.
+
+[break] approving-longest-unbounded
+rule: Past the longest line it reads, the check asks only whether the line names Cineris, and refuses it where it does.
+file: crates/cineris-policy/src/approving.rs
+in: read_line
+find: if command.len() > LONGEST {
+replace: if false {
+caught-by:
+    cineris-policy approving::tests::a_line_that_nests_or_repeats_without_end_is_refused_soon
+
+[break] approving-continuations-read-again
+rule: A line's continuations are joined in one pass, and the line that makes is read once: never read again for each continuation, which overflowed the stack.
+file: crates/cineris-policy/src/approving.rs
+in: refused
+find:
+    .then(|| joined(command, shell))
+        .filter(|joined| joined != command);
+    if let Some(joined) = &joined
+        && let Some(refusal) = read_line(joined, shell, own)
+replace:
+    .then(|| command.replacen("\\\n", "", 1))
+        .filter(|joined| joined != command);
+    if let Some(joined) = &joined
+        && let Some(refusal) = refused(joined, shell, Some(own))
+caught-by:
+    cineris-policy approving::tests::a_line_that_nests_or_repeats_without_end_is_refused_soon
+
+[break] approving-brace-names-searched-from-each-brace
+rule: A brace expansion's words are found in one pass that remembers its `{`: never by a search for the `}` from each `{`, which was quadratic.
+file: crates/cineris-policy/src/approving.rs
+in: braced_name
+find:
+    brace_expansions(text)
+        .into_iter()
+        .any(|(open, close)| text[open + 1..close].split(['{', ',', '.']).any(&own))
+replace:
+    (0..text.len())
+        .filter(|at| text.is_char_boundary(*at) && text[*at..].starts_with('{'))
+        .any(|open| {
+        let after = &text[open + 1..];
+        after.find('}').is_some_and(|close| {
+            let inside = &after[..close];
+            !inside.contains(char::is_whitespace)
+                && (inside.contains(',') || inside.contains(".."))
+                && inside.split(['{', ',', '.']).any(&own)
+        })
+    })
+caught-by:
+    cineris-policy approving::tests::a_line_that_nests_or_repeats_without_end_is_refused_soon
+
+[break] approving-braces-searched-from-each-brace
+rule: The brace expansions a line read as text holds are written as words the shell expands in one pass: never by a search for the `}` from each `{`, which was quadratic.
+file: crates/cineris-policy/src/approving.rs
+in: braced
+find: for (open, close) in brace_expansions(text) {
+replace:
+    let quadratic: Vec<(usize, usize)> = (0..text.len())
+        .filter(|at| text.is_char_boundary(*at) && text[*at..].starts_with('{'))
+        .filter_map(|open| text[open + 1..].find('}').map(|close| (open, open + 1 + close)))
+        .filter(|(open, close)| {
+            let inside = &text[open + 1..*close];
+            !inside.contains(char::is_whitespace) && inside.contains(',')
+        })
+        .take(1)
+        .collect();
+    for (open, close) in quadratic {
+caught-by:
+    cineris-policy approving::tests::a_line_that_nests_or_repeats_without_end_is_refused_soon
+
+[break] approving-native-code-unread
+rule: The words a native program is handed in a line read as text are read as a runtime's code reads them: a list's `[`, `]` and `,` are blanks, so `python -c '…run(["cin","ext","add"])'` in PowerShell is refused.
+file: crates/cineris-policy/src/approving.rs
+in: Reader::in_text
+find: found = self.in_plain(&plain(&native_code_words(&written), quotes));
+replace: let _ = quotes;
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+    cineris-policy::it commands::the_engine_without_a_grammar_refuses_the_tables_lines
+
+[break] session-windows-runtimes-not-walked
+rule: On Windows a service's start of a command is followed up through language runtimes as through command interpreters (`python -c`, `node -e`, a `git` alias), so a runtime between the service and the subcommand does not end the line.
+file: crates/cineris-sandbox/src/session.rs
+in: passes_through
+find: RUNTIMES.contains(&bare)
+replace: false
+caught-by:
+    cineris-sandbox session::tests::a_services_start_through_a_runtime_is_under_a_session_and_a_persons_is_not
+
+[break] session-windows-runtime-version-kept
+rule: A runtime is told by its name with a version after it taken off (`python3.12.exe`).
+file: crates/cineris-sandbox/src/session.rs
+in: passes_through
+find: let bare = bare.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.');
+replace: let bare = bare.trim_end_matches('.');
+caught-by:
+    cineris-sandbox session::tests::a_services_start_through_a_runtime_is_under_a_session_and_a_persons_is_not
+
+[break] session-windows-service-start-before-a-harness-counted
+rule: On Windows a service's start counts only when the process the service started on the line was made after a harness of the user's that runs now began: a terminal a logon task, or a service host for `runas`, opened before any harness is the person's own.
+file: crates/cineris-sandbox/src/session.rs
+in: started_by_a_service
+find: if began.is_none_or(|began| made <= began) {
+replace: if false {
+caught-by:
+    cineris-sandbox session::tests::a_services_start_counts_only_after_a_running_harness_began
+
+[break] session-windows-service-start-with-no-harness-counted
+rule: On Windows, with no harness of the user's running, nothing a service started counts as a session's command.
+file: crates/cineris-sandbox/src/session.rs
+in: started_by_a_service
+find: began.is_none_or(|began| made <= began)
+replace: began.is_some_and(|began| made <= began)
+caught-by:
+    cineris-sandbox session::tests::a_services_start_counts_only_after_a_running_harness_began
+
+[break] session-windows-running-harness-not-noted
+rule: On Windows a running harness of the user's, whose job a process outside it finds, says when harnesses began, which a service's start is weighed against.
+os: windows
+file: crates/cineris-sandbox/src/session.rs
+find: Job::Elsewhere => began = Some(began.map_or(made, |began| began.min(made)))
+replace: Job::Elsewhere => {}
+caught-by:
+    cineris-sandbox::it session::sys_a_service_hosts_start_after_a_harness_began_is_under_a_session
+
+[break] session-linux-a-name-not-utf8-read-as-another
+rule: On Linux a process of the line whose `stat` is not UTF-8 leaves the line not known, which refuses: its `stat` read in one call keeps the strict reading that `read_to_string` made, so a copy of the harness under such a name does not pass for another program.
+os: linux
+file: crates/cineris-sandbox/src/session.rs
+in: stat_of
+find: String::from_utf8(text).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+replace: Ok(String::from_utf8_lossy(&text).into_owned())
+caught-by:
+    cineris-sandbox session::sys::tests::sys_a_name_that_is_not_utf8_leaves_the_line_not_known
+
+[break] session-windows-list-misreads-when-a-process-was-made
+rule: On Windows the system's list of processes, read in one call, gives each process when it was made as `GetProcessTimes` does: a harness's job is named for that count, so a misread one would find no harness.
+os: windows
+file: crates/cineris-sandbox/src/session.rs
+in: records
+find: made.copy_from_slice(&entry.Reserved1[24..32]);
+replace: made.copy_from_slice(&entry.Reserved1[16..24]);
+caught-by:
+    cineris-sandbox session::sys::tests::sys_the_list_of_processes_gives_each_when_it_was_made
+    cineris-sandbox session::sys::tests::sys_a_process_opened_is_described_as_the_list_says
+
+[break] session-windows-scheduler-asked-always
+rule: On Windows the service manager is asked which host runs the task scheduler only where a line of parents reaches a service host: a headless run's line from a terminal or a runner's step asks it nothing at its start.
+file: crates/cineris-sandbox/src/session.rs
+in: started_by_a_service
+find: let asked = (name == "svchost.exe").then(&scheduler);
+replace: let asked = Some(scheduler()).filter(|_| name == "svchost.exe");
+caught-by:
+    cineris-sandbox session::tests::the_scheduler_is_asked_only_where_the_line_reaches_a_service_host
+
+[break] session-windows-named-job-read-as-another-instance
+rule: A harness's job found among the logon session's named objects gives back the process instance its name was made for: a misread one would find no harness.
+file: crates/cineris-sandbox/src/session.rs
+in: harness_named
+find: .then_some((pid, made))
+replace: .then_some((pid, made + 1))
+caught-by:
+    cineris-sandbox session::tests::a_harnesss_job_is_known_by_its_name_in_the_namespace
+
+[break] session-line-closed-process-taken-for-its-end
+rule: A line of parents read by opening its processes takes the system's list where it meets one that cannot be opened (a service's host, whose name only the list gives), and never ends there.
+file: crates/cineris-sandbox/src/session.rs
+in: line_of
+find: Described::Closed => return None
+replace: Described::Closed => break
+caught-by:
+    cineris-sandbox session::tests::the_line_is_described_by_opening_each_process_and_the_list_taken_at_a_closed_one
+
+[break] session-windows-described-name-not-lowered
+rule: On Windows a process opened to read its line of parents is named as the system's list names it, in lower case, so that the interpreters and the services' hosts are told as before.
+os: windows
+file: crates/cineris-sandbox/src/session.rs
+in: described
+find: let name = path.rsplit('\\').next().unwrap_or(&path).to_lowercase();
+replace: let name = path.rsplit('\\').next().unwrap_or(&path).to_owned();
+caught-by:
+    cineris-sandbox session::sys::tests::sys_a_process_opened_is_described_as_the_list_says
+
+[break] session-windows-job-security-inherits
+rule: On Windows the harness's job's security is protected, as its text's `P` made it: nothing is inherited into it.
+os: windows
+file: crates/cineris-sandbox/src/session.rs
+in: OwnerOnly::new
+find: failed(SetSecurityDescriptorControl(pointer, SE_DACL_PROTECTED, SE_DACL_PROTECTED))?;
+replace: failed(SetSecurityDescriptorControl(pointer, SE_DACL_PROTECTED, 0))?;
+caught-by:
+    cineris-sandbox session::sys::tests::sys_the_jobs_security_is_its_text
+
+# The review of the start-up's fix: a listing of the named objects joined
+# from several calls could skip a harness's job.
+
+[break] session-listing-joined-from-its-calls
+rule: A listing of the logon session's named objects is taken whole by one call, each call from the first entry: one joined from several calls, each going on from where the last stopped, skips the entries that moved when others were removed between the calls, and could miss a harness's job.
+file: crates/cineris-sandbox/src/session.rs
+in: in_one_call
+find: let (mut room, most) = rooms; loop { let (mut from, mut found) = (0, Vec::new());
+replace: let (mut room, most) = rooms; let (mut from, mut found) = (0, Vec::new()); loop {
+caught-by:
+    cineris-sandbox session::tests::a_listing_that_needs_more_than_one_call_is_taken_again_whole_and_never_joined
+
+[break] session-listing-part-trusted
+rule: A call that listed the named objects and left entries out is never taken for the whole listing: the listing is asked again from its first entry, in a larger room.
+file: crates/cineris-sandbox/src/session.rs
+in: in_one_call
+find: Called::Part if room < most => room = room.saturating_mul(2).min(most)
+replace: Called::Part if room < most => return Some(Ok(found))
+caught-by:
+    cineris-sandbox session::tests::a_listing_that_needs_more_than_one_call_is_taken_again_whole_and_never_joined
+
+[break] session-listing-bound-without-limit
+rule: A listing of the named objects is asked into rooms of at most 1 MiB, and given up past it for the system's list of processes, which one call gives whole: a namespace a command keeps growing is not asked for ever, nor into any room.
+file: crates/cineris-sandbox/src/session.rs
+find: const ROOMS: (usize, usize) = (64 * 1024, 1024 * 1024);
+replace: const ROOMS: (usize, usize) = (64 * 1024, usize::MAX);
+caught-by:
+    cineris-sandbox session::tests::a_listing_no_room_holds_is_given_up_after_the_largest
+
+[break] session-windows-past-the-bound-nothing-listed
+rule: On Windows, where no call up to the largest room lists the named objects whole, the system's list of processes is taken in their place, and a running harness is found there: never an empty or partial set.
+os: windows
+file: crates/cineris-sandbox/src/session.rs
+in: harnesses
+find: Ok(None) | Err(_) => {
+replace: Ok(None) => Ok((Vec::new(), Source::Namespace)), Err(_) => {
+caught-by:
+    cineris-sandbox session::sys::tests::sys_a_listing_that_needs_more_than_one_call_takes_the_list_of_processes
+
+[break] session-windows-line-of-parents-not-asked
+rule: On Windows the jobs of the processes of the line of parents are asked first, each by its name, before anything is listed: a session's command's own harness is found there whatever a listing misses.
+os: windows
+file: crates/cineris-sandbox/src/session.rs
+find: let parents = super::parents(own, |pid, judged| lineage(pid, judged, &binary));
+replace: let parents = super::parents(own, |pid, judged| lineage(pid, judged, &binary)).into_iter().take(0).collect::<Vec<_>>();
+caught-by:
+    cineris-sandbox session::sys::tests::sys_a_harness_on_the_line_of_parents_is_found_with_nothing_listed
+    cineris-sandbox session::sys::tests::sys_a_command_outside_its_harnesss_job_is_refused_by_its_harnesss_program
+
+[break] session-line-of-parents-stops-at-other-programs
+rule: The line of parents whose jobs are asked first is read through any program, not only the interpreters a service's start is followed through: a harness's command may run under `make` or a test runner.
+file: crates/cineris-sandbox/src/session.rs
+in: parents
+find: let harness = runs == Runs::Sessions;
+replace: if !passes_through(&process.name) { break; } let harness = runs == Runs::Sessions;
+caught-by:
+    cineris-sandbox session::tests::the_line_of_parents_is_read_through_any_program_to_its_end
+
+[break] session-line-of-parents-past-a-later-process
+rule: The line of parents whose jobs are asked stops at a process made after the one below it, which has the id of a parent that has gone.
+file: crates/cineris-sandbox/src/session.rs
+in: parents
+find: if process.made > below.made {
+replace: if process.made > below.made && false {
+caught-by:
+    cineris-sandbox session::tests::the_line_of_parents_is_read_through_any_program_to_its_end
+
+# A Windows flake (2 of 100 stress repeats): a test's job made to deny its
+# opening, named for its own process, made another test's check, run while
+# it stood, refuse.
+
+[break] session-job-not-known-wins-over-one-that-holds
+rule: Being in a harness's job wins over another harness's job that cannot be told, met first: both refuse, and only the reason changes.
+file: crates/cineris-sandbox/src/session.rs
+in: judged
+occurrence: 2
+find: Job::Unknown(what) => { unknown.get_or_insert(what); }
+replace: Job::Unknown(what) => return Under::Unknown(what),
+caught-by:
+    cineris-sandbox session::tests::being_in_a_harnesss_job_wins_over_another_job_that_cannot_be_told
+
+[break] session-windows-other-programs-denied-job-not-known
+rule: On Windows a job of a harness's name that cannot be opened, named for a process that is not Cineris, is passed over: a job made to deny its opening for any other running program does not make the check refuse.
+os: windows
+file: crates/cineris-sandbox/src/session.rs
+in: in_the_job_of
+find: NamedFor::Other => Job::None
+replace: NamedFor::Other => Job::Unknown(cannot)
+caught-by:
+    cineris-sandbox session::sys::tests::sys_a_job_that_cannot_be_opened_named_for_another_program_is_passed_over
+
+[break] session-windows-cineris-denied-job-passed-over
+rule: On Windows a job of a harness's name that cannot be opened, named for a process of Cineris, is not known, which refuses.
+os: windows
+file: crates/cineris-sandbox/src/session.rs
+in: in_the_job_of
+find: NamedFor::Cineris => Job::Unknown(cannot)
+replace: NamedFor::Cineris => Job::None
+caught-by:
+    cineris-sandbox session::sys::tests::sys_a_harnesss_job_that_cannot_be_opened_is_not_known
+
+[break] session-windows-owner-may-change-the-job
+rule: On Windows the harness's job's owner may only ask about it, as its user may: the harness's own handle of the job then has no right to change who may open it, so a command that takes that handle cannot make the job unopenable.
+os: windows
+file: crates/cineris-sandbox/src/session.rs
+in: OwnerOnly::new
+find: ACL_REVISION, BY_NAME, owner_sid
+replace: ACL_REVISION, 0x001F_001F, owner_sid
+caught-by:
+    cineris-sandbox session::sys::tests::sys_a_command_cannot_make_its_harnesss_job_unopenable
+    cineris-sandbox session::sys::tests::sys_the_jobs_security_is_its_text
+
+[break] session-windows-copy-taken-for-the-same-file
+rule: On Windows a program is Cineris by this very file, its volume and its index, or by its file's name: a renamed copy of the binary is another file, and is not.
+os: windows
+file: crates/cineris-sandbox/src/session.rs
+in: same_file
+find: own.file().is_some_and(|own| FileIdentity::at(image).ok() == Some(own))
+replace: own.file().is_some_and(|own| FileIdentity::at(image).is_ok())
+caught-by:
+    cineris-sandbox session::sys::tests::sys_cineris_is_told_by_its_file_or_by_its_name
+
+[break] session-windows-names-not-told
+rule: On Windows a program whose file is named `cineris.exe` or `cin.exe`, in any case and wherever it is installed, is Cineris.
+os: windows
+file: crates/cineris-sandbox/src/session.rs
+in: named_as_cineris
+find: name == "cineris.exe" || name == "cin.exe" ||
+replace: false ||
+caught-by:
+    cineris-sandbox session::sys::tests::sys_cineris_is_told_by_its_file_or_by_its_name
+    cineris-sandbox session::sys::tests::sys_a_command_outside_its_harnesss_job_is_refused_by_its_harnesss_program
+
+[break] unmarked-headless-run-not-held
+rule: A headless run whose mark of its sessions' commands failed holds its session at `supervised` at most, whatever its configuration says.
+file: crates/cineris-cli/src/headless.rs
+in: start_core
+find: options.level_at_most = Some(crate::UNMARKED_LEVEL);
+replace: options.level_at_most = None;
+caught-by:
+    cineris-cli::system commands::sys_a_harness_whose_mark_failed_holds_its_sessions_at_supervised_and_says_so
+
+[break] unmarked-headless-run-silent
+rule: A headless run whose mark failed says so on standard error.
+file: crates/cineris-cli/src/headless.rs
+in: write_result
+find: front.say(&unmarked);
+replace: let _ = &unmarked;
+caught-by:
+    cineris-cli::system commands::sys_a_harness_whose_mark_failed_holds_its_sessions_at_supervised_and_says_so
+
+[break] unmarked-headless-result-names-another-level
+rule: A headless run whose mark failed says in its result's `capped` the level it was held at, `supervised`.
+file: crates/cineris-cli/src/headless.rs
+in: write_result
+find: level: crate::UNMARKED_LEVEL
+replace: level: cineris_protocol::lease::Level::ReadOnly
+caught-by:
+    cineris-cli::system commands::sys_a_harness_whose_mark_failed_holds_its_sessions_at_supervised_and_says_so
+
+[break] unmarked-server-not-held
+rule: A server whose mark failed makes its sessions at `supervised` at most, and refuses a raise past it by `session/set`.
+file: crates/cineris-cli/src/serve.rs
+find: options.level_at_most = Some(crate::UNMARKED_LEVEL);
+replace: options.level_at_most = None;
+caught-by:
+    cineris-cli::system commands::sys_a_harness_whose_mark_failed_holds_its_sessions_at_supervised_and_says_so
+
+[break] unmarked-application-silent
+rule: The application whose mark failed says so among its first notices.
+file: crates/cineris-cli/src/interactive.rs
+find: notices.extend(unmarked);
+replace: notices.extend(None::<String>);
+caught-by:
+    cineris-cli::system commands::sys_a_harness_whose_mark_failed_holds_its_sessions_at_supervised_and_says_so
+
+[break] core-cap-worded-for-another-cause
+rule: A refused raise past the level a core holds its sessions at says that cap's own cause, as its front end gave it: a harness that could not mark its commands, or a headless run under a session's command.
+file: crates/cineris-core/src/core.rs
+in: Inner::within_the_cap
+find: self.options.level_at_most_why.as_deref().unwrap_or("it was started so")
+replace: "it could not mark its commands as a session's"
+packages: cineris-core, cineris-cli
+caught-by:
+    cineris-core::it settings::a_level_change_past_the_cores_cap_is_refused
+
+[break] skills-read-follows-a-link-swapped-in-after-the-look
+rule: A skill's `SKILL.md` is read through handles from its root, following no link below it: a folder swapped for a link to one outside the root between the look and the read is refused, never read through.
+file: crates/cineris-ext/src/skills.rs
+in: read_capped
+find: Some((first, rest)) => held.folder().folder(first)
+replace: Some((first, rest)) => cineris_sandbox::unfollowed::Folder::open_following(&root.join(first))
+caught-by:
+    cineris-ext skills::tests::a_folder_swapped_for_a_link_after_its_look_is_never_read_through
+
+[break] credentials-lock-waits-without-end
+rule: A change of the credentials file (`cineris auth login`, an approving subcommand) waits for another hold of its lock no longer than the other stores' locks, and is then refused naming the file: a hold that does not end cannot hang it.
+file: crates/cineris-config/src/credentials/file.rs
+in: FileStore::lock
+find: match private::lock_within(&file, &self.path, self.lock_wait) {
+replace: match file.lock() {
+caught-by:
+    cineris-config credentials::file::lock_tests::a_change_the_lock_is_held_from_past_its_wait_is_refused_naming_the_file
+
+[break] credentials-lock-wait-not-the-stores
+rule: The credentials file's lock waits as long as every other store's lock (`LOCK_WAIT`), no longer.
+file: crates/cineris-config/src/credentials/file.rs
+in: FileStore::new
+find: lock_wait: private::LOCK_WAIT
+replace: lock_wait: Duration::from_secs(60)
+caught-by:
+    cineris-config credentials::file::lock_tests::a_change_the_lock_is_held_from_past_its_wait_is_refused_naming_the_file
+
+[break] approving-native-escaped-quote-kept
+rule: In a native program's words, `\"` is a quote, as a Windows program reads its command line: `[\"cin\",\"ext\",\"add\"]` given to a service is refused.
+file: crates/cineris-policy/src/approving.rs
+in: native_code_words
+find: text.replace("\\\"", "\"")
+replace: text.to_owned()
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+    cineris-policy::it commands::the_engine_without_a_grammar_refuses_the_tables_lines
+
+# The narrow re-check of the managing part: a line of many names of
+# Cineris, each reading the rest of the line again.
+
+[break] approving-each-name-reads-the-rest-of-the-line
+rule: A run of Cineris is read with at most `RUN_WORDS` words after its name, and one with more is refused wherever it stands: no name reads the rest of the line, so that the pass over a line of many names is linear in it.
+file: crates/cineris-policy/src/approving.rs
+in: Reader::run
+find: if rest.len() > RUN_WORDS {
+replace: if false {
+caught-by:
+    cineris-policy approving::tests::the_words_the_runs_of_a_line_read_are_bounded
+
+[break] approving-runs-read-without-a-cap
+rule: One check reads at most `MENTIONS` runs of Cineris, every reading of the line counted: past them, the line is refused, so that a line of many short runs is refused soon.
+file: crates/cineris-policy/src/approving.rs
+in: Reader::run
+find: if mentions > MENTIONS {
+replace: if false {
+caught-by:
+    cineris-policy approving::tests::the_words_the_runs_of_a_line_read_are_bounded
+    cineris-policy approving::tests::a_line_that_nests_or_repeats_without_end_is_refused_soon
+
+# The narrow re-check of the managing part: a folder above a root of skills
+# or of extensions, inside the workspace, swapped for a link between the
+# root's look and its read.
+
+[break] skills-root-opened-again-by-its-path
+rule: A skill's `SKILL.md` is read from the root that was listed, through its handle: never from the root opened again by its path, which follows a folder above it that was swapped for a link.
+os: linux
+file: crates/cineris-ext/src/skills.rs
+in: read_capped
+find: Some((first, rest)) => held.folder().folder(first)
+replace: Some((first, rest)) => cineris_sandbox::unfollowed::Folder::open(root).and_then(|top| top.folder(first))
+caught-by:
+    cineris-ext skills::tests::sys_a_parent_of_the_root_swapped_for_a_link_as_a_skill_is_read_is_never_read_through
+
+[break] skills-root-changed-taken
+rule: A root of skills is opened again after its skills are read, and one whose place no longer leads to the folder held has its skills left out, said.
+os: linux
+file: crates/cineris-ext/src/skills.rs
+in: look_in
+find: if candidates.len() > first && !held.unchanged() {
+replace: if false {
+caught-by:
+    cineris-ext skills::tests::sys_a_root_that_changed_as_its_skills_were_read_is_left_out_and_said
+
+[break] held-root-opened-by-its-path
+rule: A root of skills or of extensions in the workspace is opened from the workspace down, no name followed: a folder above it swapped for a link after the root was judged is refused, never opened through.
+file: crates/cineris-ext/src/folder.rs
+in: HeldRoot::open
+find: Some(below) => Folder::open_below(workspace, &below)?
+replace: Some(_) => Folder::open(real)?
+caught-by:
+    cineris-ext skills::tests::sys_a_parent_of_the_root_swapped_for_a_link_before_it_is_opened_is_never_read_through
+    cineris-ext discover::tests::sys_a_parent_of_the_root_swapped_for_a_link_before_it_is_opened_is_never_read_through
+
+[break] found-read-by-its-path
+rule: An extension's folder is read in the root that was listed, through its handle: never by its path, which follows a folder above the root that was swapped for a link.
+os: linux
+file: crates/cineris-ext/src/discover.rs
+in: extension_in
+find: let (read, read_bytes) = Snapshot::read_in(held, name);
+replace: let (read, read_bytes) = Snapshot::read_counted(&folder);
+caught-by:
+    cineris-ext discover::tests::sys_a_parent_of_the_root_swapped_for_a_link_as_an_extension_is_read_is_never_read_through
+
+[break] found-root-changed-taken
+rule: A root of extensions is opened again after its folders are read, and one whose place no longer leads to the folder held has its extensions left out, said, and is not listed whole.
+os: linux
+file: crates/cineris-ext/src/discover.rs
+in: look_in
+find: if discovered.found.len() > first && !held.unchanged() {
+replace: if false {
+caught-by:
+    cineris-ext discover::tests::sys_a_root_that_changed_as_its_extensions_were_read_is_left_out_and_said
+
+[break] unfollowed-below-follows-a-link
+rule: A folder opened below a place follows no link at any name below it: one swapped for a link is refused.
+file: crates/cineris-sandbox/src/unfollowed.rs
+in: Folder::open_below
+find: std::path::Component::Normal(name) => folder = folder.folder(name)?,
+replace: std::path::Component::Normal(_) => folder = Self::open_following(&anchor.join(below))?,
+caught-by:
+    cineris-sandbox unfollowed::tests::a_folder_below_a_place_follows_no_link_on_the_way_and_is_known_by_its_identity
+
+# The maintainers' rule for the third part, with the reviewer: on Windows a
+# process of the line of parents that is a harness by its program and its
+# arguments makes the process under it a session's command, whatever its
+# place in that harness's job.
+
+[break] session-ancestor-harness-not-decisive
+rule: A process of the line of parents that is a harness by its program and its arguments makes the process under it a session's command, whatever its place in that harness's job: outside it, with no job of its name, or one that cannot be told.
+file: crates/cineris-sandbox/src/session.rs
+in: judged
+find: Runs::Sessions => { return Under::Session(format!("process {pid} runs Cineris's sessions")); }
+replace: Runs::Sessions => {}
+caught-by:
+    cineris-sandbox session::tests::a_harness_on_the_line_of_parents_is_a_session_whatever_its_job
+
+[break] session-windows-ancestor-asked-membership-only
+rule: On Windows each process of the line of parents above this one is asked whether it is a harness by its program and its arguments, and not only whether this process is in its job: a command its harness started outside its job is refused.
+os: windows
+file: crates/cineris-sandbox/src/session.rs
+in: lineage
+find: let runs = if judged {
+replace: let runs = if false && judged {
+caught-by:
+    cineris-sandbox session::sys::tests::sys_a_command_outside_its_harnesss_job_is_refused_by_its_harnesss_program
+
+[break] session-unread-arguments-run-no-session
+rule: A process of Cineris whose arguments cannot be read counts as running sessions, failing closed.
+file: crates/cineris-sandbox/src/session.rs
+in: runs_cineris_sessions
+find: cineris && arguments.is_none_or(runs_sessions)
+replace: cineris && arguments.is_some_and(runs_sessions)
+caught-by:
+    cineris-sandbox session::tests::a_harness_is_told_by_its_program_and_its_arguments
+
+[break] session-windows-harness-arguments-ignored
+rule: On Windows a process of the line of parents that is Cineris is a harness only when its command line is not a subcommand that runs no session: one running `cineris ext` or `cineris config edit` is not.
+os: windows
+file: crates/cineris-sandbox/src/session.rs
+in: by_program
+find: super::runs_cineris_sessions(cineris, arguments.as_deref())
+replace: super::runs_cineris_sessions(cineris, arguments.as_deref().filter(|_| false))
+caught-by:
+    cineris-sandbox session::sys::tests::sys_a_command_outside_its_harnesss_job_is_refused_by_its_harnesss_program
+
+[break] session-windows-same-size-not-opened
+rule: On Windows a program whose image is of this binary's size is judged by its file's identity, so that a hard link of this binary under another name is Cineris; only one of another size is passed over without opening its file.
+os: windows
+file: crates/cineris-sandbox/src/session.rs
+in: same_file
+find: size().is_some_and(|theirs| theirs != own)
+replace: size().is_some_and(|theirs| theirs == own)
+caught-by:
+    cineris-sandbox session::sys::tests::sys_a_programs_size_decides_whether_its_file_is_opened
+
+[break] session-quoted-subcommand-not-read
+rule: A Windows command line's quoted word is read without its quotes, as the program reads its own: `cin "config" edit` runs no session.
+file: crates/cineris-sandbox/src/session.rs
+in: command_words
+find: '"' => quoted = true,
+replace: '"' => word.push('"'),
+caught-by:
+    cineris-sandbox session::tests::the_words_of_a_windows_command_line_are_read_as_rust_reads_its_own
+    cineris-sandbox session::tests::a_harness_is_told_by_its_program_and_its_arguments
