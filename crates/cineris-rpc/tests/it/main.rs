@@ -454,3 +454,83 @@ impl Wire {
         wire
     }
 }
+
+/// A world whose hook command and whose extension's program each connect
+/// to the server's own place, as `connect` does (Python's lines, which set
+/// `d` to what was read and `opened` to whether the place opened), and
+/// answer, as their `session.start` hook's context, what they read: the
+/// socket's check of the server's own commands, met by a hook and by
+/// `cineris.exec` (since step 28's third pull request). Python is `python`
+/// on Windows and `python3` elsewhere; `None` where it is not found, and
+/// the test then says it was not run (it must run where `CI` is set).
+pub fn probing(test: &str, connect: &str) -> Option<(World, CoreThread)> {
+    let python = if cfg!(windows) { "python" } else { "python3" };
+    let found = std::env::var_os("PATH").is_some_and(|path| {
+        std::env::split_paths(&path).any(|dir| {
+            dir.is_absolute()
+                && (dir.join(python).is_file() || dir.join(format!("{python}.exe")).is_file())
+        })
+    });
+    if !found {
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "{python} is not on this runner's PATH"
+        );
+        eprintln!("not run: {python} is not on the PATH here");
+        return None;
+    }
+    let script = format!(
+        "import sys\nopened = False\ntry:\n{connect}\nexcept OSError:\n    d = b''\n\
+         print('{{\"context\": \"%s opened %s read %d bytes\"}}' % (sys.argv[1], opened, len(d)))\n"
+    );
+    // A hook of the user's own, and nothing confined: what refuses a probe
+    // is the socket's own check.
+    let world = World::with_config(
+        test,
+        &format!(
+            "[permissions]\nmode = \"unrestricted\"\n\n[sandbox]\nenabled = false\n\n\
+             [hooks.probe]\nevent = \"session.start\"\n\
+             command = [\"{python}\", \"-c\", '''{script}''', \"hook\"]\n"
+        ),
+    );
+    let folder = world
+        .dirs()
+        .config
+        .unwrap()
+        .join("extensions")
+        .join("prober");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(
+        folder.join("extension.toml"),
+        format!(
+            "api = 1\nname = \"prober\"\nversion = \"1\"\nmain = \"main.js\"\n\n\
+             [capabilities]\nexec = [\"{python}\"]\nhooks = [\"session.start\"]\n"
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        folder.join("main.js"),
+        format!(
+            "cineris.on('session.start', {{ timeout: 60000 }}, async () => {{\n\
+             const ran = await cineris.exec('{python}', ['-c', {}, 'exec'], {{ timeout: 60000 }});\n\
+             return JSON.parse(ran.stdout);\n}});\n",
+            serde_json::to_string(&script).unwrap()
+        ),
+    )
+    .unwrap();
+    let core = world.core();
+    let project = core.core.project(&world.workspace).unwrap();
+    let to_add = core.core.extension_to_add(&project, &folder).unwrap();
+    let adding = core.core.clone();
+    core.on(async move { adding.add_extension(to_add).await })
+        .expect("the probe extension is approved");
+    Some((world, core))
+}
+
+/// What the `probing` world's two probes said: the first request of the
+/// session's first turn, where a `session.start` hook's context is.
+pub fn probes_said(world: &World) -> String {
+    let requests = world.server.requests();
+    let first = requests.first().expect("the turn asked the model");
+    String::from_utf8_lossy(&first.body).into_owned()
+}

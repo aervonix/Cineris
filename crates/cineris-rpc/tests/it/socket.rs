@@ -335,6 +335,57 @@ fn sys_one_of_the_servers_own_commands_is_refused() {
     done.recv().unwrap();
 }
 
+/// A hook command and an extension's program (`cineris.exec`) are the
+/// server's own commands: each is a descendant of the server's process, so
+/// its connection to the socket is closed unanswered, with nothing confining
+/// it (the sandbox off), and the session's first turn is told so by their
+/// `session.start` hooks (since step 28's third pull request).
+#[test]
+fn sys_a_hook_and_an_extensions_program_are_refused_as_the_servers_own_commands() {
+    // From the workspace, where both run, to the socket.
+    let connect = "    import socket\n    s = socket.socket(socket.AF_UNIX)\n    \
+                   s.connect('../../named/rpc.sock')\n    opened = True\n    \
+                   s.sendall(b'{}\\n')\n    d = s.recv(4096)";
+    let Some((world, core)) = crate::probing("socket-own-hooks", connect) else {
+        return;
+    };
+    let path = folder(&world, "named", 0o700).join("rpc.sock");
+    let listener = bind(&path, false).unwrap();
+    let (stop, done) = serve(&core, listener, world.serve_options(), 64);
+    world.server.push(conformance::anthropic::text(&["Hello."]));
+    let mut lines = client(&path);
+    lines.initialize(conformance::initialize()).unwrap();
+    let OpResult::SessionNew(opened) = lines.call(new_session(&world.workspace)).unwrap() else {
+        panic!("not a session");
+    };
+    lines
+        .call(Op::TurnStart(cineris_protocol::methods::TurnStartParams {
+            session_id: opened.session.session_id,
+            input: vec![cineris_protocol::Part::text("hi")],
+            delivery: None,
+        }))
+        .unwrap();
+    loop {
+        if let Some(conformance::Inbound::Event(event)) = lines.next()
+            && matches!(
+                event.event,
+                cineris_protocol::event::Event::TurnCompleted(_)
+            )
+        {
+            break;
+        }
+    }
+    let said = crate::probes_said(&world);
+    for probe in ["hook", "exec"] {
+        assert!(
+            said.contains(&format!("{probe} opened True read 0 bytes")),
+            "the {probe}'s connection was answered: {said}"
+        );
+    }
+    stop.cancel();
+    done.recv().unwrap();
+}
+
 /// A connection gives its place back when it stops serving: at the most at
 /// once, the place of a client that has gone is the next client's.
 #[test]

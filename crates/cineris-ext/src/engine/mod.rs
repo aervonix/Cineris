@@ -114,6 +114,13 @@ pub fn forget_abandoned(hash: &ContentHash) {
 /// it says the call started: a test holds it to give the call up then.
 pub const AFTER_A_CALL_IS_CLAIMED: &str = "cineris-ext: after a call is claimed";
 
+/// A point of a runtime's thread after it said a call started, before it
+/// looks whether the runtime was stopped meanwhile and, if not, runs the
+/// call's script: a test holds it to stop the runtime then (since step 28's
+/// third pull request).
+pub const A_CALL_IS_STARTED: &str =
+    "cineris-ext: a call is said to have started, and its script is not begun";
+
 /// A point of a runtime's thread as a definition (`cineris.tool`,
 /// `cineris.command`, `cineris.on`) the main module made is taken, before
 /// the module goes on: a test counts it to know where the module's first
@@ -312,6 +319,11 @@ pub enum Failure {
     /// It registered nothing by that name.
     #[error("the extension has no {0}")]
     NoTarget(String),
+    /// It never ran: its runtime was torn down, or stopped, before its
+    /// script began, so nothing of it happened (since step 28's third pull
+    /// request).
+    #[error("the extension's runtime was stopped before the call ran")]
+    NotRun,
 }
 
 /// Why a runtime could not be made.
@@ -394,9 +406,17 @@ pub enum CallError {
     /// runtime with it.
     #[error("the turn was stopped: {0}")]
     Stopped(String),
-    /// The runtime is gone: torn down by a limit, or its thread ended.
+    /// The runtime is gone: torn down by a limit, or its thread ended,
+    /// after the call began.
     #[error("the extension's runtime is not running")]
     Gone,
+    /// The call never ran: it was queued under a runtime that was torn down
+    /// before its turn, or stopped as it was taken, so nothing of it
+    /// happened, and a fresh runtime may take it (since step 28's third
+    /// pull request: it said its time ran out, or that the runtime was
+    /// gone).
+    #[error("the extension's runtime was stopped before the call ran")]
+    NotRun,
     /// Another runtime of the extension left its thread running.
     #[error(
         "the extension is disabled: its script did not stop when its time was up, and its thread \
@@ -699,6 +719,8 @@ impl ScriptRuntime {
         // Set once the call has ended and its cancel has come: only its end
         // is waited for then.
         let mut ended_cancel = false;
+        // Whether the thread said the call began.
+        let mut began = false;
         loop {
             let event = poll_fn(|context| {
                 if let Poll::Ready(reply) = replies.poll_recv(context) {
@@ -716,8 +738,11 @@ impl ScriptRuntime {
             })
             .await;
             match event {
+                // The thread ended: a call it never began did not run.
+                Event::Reply(None) if !began => return Err(CallError::NotRun),
                 Event::Reply(None) => return Err(CallError::Gone),
                 Event::Reply(Some(FromThread::Started)) => {
+                    began = true;
                     if cx.asked.is_none() {
                         started = cx.clock.monotonic();
                         deadline = Some(cx.timer.sleep(cx.time));
@@ -806,6 +831,7 @@ impl ScriptRuntime {
                 }
                 Event::Reply(Some(FromThread::Done(result))) => {
                     return result.map_err(|failure| match failure {
+                        Failure::NotRun => CallError::NotRun,
                         Failure::Limit(Limit::Time) if cx.cancel.is_cancelled() => {
                             CallError::Cancelled
                         }

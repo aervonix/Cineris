@@ -247,6 +247,12 @@ impl LoadedExtension {
                 time.as_millis()
             )),
             Err(CallError::Cancelled) => HookRan::Failed("it was let go".to_owned()),
+            // Its gate refuses: what it would have answered is not known.
+            Err(CallError::NotRun) => HookRan::Failed(
+                "its extension's runtime was stopped by another of its calls before this one ran, \
+                 so it did not run"
+                    .to_owned(),
+            ),
             Err(CallError::Disabled) => HookRan::Failed(format!(
                 "{}; {}",
                 self.disabled(),
@@ -399,19 +405,6 @@ impl LoadedExtension {
         cx: &RunCx,
         out: &mut dyn ToolOutput,
     ) -> ToolResult {
-        let runtime = match self
-            .runtime(&cineris_ext::engine::StartWatch::default())
-            .await
-        {
-            Ok(runtime) => runtime,
-            Err(Refused {
-                why,
-                stand: Refusal::Plain,
-            }) => return ToolResult::error(why),
-            Err(Refused { why, stand }) => {
-                return ToolResult::error(format!("{why}; {}", self.remedy(stand)));
-            }
-        };
         let full_name = format!("{}/{tool}", self.name());
         let progress = Mutex::new(Vec::new());
 
@@ -426,21 +419,46 @@ impl LoadedExtension {
             phase: Phase::Tool,
             found_stopped: std::sync::atomic::AtomicBool::new(false),
         };
-        let result = runtime
-            .call(
-                Target::Tool(tool.to_owned()),
-                arguments,
-                CallContext {
-                    host: &host,
-                    capabilities: &self.capabilities,
-                    time: self.approved.manifest.limits.time,
-                    timer: self.parts.timer.as_ref(),
-                    clock: self.parts.clock.as_ref(),
-                    cancel: &cx.cancel,
-                    asked: None,
-                },
-            )
-            .await;
+        // A call that never ran (queued under a runtime another call tore
+        // down) is taken once more to a fresh runtime: nothing of it
+        // happened, so nothing happens twice (since step 28's third pull
+        // request).
+        let mut again = true;
+        let result = loop {
+            let runtime = match self
+                .runtime(&cineris_ext::engine::StartWatch::default())
+                .await
+            {
+                Ok(runtime) => runtime,
+                Err(Refused {
+                    why,
+                    stand: Refusal::Plain,
+                }) => return ToolResult::error(why),
+                Err(Refused { why, stand }) => {
+                    return ToolResult::error(format!("{why}; {}", self.remedy(stand)));
+                }
+            };
+            let result = runtime
+                .call(
+                    Target::Tool(tool.to_owned()),
+                    arguments.clone(),
+                    CallContext {
+                        host: &host,
+                        capabilities: &self.capabilities,
+                        time: self.approved.manifest.limits.time,
+                        timer: self.parts.timer.as_ref(),
+                        clock: self.parts.clock.as_ref(),
+                        cancel: &cx.cancel,
+                        asked: None,
+                    },
+                )
+                .await;
+            if matches!(result, Err(CallError::NotRun)) && again && !cx.cancel.is_cancelled() {
+                again = false;
+                continue;
+            }
+            break result;
+        };
         for line in progress
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
