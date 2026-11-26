@@ -66,6 +66,69 @@ pub fn compare(name: &str, first: &Transcript, second: &Transcript) {
     );
 }
 
+/// What the `release` example's scenario ("a project's commands and
+/// extensions") shows of its own, on one carrier's transcript, so that a
+/// change that broke every carrier alike would not pass for agreement: the
+/// trust question lists the project's extension `changelog`, the command
+/// file's body is the prompt sent, with its arguments put in, `commands/list`
+/// has both of the project's commands, and `extensions/status` says the
+/// extension is `ready` (the review of step 28's close, L4).
+fn the_release_scenario_says_what_the_example_does(transcript: &Transcript) {
+    let entries = &transcript.0;
+    let asked = entries
+        .iter()
+        .find(|entry| entry["request"] == "trust/request")
+        .unwrap_or_else(|| panic!("no trust question: {entries:#?}"));
+    assert!(
+        asked["params"]["resources"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|resource| resource["kind"] == "extension" && resource["name"] == "changelog"),
+        "{asked:#}"
+    );
+    let sent = entries
+        .iter()
+        .filter_map(|entry| {
+            let item = &entry["event"]["item"];
+            (item["command"]["name"] == "release-notes").then(|| item.to_string())
+        })
+        .next()
+        .unwrap_or_else(|| panic!("no prompt of the command: {entries:#?}"));
+    assert!(
+        sent.contains(
+            "Write the release notes for version 0.2.0 of this project, for the people who use it."
+        ) && !sent.contains("{{")
+            && !sent.contains("description:"),
+        "{sent}"
+    );
+    let result_of = |method: &str| {
+        entries
+            .iter()
+            .find(|entry| entry["method"] == method)
+            .map(|entry| entry["result"].clone())
+            .unwrap_or_else(|| panic!("no result of `{method}`: {entries:#?}"))
+    };
+    let listed = result_of("commands/list");
+    let mut names: Vec<&str> = listed["commands"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|command| command["name"].as_str())
+        .collect();
+    names.sort_unstable();
+    assert_eq!(names, ["changelog:draft", "release-notes"], "{listed:#}");
+    let status = result_of("extensions/status");
+    assert!(
+        status["extensions"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|extension| extension["name"] == "changelog" && extension["state"] == "ready"),
+        "{status:#}"
+    );
+}
+
 /// Every scenario gives the same transcript in process and over the wire.
 #[test]
 fn every_scenario_is_the_same_in_process_and_over_the_wire() {
@@ -79,4 +142,9 @@ fn every_scenario_is_the_same_in_process_and_over_the_wire() {
         assert!(!first.0.is_empty(), "{name}: nothing was kept");
         compare(name, first, second);
     }
+    let (_, release) = in_process
+        .iter()
+        .find(|(name, _)| *name == "a project's commands and extensions")
+        .expect("the release example's scenario");
+    the_release_scenario_says_what_the_example_does(release);
 }
