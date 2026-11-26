@@ -1,6 +1,6 @@
 # 0005: Extensions are JavaScript on an embedded QuickJS engine; MCP for process tools; Lua as the fallback
 
-- **Status:** Accepted by the owner on 2026-11-12: JavaScript on QuickJS, with Lua as the fallback. One technical check remains, at the start of step 28: that the engine builds with the Windows toolchain.
+- **Status:** Accepted by the owner on 2026-11-12: JavaScript on QuickJS, with Lua as the fallback. The technical check, at the start of step 28, that the engine builds with the Windows toolchain, passed: it builds with MSVC on a hosted runner and passes its tests there ([steps/28/answered.md](../steps/28/answered.md), "The engine check"). Its cost measured again when step 28 closed ("Revisit when", below).
 - **Date:** 2026-11-12
 
 ## Context
@@ -121,3 +121,5 @@ This is conflict C1 in the [build plan](../build-plan.md). The vision's extensio
 - **A pure-Rust JavaScript engine comes within a few times of QuickJS:** switch engines. Same language, same extensions, no C.
 - **A public registry of third-party extensions is wanted:** code the user has not read deserves a stronger sandbox. Reconsider a WASM tier for that case only.
 - **Evidence from real use** shows models writing extensions unreliably in JavaScript, or authors asking for Lua.
+
+**Measured again when step 28 closed (2026-11-26).** In the shipped `dist` binary, everything behind `cineris-ext`'s `scripts` feature (QuickJS, `rquickjs`, and the script hosting of `cineris-ext` and the core) costs 1,737,296 bytes on Linux and 2,094,592 on Windows, by a build of the same code with the feature off on hosted runners; QuickJS linked alone, measured by the size step, is +823,600 and +762,880, within "1.1 MB", and our own code behind the feature is the rest ([decision 0039](0039-the-binary-s-budgets-are-20-mib-on-linux-and-25-on-windows.md), "Revisited when step 28 merged"). A clean release build costs +5.5 s with the engine, on four cores of the reference machine ([dependencies.md](../dependencies.md), `rquickjs`), within "under 9 s". The decision stands.
