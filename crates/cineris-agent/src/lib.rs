@@ -88,7 +88,7 @@ pub use hooks::{
 pub use ledger::{Account, CatchUp, Ledger, LimitReached, Spent};
 pub use policy::{AllowAll, Decision, PlannedCall, Policy, Verdict};
 pub use reconfigure::{Compaction, EpochChange, EpochContext, Reconfigure};
-pub use round::BEFORE_A_CALL_RUNS;
+pub use round::{A_CALL_IS_DECIDED, BEFORE_A_CALL_RUNS};
 pub use session::{HistoryChange, SessionHandle};
 pub use speed::SpeedSettings;
 pub use state::{Observer, TRANSITIONS, TurnState};

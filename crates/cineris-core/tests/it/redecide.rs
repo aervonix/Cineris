@@ -395,7 +395,19 @@ fn a_call_allowed_by_an_approval_revoked_while_it_waits_is_asked_about() {
         front.turns(1).await;
         assert_eq!(world.read(PROTECTED).as_deref(), Some("on: push\n"));
 
+        // Both calls are decided before the approval is taken back: the
+        // write's plan runs on the blocking pool, and a write decided only
+        // after the revoke is asked about whether or not the narrowing is
+        // seen, which made the test pass with it ignored, under load.
+        let deciding = cineris_testkit::Hold::new(cineris_agent::A_CALL_IS_DECIDED);
         front.prompt("again").await;
+        assert!(
+            deciding
+                .wait_reached_times_async(2, std::time::Duration::from_secs(5))
+                .await,
+            "the read and the write were not both decided"
+        );
+        deciding.release();
         let (id, request) = front.approval().await;
         assert_eq!(request.tool, "read");
         // While the read's question is open, the approval is taken back.
@@ -446,7 +458,18 @@ fn a_call_decided_before_the_level_was_lowered_is_decided_again_and_refused() {
     let core = world.core_with(|options| options.answers_may_stop = true);
     world.run(async {
         let front = Front::start(&world, &core).await;
+        // Both calls are decided before the level is lowered: a write
+        // decided only after it is refused whether or not the narrowing is
+        // seen.
+        let deciding = cineris_testkit::Hold::new(cineris_agent::A_CALL_IS_DECIDED);
         front.prompt("go").await;
+        assert!(
+            deciding
+                .wait_reached_times_async(2, std::time::Duration::from_secs(5))
+                .await,
+            "the read and the write were not both decided"
+        );
+        deciding.release();
         let (id, request) = front.approval().await;
         assert_eq!(request.tool, "read");
         front

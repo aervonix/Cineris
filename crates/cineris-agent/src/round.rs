@@ -98,6 +98,15 @@
 /// changed anything holds the earlier one here. Nothing in a build without
 /// `test-hooks`.
 pub const BEFORE_A_CALL_RUNS: &str = "round: a call has started, and its tool is about to run";
+
+/// An awaited point ([`cineris_base::hook::await_point!`]): a call's plan
+/// has been made and the policy has decided it, on the call's own planning
+/// task, and the round has not been told. A test that needs a call decided
+/// before the rules change (its plan runs on the blocking pool, and comes
+/// when it comes) waits for it here. Nothing in a build without
+/// `test-hooks`.
+pub const A_CALL_IS_DECIDED: &str =
+    "round: a call is planned and decided, and the round is not told";
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
@@ -1901,6 +1910,7 @@ impl Planning {
                     preview: None,
                     hooks: None,
                 });
+                cineris_base::hook::await_point!(A_CALL_IS_DECIDED);
                 return self.hooked(plan, decision).await;
             }
             Ok(Err(error)) => {
