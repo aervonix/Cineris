@@ -1787,12 +1787,19 @@ impl Core {
                     ));
                 }
                 // A command is sent in place of a prompt written out: its text
-                // is the prompt, so nothing else may come with it.
-                if params.command.is_some() && !params.input.is_empty() {
+                // is the prompt, and what may come with it is text, which
+                // follows it (headless mode's standard input).
+                if params.command.is_some()
+                    && params
+                        .input
+                        .iter()
+                        .any(|part| !matches!(part, cineris_protocol::Part::Text(_)))
+                {
                     return Err(error(
                         ErrorKind::Usage,
                         code::INVALID_PROMPT,
-                        "A prompt that names a command holds nothing else: its `input` is empty.",
+                        "A prompt that names a command takes text beside it and nothing else, the \
+                         text following the command's: an image cannot come with a command.",
                     ));
                 }
                 cineris_base::hook::await_point!(crate::commands::A_COMMAND_IS_TAKEN);
@@ -1844,6 +1851,27 @@ impl Core {
                         run.go_on(name)?;
                         let (input, command) =
                             crate::commands::expand(self, &live, call, run).await?;
+                        // The text that came with it follows the expanded
+                        // text after a blank line, in one text part, as
+                        // headless mode joins its standard input and words.
+                        let text = |parts: &[cineris_protocol::Part]| {
+                            parts
+                                .iter()
+                                .filter_map(|part| match part {
+                                    cineris_protocol::Part::Text(text) => Some(text.text.as_str()),
+                                    _ => None,
+                                })
+                                .collect::<String>()
+                        };
+                        let after = text(&params.input);
+                        let input = if after.trim().is_empty() {
+                            input
+                        } else {
+                            vec![cineris_protocol::Part::text(format!(
+                                "{}\n\n{after}",
+                                text(&input).trim_end()
+                            ))]
+                        };
                         (input, Some(command))
                     }
                     // A command always has its run, taken above.

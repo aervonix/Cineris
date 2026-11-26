@@ -34,7 +34,7 @@ use cineris_protocol::headless::{HeadlessResult, PermissionDenial};
 use cineris_protocol::lease::RuleAction;
 use cineris_protocol::message::Part;
 use cineris_protocol::methods::{
-    Op, OpResult, SessionForkParams, SessionListParams, SessionNewParams, SessionRef,
+    CommandCall, Op, OpResult, SessionForkParams, SessionListParams, SessionNewParams, SessionRef,
     TurnInterruptParams, TurnStartParams,
 };
 use cineris_protocol::model::ModelRole;
@@ -56,7 +56,7 @@ const WRITER_QUEUE: usize = 64;
 /// What the core thread needs from the command line.
 struct Plan {
     run: Run,
-    prompt: String,
+    prompt: Prompt,
     name: &'static str,
     workspace: PathBuf,
     /// The working directory, when it is below the root: where commands
@@ -410,9 +410,10 @@ async fn in_core(core: &Core, front: &mut Front<'_>) -> u8 {
         )
         .await;
     }
-    // A prompt that is `/name …`, `name` one of the session's custom
-    // commands, is sent as that command, as the interface sends it: the
-    // core expands it before any hook (step 28). Anything else is text.
+    // Words after `-p` that are `/name …`, `name` one of the session's
+    // custom commands, are sent as that command, as the interface sends it:
+    // the core expands it before any hook, and puts what standard input gave
+    // after it (step 28). Anything else is text.
     let command = match command_in(core, client.id, &session, &front.plan.prompt).await {
         Some((command, said)) => {
             front.say(&said);
@@ -420,20 +421,10 @@ async fn in_core(core: &Core, front: &mut Front<'_>) -> u8 {
         }
         None => None,
     };
-    let input = if command.is_some() {
-        Vec::new()
-    } else {
-        vec![Part::text(front.plan.prompt.clone())]
-    };
     let running_command = command.is_some();
     let mut start = std::pin::pin!(core.handle(
         client.id,
-        Op::TurnStart(TurnStartParams {
-            session_id: session.clone(),
-            input,
-            delivery: None,
-            command,
-        }),
+        Op::TurnStart(front.plan.prompt.start(session.clone(), command)),
     ));
     // An extension's command runs in the start itself: a signal meanwhile
     // interrupts it, through the core, and the run ends interrupted, with
@@ -522,25 +513,22 @@ async fn in_core(core: &Core, front: &mut Front<'_>) -> u8 {
     code
 }
 
-/// The custom command `prompt` names, when it is `/name …` and `name` is
-/// one of the session's (`commands/list`), used or not, or an extension's
-/// (`extension:command`) that neither list has, so that the core refuses one
-/// it does not use, or does not have, with its reason: what follows the name
-/// is its arguments. With it, the line that says on standard error whose it
-/// is and its file ([`sending`]). When the list cannot be had, a `/name …`
-/// is sent as a command all the same, for the core to judge, rather than as
-/// text. `None` for any other prompt, which is sent as text.
+/// The custom command `prompt`'s words name ([`Prompt::command`]), when
+/// `name` is one of the session's (`commands/list`), used or not, or an
+/// extension's (`extension:command`) that neither list has, so that the core
+/// refuses one it does not use, or does not have, with its reason: what
+/// follows the name is its arguments. With it, the line that says on
+/// standard error whose it is and its file ([`sending`]). When the list
+/// cannot be had, a `/name …` is sent as a command all the same, for the
+/// core to judge, rather than as text. `None` for any other prompt, which
+/// is sent as text.
 async fn command_in(
     core: &Core,
     client: cineris_core::ClientId,
     session: &SessionId,
-    prompt: &str,
-) -> Option<(cineris_protocol::methods::CommandCall, String)> {
-    let named = prompt.strip_prefix('/')?;
-    let (name, args) = named.split_once(char::is_whitespace).unwrap_or((named, ""));
-    if name.is_empty() {
-        return None;
-    }
+    prompt: &Prompt,
+) -> Option<(CommandCall, String)> {
+    let (name, args) = prompt.command()?;
     let listed = core
         .handle(
             client,
@@ -554,7 +542,7 @@ async fn command_in(
         _ => None,
     };
     let said = sending(name, listed.as_ref())?;
-    let call = cineris_protocol::methods::CommandCall {
+    let call = CommandCall {
         name: name.to_owned(),
         args: args.trim().to_owned(),
     };
@@ -917,11 +905,11 @@ async fn session(
     }
 }
 
-/// The prompt: standard input when it is not a terminal, then the words
-/// given, with a blank line between. `None` when there is neither.
-fn prompt(words: Option<&str>) -> io::Result<Option<String>> {
+/// The prompt: standard input when it is not a terminal, and the words
+/// given after `-p`. `None` when there is neither.
+fn prompt(words: Option<&str>) -> io::Result<Option<Prompt>> {
     let stdin = io::stdin();
-    let piped = if stdin.is_terminal() {
+    let mut piped = if stdin.is_terminal() {
         String::new()
     } else {
         // Bytes that are not UTF-8 (a diff of a file in another encoding)
@@ -930,14 +918,67 @@ fn prompt(words: Option<&str>) -> io::Result<Option<String>> {
         stdin.lock().take(STDIN_LIMIT).read_to_end(&mut bytes)?;
         String::from_utf8_lossy(&bytes).into_owned()
     };
-    let piped = piped.trim_end();
-    let words = words.map(str::trim).unwrap_or_default();
-    Ok(match (piped.is_empty(), words.is_empty()) {
-        (true, true) => None,
-        (true, false) => Some(words.to_owned()),
-        (false, true) => Some(piped.to_owned()),
-        (false, false) => Some(format!("{piped}\n\n{words}")),
-    })
+    piped.truncate(piped.trim_end().len());
+    let prompt = Prompt {
+        piped,
+        words: words.map(str::trim).unwrap_or_default().to_owned(),
+    };
+    Ok((!prompt.piped.is_empty() || !prompt.words.is_empty()).then_some(prompt))
+}
+
+/// A run's prompt, as it came: what standard input gave, and the words
+/// given after `-p`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Prompt {
+    /// Standard input, its end trimmed; empty when it is a terminal. Text
+    /// for the model, a log or a diff, and never a command, whatever its
+    /// first line is.
+    piped: String,
+    /// The words given after `-p`, trimmed: the prompt the person wrote,
+    /// the only place a command is taken from.
+    words: String,
+}
+
+impl Prompt {
+    /// The prompt as text: standard input, then the words, with a blank
+    /// line between.
+    fn text(&self) -> String {
+        match (self.piped.is_empty(), self.words.is_empty()) {
+            (true, _) => self.words.clone(),
+            (false, true) => self.piped.clone(),
+            (false, false) => format!("{}\n\n{}", self.piped, self.words),
+        }
+    }
+
+    /// The custom command the words name, `/name …`, and its arguments:
+    /// what follows the name. Standard input is never read for one: a log
+    /// that begins `/usr/bin/ld: cannot find -lfoo`, or an issue's body that
+    /// begins `/tracker:deploy prod`, is text for the model. Nor is a name
+    /// that holds a `/` one, as the interface reads it: a path, which no
+    /// command's name has.
+    fn command(&self) -> Option<(&str, &str)> {
+        let named = self.words.strip_prefix('/')?;
+        let (name, args) = named.split_once(char::is_whitespace).unwrap_or((named, ""));
+        (!name.is_empty() && !name.contains('/')).then_some((name, args))
+    }
+
+    /// What `turn/start` is sent: the prompt as text, or, with a command,
+    /// the command and what standard input gave, which the core puts after
+    /// the command's expanded text, as one prompt that `prompt.submit`
+    /// sees (step 28).
+    fn start(&self, session: SessionId, command: Option<CommandCall>) -> TurnStartParams {
+        let input = match (&command, self.piped.is_empty()) {
+            (None, _) => vec![Part::text(self.text())],
+            (Some(_), true) => Vec::new(),
+            (Some(_), false) => vec![Part::text(self.piped.clone())],
+        };
+        TurnStartParams {
+            session_id: session,
+            input,
+            delivery: None,
+            command,
+        }
+    }
 }
 
 /// Starts the log: the file in the state directory's `logs/`, and the
@@ -1048,5 +1089,72 @@ mod tests {
         assert!(said.contains("does not list"), "{said}");
         assert_eq!(sending("deploy", Some(&listed)), None);
         assert!(sending("deploy", None).is_some());
+    }
+
+    fn piped(piped: &str, words: &str) -> Prompt {
+        Prompt {
+            piped: piped.to_owned(),
+            words: words.to_owned(),
+        }
+    }
+
+    /// What standard input gives is never a command, whatever its first
+    /// line: `gh issue view 12 | cineris -p "triage"`, whose body begins
+    /// `/tracker:deploy prod`, sends the issue to the model as text, and
+    /// runs no extension's script with it as its arguments. The words after
+    /// `-p` are read for one with or without it.
+    #[test]
+    fn a_piped_prompts_first_line_is_never_a_command() {
+        let issue = "/tracker:deploy prod\n\nThe deploy fails on a cold cache.";
+        assert_eq!(piped(issue, "triage").command(), None);
+        assert_eq!(piped(issue, "").command(), None);
+        assert_eq!(piped("/review", "").command(), None);
+        assert_eq!(
+            piped(issue, "/review security").command(),
+            Some(("review", "security"))
+        );
+        assert_eq!(piped("", "/review").command(), Some(("review", "")));
+        let start = piped(issue, "triage").start(SessionId::new("s_1"), None);
+        assert_eq!(
+            (start.input, start.command),
+            (vec![Part::text(format!("{issue}\n\ntriage"))], None)
+        );
+    }
+
+    /// A name that holds a `/` is a path, never a command: `cc main.c 2>&1
+    /// | cineris -p "why does this fail?"`, whose log begins with the
+    /// linker's `/usr/bin/ld: cannot find -lfoo`, is text for the model, and
+    /// so is that line given after `-p` itself, where its name would have
+    /// the form of an extension's command (`usr/bin/ld:`).
+    #[test]
+    fn the_linkers_line_is_never_a_command() {
+        let log = "/usr/bin/ld: cannot find -lfoo\ncollect2: error: ld returned 1 exit status";
+        assert_eq!(piped("", log).command(), None);
+        assert_eq!(piped("", "/usr/bin/ld: cannot find -lfoo").command(), None);
+        assert_eq!(piped("", "/./review").command(), None);
+        assert_eq!(piped(log, "why does this fail?").command(), None);
+        assert_eq!(piped(log, "").command(), None);
+    }
+
+    /// `git diff | cineris -p "/review"` sends `/review` as the command,
+    /// and the diff in `input` beside it, for the core to put after the
+    /// command's expanded text as one prompt; with nothing piped, `input`
+    /// is empty, as `turn/start` takes a command alone.
+    #[test]
+    fn a_command_with_piped_input_sends_both() {
+        let diff = "diff --git a/src/lib.rs b/src/lib.rs\n+fn added() {}";
+        let prompt = piped(diff, "/review");
+        let (name, args) = prompt.command().expect("`/review` is a command");
+        let call = CommandCall {
+            name: name.to_owned(),
+            args: args.to_owned(),
+        };
+        let start = prompt.start(SessionId::new("s_1"), Some(call.clone()));
+        assert_eq!(
+            (start.input, start.command),
+            (vec![Part::text(diff)], Some(call.clone()))
+        );
+        let start = piped("", "/review").start(SessionId::new("s_1"), Some(call.clone()));
+        assert_eq!((start.input, start.command), (Vec::new(), Some(call)));
     }
 }

@@ -2337,7 +2337,7 @@ export type TurnOutcome = "completed" | "failed" | "interrupted" | "limit" | "de
 
 /** `turn/start` */
 export interface TurnStartParams {
-  /** A command to send in place of a prompt written out (since step 28): the core expands it, and the expanded text is the prompt, before any `prompt.submit` hook sees it. `input` is then empty. A server that answers `commands/list` reads it; one that does not would take the empty `input` alone. */
+  /** A command to send in place of a prompt written out (since step 28): the core expands it, and the expanded text is the prompt, before any `prompt.submit` hook sees it. `input` then holds text parts only, or none: their text follows the expanded text, after a blank line, in the one prompt the hooks see (headless mode's standard input); an image or any other part is refused (`invalid_prompt`). A server that answers `commands/list` reads it; one that does not would take `input` alone. */
   command?: CommandCall | null;
   /** How to deliver it if a turn is running. Required then, and ignored when the session is idle. */
   delivery?: Delivery | null;

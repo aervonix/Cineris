@@ -121,9 +121,9 @@ caught-by:
 [break] piped-input-after-the-prompt
 rule: Standard input comes first, as context, and the prompt after it.
 file: crates/cineris-cli/src/headless.rs
-in: prompt
-find: (false, false) => Some(format!("{piped}\n\n{words}"))
-replace: (false, false) => Some(format!("{words}\n\n{piped}"))
+in: Prompt::text
+find: (false, false) => format!("{}\n\n{}", self.piped, self.words)
+replace: (false, false) => format!("{}\n\n{}", self.words, self.piped)
 caught-by:
     cineris-cli::system runs::sys_piped_input_comes_before_the_prompt_and_a_tool_call_is_not_on_standard_output
 

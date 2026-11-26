@@ -230,14 +230,6 @@ caught-by:
     cineris-core::it commands::an_extensions_command_runs_and_prompt_submit_sees_the_expanded_text
     cineris-core::it commands::file_commands_are_listed_expanded_and_refused_with_reasons
 
-[break] a-command-comes-with-a-prompt
-rule: A prompt that names a command holds nothing else.
-file: crates/cineris-core/src/core.rs
-find: if params.command.is_some() && !params.input.is_empty() {
-replace: if params.command.is_some() && params.input.len() > 1 {
-caught-by:
-    cineris-core::it commands::file_commands_are_listed_expanded_and_refused_with_reasons
-
 [break] the-record-forgets-the-command
 rule: The recorded prompt says which command it came from, and whose.
 file: crates/cineris-agent/src/turn.rs
