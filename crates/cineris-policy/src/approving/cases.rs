@@ -2016,4 +2016,96 @@ pub const CASES: &[(&str, &[ShellSyntax], bool)] = &[
     ("ruby -we 'exec(\"cin\")'", &[Posix], true),
     // An `awk` program with no blank in it, past an option's value.
     ("awk -v x=1 'BEGIN{system(\"cin\")}'", &[Posix], true),
+    // A runtime's code that a native program is handed in PowerShell or
+    // `cmd`, which do not model it, with its lists as words and `\"` as a
+    // quote; and the same given to a service to start (the narrow re-check
+    // of the third part, M2').
+    (
+        "Invoke-WmiMethod -Class Win32_Process -Name Create -ArgumentList 'python -c \"import subprocess; subprocess.run([\\\"cin\\\",\\\"ext\\\",\\\"add\\\",\\\"C:/x\\\",\\\"--hash\\\",\\\"H\\\"])\"'",
+        &[Posix, PowerShell, Unknown],
+        true,
+    ),
+    (
+        "Invoke-WmiMethod -Class Win32_Process -Name Create -ArgumentList 'python -c \"import subprocess; subprocess.run([\\\"cin\\\",\\\"permissions\\\",\\\"trust\\\"])\"', 'C:\\proj'",
+        &[Posix, PowerShell, Unknown],
+        true,
+    ),
+    (
+        "Invoke-WmiMethod -Class Win32_Process -Name Create -ArgumentList 'python -c \"import os; os.system(\\\"cin ext add C:/x --hash H\\\")\"'",
+        &[PowerShell],
+        true,
+    ),
+    (
+        "Invoke-WmiMethod -Class Win32_Process -Name Create -ArgumentList 'pythonw -c \"import subprocess; subprocess.run([\\\"cin\\\",\\\"ext\\\",\\\"add\\\",\\\"C:/x\\\"])\"'",
+        &[PowerShell],
+        true,
+    ),
+    (
+        "Invoke-WmiMethod -Class Win32_Process -Name Create -ArgumentList 'perl -e \"system(\\\"cin\\\",\\\"ext\\\",\\\"add\\\",\\\"C:/x\\\")\"'",
+        &[PowerShell],
+        true,
+    ),
+    (
+        "Invoke-WmiMethod -Class Win32_Process -Name Create -ArgumentList 'node -e \"require(\\\"child_process\\\").spawnSync(\\\"cin\\\",[\\\"ext\\\",\\\"add\\\",\\\"C:/x\\\"])\"'",
+        &[PowerShell],
+        true,
+    ),
+    (
+        "Invoke-WmiMethod -Class Win32_Process -Name Create -ArgumentList 'ruby -e \"system(\\\"cin\\\",\\\"ext\\\",\\\"add\\\",\\\"C:/x\\\")\"'",
+        &[PowerShell],
+        true,
+    ),
+    (
+        "Invoke-CimMethod Win32_Process -MethodName Create -Arguments @{CommandLine='python -c \"import subprocess; subprocess.run([\\\"cin\\\",\\\"ext\\\",\\\"add\\\",\\\"C:/x\\\"])\"'}",
+        &[Posix, PowerShell, Unknown],
+        true,
+    ),
+    (
+        "schtasks /create /tn t /tr 'python -c \"import subprocess; subprocess.run([\\\"cin\\\",\\\"ext\\\",\\\"add\\\",\\\"C:/x\\\"])\"' /sc once /st 00:00 /f",
+        &[Posix, PowerShell, Unknown],
+        true,
+    ),
+    (
+        "wmic process call create \"python -c \\\"import subprocess; subprocess.run(['cin','ext','add','C:/x'])\\\"\"",
+        &[Posix, PowerShell, Cmd, Unknown],
+        true,
+    ),
+    (
+        "python -c \"import subprocess; subprocess.run([\\\"cin\\\",\\\"ext\\\",\\\"add\\\",\\\"C:/x\\\"])\"",
+        &[Posix, PowerShell, Cmd, Unknown],
+        true,
+    ),
+    (
+        "python -c 'import subprocess; subprocess.run([\"cin\",\"ext\",\"add\",\"C:/x\"])'",
+        &[Posix, PowerShell, Unknown],
+        true,
+    ),
+    (
+        "pythonw -c 'import subprocess; subprocess.run([\"cin\",\"permissions\",\"trust\"])'",
+        &[PowerShell],
+        true,
+    ),
+    (
+        "node -e \"require('child_process').spawnSync('cin',['ext','add','C:/x'])\"",
+        &[PowerShell, Cmd],
+        true,
+    ),
+    (
+        "perl -e \"system('cin','ext','add','C:/x')\"",
+        &[PowerShell, Cmd],
+        true,
+    ),
+    (
+        "ruby -e \"system('cin','ext','add','C:/x')\"",
+        &[PowerShell, Cmd],
+        true,
+    ),
+    // A runtime's code that runs a subcommand that only reads is not
+    // refused for being read so.
+    (
+        "python -c 'import subprocess; subprocess.run([\"cin\",\"ext\",\"list\"])'",
+        &[Posix],
+        false,
+    ),
+    ("python -c \"print('cin ext list')\"", &[PowerShell], false),
 ];

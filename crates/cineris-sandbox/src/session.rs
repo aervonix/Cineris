@@ -45,12 +45,13 @@
 //!   WMI's provider host (`WmiPrvSE.exe`, `Win32_Process.Create`), the task
 //!   host (`taskhostw.exe`) or the service host that runs the task
 //!   scheduler (a scheduled task's), directly or through command
-//!   interpreters (`cmd /c`), which start a process outside the job (the
-//!   full review of the third part, H1); where which host runs the scheduler
-//!   cannot be asked, any service host counts. Any other program ends the
-//!   line: a terminal or a CI runner a service started is not taken for
-//!   one. **It does not see** a service's start through another program
-//!   than an interpreter (a script's own interpreter it names), a process
+//!   interpreters (`cmd /c`) and language runtimes (`python -c`, `node -e`,
+//!   a `git` alias, `wsl`), which start a process outside the job (the full
+//!   review of the third part, H1, and its narrow re-check, M2'); where which
+//!   host runs the scheduler cannot be asked, any service host counts. Any
+//!   other program ends the line: a terminal or a CI runner a service
+//!   started is not taken for one. **It does not see** a service's start
+//!   through another program than an interpreter or a runtime, a process
 //!   another of the user's processes starts outside the job (the desktop's
 //!   shell asked to open a file, a process made with another parent), nor a
 //!   command whose harness has exited, whose job no running process names.
@@ -456,6 +457,29 @@ const INTERPRETERS: [&str; 12] = [
     "sh.exe",
 ];
 
+/// The language runtimes and the programs that run a line of their own a
+/// service's start of a command may pass through (`python -c "…run(['cin',
+/// …])"`, `node -e`, `perl -e`, a `git` alias, `wsl`): followed up as the
+/// interpreters are (the narrow re-check of the third part, M2'). By name,
+/// with a version after it taken off (`python3.12.exe`).
+#[cfg_attr(not(windows), allow(dead_code, reason = "Windows's services"))]
+const RUNTIMES: [&str; 16] = [
+    "python", "pythonw", "py", "node", "perl", "ruby", "php", "java", "javaw", "deno", "bun",
+    "rscript", "wsl", "git", "awk", "gawk",
+];
+
+/// Whether a program's file name (in lower case) is a command interpreter's
+/// or a runtime's: the line of parents is followed up through these alone.
+#[cfg_attr(not(windows), allow(dead_code, reason = "Windows's services"))]
+fn passes_through(name: &str) -> bool {
+    if INTERPRETERS.contains(&name) {
+        return true;
+    }
+    let bare = name.strip_suffix(".exe").unwrap_or(name);
+    let bare = bare.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.');
+    RUNTIMES.contains(&bare)
+}
+
 /// How far up a line of parents is followed on Windows.
 #[cfg_attr(not(windows), allow(dead_code, reason = "Windows's services"))]
 const LINE_OF_PARENTS: usize = 64;
@@ -464,12 +488,13 @@ const LINE_OF_PARENTS: usize = 64;
 /// a command asks of it, outside any job (WMI's provider host, the task
 /// host, the service host that runs the task scheduler, `scheduler`: `None`
 /// where it could not be asked, when any service host counts), directly or
-/// through command interpreters ([`INTERPRETERS`]: `cmd /c cin …`): the
-/// full review of the third part, H1. The line is followed up through
-/// interpreters alone, each made before the one below it (a later process
-/// may have the id of a parent that has gone): any other program ends it,
-/// so that a person's terminal, an editor or a CI runner that a service
-/// started long before is not taken for one.
+/// through command interpreters and runtimes ([`passes_through`]: `cmd /c
+/// cin …`, `python -c …`): the full review of the third part, H1, and its
+/// narrow re-check, M2'. The line is followed up through those alone, each
+/// made before the one below it (a later process may have the id of a
+/// parent that has gone): any other program ends it, so that a person's
+/// terminal, an editor or a CI runner that a service started long before
+/// is not taken for one.
 #[cfg_attr(not(windows), allow(dead_code, reason = "Windows's services"))]
 fn started_by_a_service(
     listed: &[Listed],
@@ -517,7 +542,7 @@ fn started_by_a_service(
             ));
         }
         match seen {
-            Opened::Made(then) if INTERPRETERS.contains(&name) => {
+            Opened::Made(then) if passes_through(name) => {
                 at = parent;
                 made = then;
             }
@@ -1180,6 +1205,84 @@ mod tests {
             how.contains("process 80") && how.contains("wmiprvse.exe"),
             "{how}"
         );
+    }
+
+    /// A service's start of a command through a language runtime (`python
+    /// -c "…run(['cin',…])"`, `node -e`, `perl -e`, a `git` alias) is
+    /// followed up through it, a version after its name taken off (the
+    /// narrow re-check of the third part, M2'); a person's own runtime, run
+    /// from their terminal or from a CI runner's step, still ends at the
+    /// terminal or the runner.
+    #[test]
+    fn a_services_start_through_a_runtime_is_under_a_session_and_a_persons_is_not() {
+        let processes = listed(&[
+            (100, 90, "cin.exe"),
+            (90, 80, "python.exe"),
+            (80, 4, "wmiprvse.exe"),
+            (110, 105, "cin.exe"),
+            (105, 104, "python3.12.exe"),
+            (104, 600, "svchost.exe"),
+            (120, 115, "cin.exe"),
+            (115, 114, "sh.exe"),
+            (114, 113, "git.exe"),
+            (113, 112, "node.exe"),
+            (112, 4, "taskhostw.exe"),
+            (130, 125, "cin.exe"),
+            (125, 124, "perl.exe"),
+            (124, 123, "cmd.exe"),
+            (123, 4, "wmiprvse.exe"),
+            // A person's: the desktop, their terminal, its shell, a runtime.
+            (200, 195, "cin.exe"),
+            (195, 194, "python.exe"),
+            (194, 193, "pwsh.exe"),
+            (193, 192, "windowsterminal.exe"),
+            (192, 191, "explorer.exe"),
+            (191, 4, "userinit.exe"),
+            // A CI runner's step, which a service started long before.
+            (300, 295, "cin.exe"),
+            (295, 294, "bash.exe"),
+            (294, 293, "git.exe"),
+            (293, 292, "node.exe"),
+            (292, 291, "pwsh.exe"),
+            (291, 290, "runner.worker.exe"),
+            (290, 289, "runner.listener.exe"),
+            (289, 600, "svchost.exe"),
+            (600, 4, "services.exe"),
+        ]);
+        let opened = |pid: u32| match pid {
+            4 | 80 | 104 | 112 | 123 | 289 | 600 => Opened::Closed,
+            _ => Opened::Made(u64::from(pid)),
+        };
+        // Process 104 runs the task scheduler.
+        let under = |own| started_by_a_service(&processes, own, opened, Some(104));
+        for (own, through) in [
+            (100, "python"),
+            (110, "a versioned python"),
+            (120, "node, git and sh"),
+            (130, "perl and cmd"),
+        ] {
+            assert!(matches!(under(own), Under::Session(_)), "{through}");
+        }
+        assert_eq!(under(200), Under::Nothing, "a person's terminal");
+        assert_eq!(under(300), Under::Nothing, "a CI runner's step");
+        for name in [
+            "python.exe",
+            "pythonw.exe",
+            "py.exe",
+            "rscript.exe",
+            "wsl.exe",
+            "gawk.exe",
+        ] {
+            assert!(passes_through(name), "{name}");
+        }
+        for name in [
+            "explorer.exe",
+            "windowsterminal.exe",
+            "code.exe",
+            "pythonista.exe",
+        ] {
+            assert!(!passes_through(name), "{name}");
+        }
     }
 
     /// A harness's job is named for its process's instance: the same id

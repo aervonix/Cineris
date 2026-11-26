@@ -274,7 +274,7 @@ caught-by:
 [break] approving-unmodelled-passed
 rule: A line the analysis cannot model fails closed: read as text, its quotes and escapes taken out as its shell takes them.
 file: crates/cineris-policy/src/approving.rs
-in: refused
+in: read_line
 find: Analysis::NotModelled { .. } => reader.in_text(&command, shell)
 replace: Analysis::NotModelled { .. } => None
 caught-by:
@@ -1183,10 +1183,10 @@ caught-by:
     cineris-sandbox session::tests::a_process_a_service_started_for_a_command_is_under_a_session
 
 [break] session-windows-line-past-other-programs
-rule: The line of parents is followed up through command interpreters alone: any other program (the desktop, a CI runner's test runner) ends it, so that what a service started long before is not taken for a service's start of a command.
+rule: The line of parents is followed up through command interpreters and runtimes alone: any other program (the desktop, a CI runner's test runner) ends it, so that what a service started long before is not taken for a service's start of a command.
 file: crates/cineris-sandbox/src/session.rs
 in: started_by_a_service
-find: Opened::Made(then) if INTERPRETERS.contains(&name) => {
+find: Opened::Made(then) if passes_through(name) => {
 replace: Opened::Made(then) => {
 caught-by:
     cineris-sandbox session::tests::a_process_a_service_started_for_a_command_is_under_a_session
@@ -1395,8 +1395,8 @@ caught-by:
 rule: A line's continuations are taken out before it is read (`ci\\⏎neris`).
 file: crates/cineris-policy/src/approving.rs
 in: refused
-find: && joined != command
-replace: && false
+find: .filter(|joined| joined != command)
+replace: .filter(|_| false)
 caught-by:
     cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
     cineris-policy::it commands::the_engine_without_a_grammar_refuses_the_tables_lines
@@ -1446,6 +1446,116 @@ file: crates/cineris-policy/src/approving.rs
 in: Reader::read
 find: if text.contains("\\n") || text.contains("\\t") {
 replace: if false {
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+    cineris-policy::it commands::the_engine_without_a_grammar_refuses_the_tables_lines
+
+# The narrow re-check of the third part's fixes: M1', a line's continuations
+# joined in one pass and read once, the longest line first, and the braces'
+# scans in one pass; M2', a native program's words read as code.
+
+[break] approving-longest-unbounded
+rule: Past the longest line it reads, the check asks only whether the line names Cineris, and refuses it where it does.
+file: crates/cineris-policy/src/approving.rs
+in: read_line
+find: if command.len() > LONGEST {
+replace: if false {
+caught-by:
+    cineris-policy approving::tests::a_line_that_nests_or_repeats_without_end_is_refused_soon
+
+[break] approving-continuations-read-again
+rule: A line's continuations are joined in one pass, and the line that makes is read once: never read again for each continuation, which overflowed the stack.
+file: crates/cineris-policy/src/approving.rs
+in: refused
+find:
+    .then(|| joined(command, shell))
+        .filter(|joined| joined != command);
+    if let Some(joined) = &joined
+        && let Some(refusal) = read_line(joined, shell, own)
+replace:
+    .then(|| command.replacen("\\\n", "", 1))
+        .filter(|joined| joined != command);
+    if let Some(joined) = &joined
+        && let Some(refusal) = refused(joined, shell, Some(own))
+caught-by:
+    cineris-policy approving::tests::a_line_that_nests_or_repeats_without_end_is_refused_soon
+
+[break] approving-brace-names-searched-from-each-brace
+rule: A brace expansion's words are found in one pass that remembers its `{`: never by a search for the `}` from each `{`, which was quadratic.
+file: crates/cineris-policy/src/approving.rs
+in: braced_name
+find:
+    brace_expansions(text)
+        .into_iter()
+        .any(|(open, close)| text[open + 1..close].split(['{', ',', '.']).any(&own))
+replace:
+    (0..text.len())
+        .filter(|at| text.is_char_boundary(*at) && text[*at..].starts_with('{'))
+        .any(|open| {
+        let after = &text[open + 1..];
+        after.find('}').is_some_and(|close| {
+            let inside = &after[..close];
+            !inside.contains(char::is_whitespace)
+                && (inside.contains(',') || inside.contains(".."))
+                && inside.split(['{', ',', '.']).any(&own)
+        })
+    })
+caught-by:
+    cineris-policy approving::tests::a_line_that_nests_or_repeats_without_end_is_refused_soon
+
+[break] approving-braces-searched-from-each-brace
+rule: The brace expansions a line read as text holds are written as words the shell expands in one pass: never by a search for the `}` from each `{`, which was quadratic.
+file: crates/cineris-policy/src/approving.rs
+in: braced
+find: for (open, close) in brace_expansions(text) {
+replace:
+    let quadratic: Vec<(usize, usize)> = (0..text.len())
+        .filter(|at| text.is_char_boundary(*at) && text[*at..].starts_with('{'))
+        .filter_map(|open| text[open + 1..].find('}').map(|close| (open, open + 1 + close)))
+        .filter(|(open, close)| {
+            let inside = &text[open + 1..*close];
+            !inside.contains(char::is_whitespace) && inside.contains(',')
+        })
+        .take(1)
+        .collect();
+    for (open, close) in quadratic {
+caught-by:
+    cineris-policy approving::tests::a_line_that_nests_or_repeats_without_end_is_refused_soon
+
+[break] approving-native-code-unread
+rule: The words a native program is handed in a line read as text are read as a runtime's code reads them: a list's `[`, `]` and `,` are blanks, so `python -c '…run(["cin","ext","add"])'` in PowerShell is refused.
+file: crates/cineris-policy/src/approving.rs
+in: Reader::in_text
+find: found = self.in_plain(&plain(&native_code_words(&written), quotes));
+replace: let _ = quotes;
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+    cineris-policy::it commands::the_engine_without_a_grammar_refuses_the_tables_lines
+
+[break] session-windows-runtimes-not-walked
+rule: On Windows a service's start of a command is followed up through language runtimes as through command interpreters (`python -c`, `node -e`, a `git` alias), so a runtime between the service and the subcommand does not end the line.
+file: crates/cineris-sandbox/src/session.rs
+in: passes_through
+find: RUNTIMES.contains(&bare)
+replace: false
+caught-by:
+    cineris-sandbox session::tests::a_services_start_through_a_runtime_is_under_a_session_and_a_persons_is_not
+
+[break] session-windows-runtime-version-kept
+rule: A runtime is told by its name with a version after it taken off (`python3.12.exe`).
+file: crates/cineris-sandbox/src/session.rs
+in: passes_through
+find: let bare = bare.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.');
+replace: let bare = bare.trim_end_matches('.');
+caught-by:
+    cineris-sandbox session::tests::a_services_start_through_a_runtime_is_under_a_session_and_a_persons_is_not
+
+[break] approving-native-escaped-quote-kept
+rule: In a native program's words, `\"` is a quote, as a Windows program reads its command line: `[\"cin\",\"ext\",\"add\"]` given to a service is refused.
+file: crates/cineris-policy/src/approving.rs
+in: native_code_words
+find: text.replace("\\\"", "\"")
+replace: text.to_owned()
 caught-by:
     cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
     cineris-policy::it commands::the_engine_without_a_grammar_refuses_the_tables_lines

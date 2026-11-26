@@ -235,36 +235,54 @@ fn the_help_is_safe_only_in_words_that_are_the_programs_own() {
 /// thread as small as the core's (the full review of the third part, M1).
 #[test]
 fn a_line_that_nests_or_repeats_without_end_is_refused_soon() {
+    use ShellSyntax::{Cmd, PowerShell, Unknown};
+    // Line continuations, each joined in one pass with no reading again,
+    // whatever the shell's mark and line break, with or without a name of
+    // Cineris (the narrow re-check of the third part, M1'): none of them
+    // names a subcommand that is refused.
+    let continued =
+        |mark: &str, line_break: &str| format!("{}{}", mark.repeat(3000), line_break.repeat(3000));
     let lines = [
-        (format!("{}cin", "nohup ".repeat(1000)), Posix),
+        (format!("{}cin", "nohup ".repeat(1000)), Posix, true),
+        (format!("{}cin", "start ".repeat(5000)), PowerShell, true),
+        (format!("find . {}cin", "-exec ".repeat(5000)), Posix, true),
+        (format!("echo {}", "a=cin=b=cin=".repeat(2000)), Posix, true),
+        (format!("echo {} cin", "x".repeat(60 * 1024)), Posix, true),
+        (continued("\\", "\n"), Posix, false),
+        (continued("\\", "\r\n"), Posix, false),
+        (continued("^", "\n"), Cmd, false),
+        (continued("`", "\n"), Unknown, false),
         (
-            format!("{}cin", "start ".repeat(5000)),
-            ShellSyntax::PowerShell,
+            format!("cin ext list {}", continued("\\", "\n")),
+            Posix,
+            false,
         ),
-        (format!("find . {}cin", "-exec ".repeat(5000)), Posix),
-        (format!("echo {}", "a=cin=b=cin=".repeat(2000)), Posix),
-        (format!("echo {} cin", "x".repeat(60 * 1024)), Posix),
+        // Braces, each `}` looked for once.
+        (format!("cin {}}}", "{".repeat(32_000)), Posix, true),
+        (format!("cin {}}}", "{".repeat(32_000)), Unknown, true),
+        (format!("cin {}}}", "{".repeat(32_000)), PowerShell, true),
     ];
     let checked = std::thread::Builder::new()
         .stack_size(2 * 1024 * 1024)
         .spawn(move || {
             lines
                 .iter()
-                .map(|(line, shell)| {
+                .map(|(line, shell, refused_too)| {
                     let started = std::time::Instant::now();
                     let refusal = refused(line, *shell, None);
-                    (line.len(), refusal.is_some(), started.elapsed())
+                    let name = format!("{} bytes in {shell:?}", line.len());
+                    (name, refusal.is_some(), *refused_too, started.elapsed())
                 })
                 .collect::<Vec<_>>()
         })
         .unwrap()
         .join()
         .expect("no line overflows the stack");
-    for (length, refused_too, took) in checked {
-        assert!(refused_too, "a line of {length} bytes was not refused");
+    for (name, refused, refused_too, took) in checked {
+        assert_eq!(refused, refused_too, "{name}");
         assert!(
             took < std::time::Duration::from_secs(2),
-            "{length} bytes took {took:?}"
+            "{name} took {took:?}"
         );
     }
 }
