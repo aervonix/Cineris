@@ -1,0 +1,10 @@
+api = 1
+name = "changelog"
+version = "1.0.0"
+description = "Drafts a changelog entry from the commits since a tag"
+main = "main.js"
+
+[capabilities]
+# `git`, to read the log. Its programs reach no network: `exec_network` is
+# left false.
+exec = ["git"]

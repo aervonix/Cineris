@@ -1,0 +1,10 @@
+api = 1
+name = "shell-gate"
+version = "1.0.0"
+description = "Refuses rm -rf and a forced git push in the shell tool's commands"
+main = "main.js"
+
+[capabilities]
+# The one event its script may hook. The script puts its hook on the shell
+# tool's calls alone.
+hooks = ["tool.before"]

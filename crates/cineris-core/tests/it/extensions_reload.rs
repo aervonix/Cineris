@@ -4,17 +4,21 @@
 //! and one that now does is loaded; and none of it is on the path that
 //! opens the session.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use cineris_ext::discover::{A_NAME_IS_LOOKED_AT, A_ROOT_IS_RESOLVED, AN_EXTENSION_IS_READ};
+use cineris_ext::folder::Snapshot;
 use cineris_ext::skills;
+use cineris_policy::{Definition, PinStore};
+use cineris_protocol::methods::{CommandsListParams, Op, OpResult, TrustResourceKind};
 use cineris_testkit::Hold;
+use serde_json::json;
 
 use crate::extensions_found::{
-    about_probe, cache, found_probe, make_link, pin, searches, searches_times, start, state, users,
-    write_extension,
+    about_probe, cache, clock, found_probe, make_link, pin, searches, searches_times, start, state,
+    users, write_extension,
 };
-use crate::{World, says};
+use crate::{Answering, World, calls, says};
 
 // ------------------------------------------------------------ a change
 
@@ -194,4 +198,96 @@ fn with_an_extension_nothing_of_it_is_read_until_the_session_is_open() {
     });
     assert_eq!(reads.arrivals(), 1);
     assert_eq!(skill_reads.arrivals(), 1);
+}
+
+/// With the three examples approved (`examples/`, each a user's extension,
+/// pinned and in the registration cache, as `cineris ext add` leaves it), a
+/// session starts no engine until one of them is used: opening it, a turn
+/// whose call none of their hooks is on (`shell-gate`'s gate is on the
+/// shell tool alone), and listing its commands, `changelog:draft` among
+/// them, make no runtime; the first call of `md-outline`'s tool makes one,
+/// its own. With no extension, see
+/// `with_no_extension_a_session_looks_once_a_folder_and_reads_nothing`.
+#[test]
+fn with_the_examples_approved_no_engine_starts_until_one_is_used() {
+    let world = World::new(
+        "startup_examples",
+        [
+            calls(&[("c1", "list", json!({"path": "."}))]),
+            says("Listed."),
+            calls(&[(
+                "c2",
+                "tool_call",
+                json!({"tool": "md-outline/outline", "arguments": {"path": "notes.md"}}),
+            )]),
+            says("Outlined."),
+        ],
+    );
+    world.put("notes.md", "# Notes\n\n## One\n");
+    let crates = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    for example in [
+        "examples/md-outline",
+        "examples/shell-gate",
+        "examples/release/extensions/changelog",
+    ] {
+        let source = crates.parent().unwrap().join(example);
+        let name = source.file_name().unwrap().to_string_lossy().into_owned();
+        let folder = world.dirs().config.unwrap().join("extensions").join(&name);
+        std::fs::create_dir_all(&folder).unwrap();
+        for file in std::fs::read_dir(&source).unwrap() {
+            let file = file.unwrap().path();
+            std::fs::copy(&file, folder.join(file.file_name().unwrap())).unwrap();
+        }
+        PinStore::new(state(&world).pins_file(), clock(&world))
+            .pin(&Definition {
+                kind: TrustResourceKind::Extension,
+                name,
+                hash: Snapshot::read(&folder).unwrap().hash(),
+            })
+            .unwrap();
+        // One throwaway runtime each, as approving makes.
+        cache(&world, &folder);
+    }
+    let core = world.core();
+    let made = cineris_ext::engine::runtimes_made();
+    world.run(async {
+        let front = start(&world, &core).await;
+        assert_eq!(cineris_ext::engine::runtimes_made(), made, "opened");
+        front.turn("list the files").await;
+        assert_eq!(front.results()[0].1, "success", "{:?}", front.results());
+        assert_eq!(
+            cineris_ext::engine::runtimes_made(),
+            made,
+            "a call no hook is on"
+        );
+        let Ok(OpResult::CommandsList(listed)) = front
+            .op(Op::CommandsList(CommandsListParams {
+                session_id: front.session.clone(),
+            }))
+            .await
+        else {
+            panic!("no commands listed");
+        };
+        assert!(
+            listed
+                .commands
+                .iter()
+                .any(|command| command.name == "changelog:draft"),
+            "{listed:?}"
+        );
+        assert_eq!(
+            cineris_ext::engine::runtimes_made(),
+            made,
+            "commands listed"
+        );
+        front.answering(Answering::allow_all());
+        front.turn("outline the notes").await;
+        assert_eq!(front.results()[1].1, "success", "{:?}", front.results());
+        front.close().await;
+    });
+    assert_eq!(
+        cineris_ext::engine::runtimes_made(),
+        made + 1,
+        "the tool's own"
+    );
 }

@@ -713,8 +713,77 @@ pub fn scenarios() -> Vec<Scenario> {
                 close(),
             ],
         },
+        // After the export's, so that the scenarios before keep their
+        // folders' numbers.
+        Scenario {
+            name: "a project's commands and extensions",
+            files: RELEASE.to_vec(),
+            model: vec![anthropic::text(&["Notes."])],
+            steps: vec![
+                Step::Start(Box::new(|ctx| {
+                    Op::SessionNew(SessionNewParams {
+                        cwd: None,
+                        workspace: ctx.workspace.clone(),
+                        settings: cineris_protocol::session::SessionSettings::default(),
+                        title: None,
+                        config: Map::new(),
+                        ephemeral: false,
+                    })
+                })),
+                // The question lists the project's extension, and the yes
+                // pins it.
+                answer(|_| {
+                    ServerResponse::Trust(cineris_protocol::methods::TrustResponse {
+                        trusted: true,
+                        never: false,
+                        keep: false,
+                    })
+                }),
+                Step::Finish,
+                call(|ctx| {
+                    Op::TurnStart(TurnStartParams {
+                        session_id: ctx.session(),
+                        input: Vec::new(),
+                        delivery: None,
+                        command: Some(cineris_protocol::methods::CommandCall {
+                            name: "release-notes".to_owned(),
+                            args: "0.2.0".to_owned(),
+                        }),
+                    })
+                }),
+                Step::Until("session.idle"),
+                // After a turn, which waits for the session's extensions to
+                // be found: what each lists is then settled, on every
+                // carrier.
+                json_call("commands/list", |ctx| json!({"session_id": ctx.session()})),
+                call(|ctx| {
+                    Op::ExtensionsStatus(cineris_protocol::methods::ExtensionsStatusParams {
+                        session_id: Some(ctx.session()),
+                    })
+                }),
+                close(),
+            ],
+        },
     ]
 }
+
+/// The `release` example's project (`examples/release`, run as its README
+/// says in `cineris-cli`'s system tests): its command file and its
+/// extension, whose command runs `git` and is listed here, not run.
+const RELEASE: [(&str, &str); 3] = [
+    (
+        ".cineris/commands/release-notes.md",
+        include_str!("../../../examples/release/commands/release-notes.md"),
+    ),
+    (
+        ".cineris/extensions/changelog/extension.toml",
+        include_str!("../../../examples/release/extensions/changelog/extension.toml"),
+    ),
+    (
+        ".cineris/extensions/changelog/main.js",
+        include_str!("../../../examples/release/extensions/changelog/main.js"),
+    ),
+];
 
 /// What the server sent that is not a result.
 #[derive(Debug, Clone, PartialEq)]
