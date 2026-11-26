@@ -186,6 +186,18 @@ fn the_golden_values_round_trip_exactly() {
                 assert_eq!(result.entries[0].observations, Some(2));
                 assert!(result.entries[0].accepted_at.is_some());
             }
+            Some("ExtensionsStatusResult") => {
+                // Since step 28: each extension's source, standing, folder,
+                // hash, commands, hooks and the gates a session holds.
+                let result = round_trip::<crate::methods::ExtensionsStatusResult>(value);
+                assert_eq!(result.extensions.len(), 3);
+                assert_eq!(result.extensions[1].gates.len(), 1);
+                assert!(result.extensions.iter().all(|one| !matches!(
+                    one.standing,
+                    Some(crate::methods::ExtensionStanding::Unknown(_)) | None
+                )));
+                assert_eq!(result.problems.len(), 1);
+            }
             other => panic!("the values file names a type this test does not read: {other:?}"),
         }
     }
