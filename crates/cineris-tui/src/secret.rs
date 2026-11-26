@@ -229,13 +229,53 @@ pub struct Asking {
 ///
 /// When the terminal cannot be entered, read or written.
 pub fn read_key(overrides: cineris_term::Overrides, asking: &Asking) -> io::Result<Option<Secret>> {
-    let mut terminal = Terminal::enter(overrides)?;
-    terminal.hand_signals_over();
-    let read = read_key_on(&mut terminal, asking);
-    let left = terminal.leave();
-    let read = read?;
-    left?;
-    Ok(read)
+    KeyTerminal::enter(overrides)?.read(asking)
+}
+
+/// The terminal taken for a key's reading, before anything else is done
+/// (since the step 25 fixes): from [`enter`](Self::enter) on the terminal
+/// echoes nothing, and what is typed while the program goes on starting
+/// waits for the key's row, which takes it as typing. `cineris auth login`
+/// takes it before its core starts, which is long enough for a key pasted
+/// straight after the command to be echoed, onto the screen and into the
+/// scrollback, by a terminal still in its ordinary mode. Signals are
+/// handed over as [`read_key`] hands them, and dropping it puts the
+/// terminal back.
+pub struct KeyTerminal(Terminal);
+
+impl std::fmt::Debug for KeyTerminal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KeyTerminal").finish_non_exhaustive()
+    }
+}
+
+impl KeyTerminal {
+    /// Takes the terminal, as [`read_key`] does.
+    ///
+    /// # Errors
+    ///
+    /// When the terminal cannot be entered.
+    pub fn enter(overrides: cineris_term::Overrides) -> io::Result<Self> {
+        let mut terminal = Terminal::enter(overrides)?;
+        terminal.hand_signals_over();
+        Ok(Self(terminal))
+    }
+
+    /// Reads the key ([`read_key_on`]) and puts the terminal back, whatever
+    /// happens. `None` when the person pressed `Esc` or `Ctrl+C`, or a
+    /// signal came.
+    ///
+    /// # Errors
+    ///
+    /// When the terminal cannot be read or written.
+    pub fn read(self, asking: &Asking) -> io::Result<Option<Secret>> {
+        let Self(mut terminal) = self;
+        let read = read_key_on(&mut terminal, asking);
+        let left = terminal.leave();
+        let read = read?;
+        left?;
+        Ok(read)
+    }
 }
 
 /// [`read_key`] on a terminal already entered: for tests, on a device of

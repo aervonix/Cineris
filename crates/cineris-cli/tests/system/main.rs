@@ -244,6 +244,16 @@ impl Machine {
         ));
     }
 
+    /// A subcommand held just before its core starts
+    /// (`cineris_base::hook::HOLD_CORE`), in `folder`: the binary makes
+    /// `held` there and waits until the test makes `go`.
+    pub fn hold_the_core(&mut self, folder: &std::path::Path) {
+        self.vars.push((
+            cineris_base::hook::HOLD_CORE.to_owned(),
+            folder.as_os_str().to_owned(),
+        ));
+    }
+
     /// Where the binary looks, worked out as it works it out.
     pub fn dirs(&self) -> Dirs {
         let mut env = Env::empty(Platform::CURRENT);
