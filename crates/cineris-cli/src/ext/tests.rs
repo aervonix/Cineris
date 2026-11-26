@@ -109,15 +109,29 @@ fn an_extension_is_added_listed_turned_off_and_removed() {
         .unwrap();
     let shown = to_add_text(&to_add);
     assert!(shown.contains(cineris_core::ext::ANY_HOST), "{shown}");
-    assert!(shown.contains("`extension.toml`") && shown.contains("`main.js`"), "{shown}");
-    assert!(to_add.destination.ends_with("extensions/tracker"), "{}", to_add.destination);
-    assert!(to_add.destination.starts_with("~/"), "under ~: {}", to_add.destination);
+    assert!(
+        shown.contains("`extension.toml`") && shown.contains("`main.js`"),
+        "{shown}"
+    );
+    assert!(
+        to_add.destination.ends_with("extensions/tracker"),
+        "{}",
+        to_add.destination
+    );
+    assert!(
+        to_add.destination.starts_with("~/"),
+        "under ~: {}",
+        to_add.destination
+    );
     assert!(!to_add.in_place && !to_add.unchanged && to_add.replaces.is_none());
     let hash = to_add.hash;
     // What is approved is what was read: a change to the source after the
     // read is not taken.
     std::fs::write(source.join("main.js"), "throw new Error('changed');").unwrap();
-    let added = world.runtime.block_on(world.core.add_extension(to_add)).unwrap();
+    let added = world
+        .runtime
+        .block_on(world.core.add_extension(to_add))
+        .unwrap();
     assert!(added.written);
     assert_eq!(added.registered.tools, ["find"]);
     assert_eq!(added.not_cached, None);
@@ -130,7 +144,10 @@ fn an_extension_is_added_listed_turned_off_and_removed() {
     assert_eq!(world.standing("tracker"), ExtensionStanding::Approved);
     let listing = world.core.extensions(&world.project).unwrap();
     let text = listing_text(&listing, &world.project.shown);
-    assert!(text.contains("`tracker`") && text.contains("tools `find`"), "{text}");
+    assert!(
+        text.contains("`tracker`") && text.contains("tools `find`"),
+        "{text}"
+    );
     let inspected = inspected_text(
         listing
             .extensions
@@ -146,7 +163,10 @@ fn an_extension_is_added_listed_turned_off_and_removed() {
         .unwrap();
     let (said, done) = disabled_text(&outcome, "tracker", "cineris");
     assert!(done, "{said}");
-    assert!(said.contains("`[extensions.tracker] enabled = false`"), "{said}");
+    assert!(
+        said.contains("`[extensions.tracker] enabled = false`"),
+        "{said}"
+    );
     assert!(said.contains("does not apply it"), "{said}");
     assert_eq!(world.standing("tracker"), ExtensionStanding::TurnedOff);
     // Changed in place, and added again there: the question names it.
@@ -165,7 +185,10 @@ fn an_extension_is_added_listed_turned_off_and_removed() {
     assert!(removed.unpinned && !removed.deleted);
     assert!(kept.exists());
     let listing = world.core.extensions(&world.project).unwrap();
-    assert!(listing.extensions.iter().all(|one| one.pin.is_none()), "{listing:#?}");
+    assert!(
+        listing.extensions.iter().all(|one| one.pin.is_none()),
+        "{listing:#?}"
+    );
     // Removed on the yes, the question naming its folder under `~`: its
     // folder deleted.
     let removal = world
@@ -173,7 +196,10 @@ fn an_extension_is_added_listed_turned_off_and_removed() {
         .extension_removal(&world.project, "tracker")
         .unwrap();
     let question = removal_question(&removal.folder.as_ref().unwrap().0, false);
-    assert!(question.contains("~/") && question.contains("extensions/tracker"), "{question}");
+    assert!(
+        question.contains("~/") && question.contains("extensions/tracker"),
+        "{question}"
+    );
     let removed = world.core.remove_extension(&removal, true).unwrap();
     assert!(!removed.unpinned && removed.deleted);
     assert!(!kept.exists());
@@ -183,7 +209,10 @@ fn an_extension_is_added_listed_turned_off_and_removed() {
         "theirs",
         "x",
     );
-    let outcome = world.core.disable_extension(&world.project, "theirs").unwrap();
+    let outcome = world
+        .core
+        .disable_extension(&world.project, "theirs")
+        .unwrap();
     let (said, done) = disabled_text(&outcome, "theirs", "cin");
     assert!(!done && said.contains("`cin permissions trust`"), "{said}");
     let removal = world
@@ -192,8 +221,18 @@ fn an_extension_is_added_listed_turned_off_and_removed() {
         .unwrap();
     assert!(removal.project_only);
     let refused = world.core.remove_extension(&removal, true).unwrap_err();
-    assert!(refused.message.contains("`cineris permissions trust`"), "{}", refused.message);
-    assert!(world.project.root.join(".cineris/extensions/theirs").exists());
+    assert!(
+        refused.message.contains("`cineris permissions trust`"),
+        "{}",
+        refused.message
+    );
+    assert!(
+        world
+            .project
+            .root
+            .join(".cineris/extensions/theirs")
+            .exists()
+    );
 }
 
 /// What `ext add` refuses before anything is shown: a folder that is a link,
@@ -207,21 +246,41 @@ fn what_cannot_be_added_or_removed_is_refused_first() {
     World::extension(&users.join("Tracker"), "Tracker", "find");
     let source = world.dir.join("src/tracker");
     World::extension(&source, "tracker", "find");
-    let refused = world.core.extension_to_add(&world.project, &source).unwrap_err();
-    assert!(refused.message.contains("only in case"), "{}", refused.message);
+    let refused = world
+        .core
+        .extension_to_add(&world.project, &source)
+        .unwrap_err();
+    assert!(
+        refused.message.contains("only in case"),
+        "{}",
+        refused.message
+    );
     let dotted = world.dir.join("src/dotted");
     World::extension(&dotted, "trailing.", "find");
-    let refused = world.core.extension_to_add(&world.project, &dotted).unwrap_err();
+    let refused = world
+        .core
+        .extension_to_add(&world.project, &dotted)
+        .unwrap_err();
     assert!(refused.message.contains("Windows"), "{}", refused.message);
     #[cfg(unix)]
     {
         let linked = world.dir.join("src/linked");
         std::os::unix::fs::symlink(&source, &linked).unwrap();
-        let refused = world.core.extension_to_add(&world.project, &linked).unwrap_err();
+        let refused = world
+            .core
+            .extension_to_add(&world.project, &linked)
+            .unwrap_err();
         assert!(refused.message.contains("is a link"), "{}", refused.message);
         std::os::unix::fs::symlink(world.dir.join("home"), source.join("out")).unwrap();
-        let refused = world.core.extension_to_add(&world.project, &source).unwrap_err();
-        assert!(refused.message.contains("`out` is a link"), "{}", refused.message);
+        let refused = world
+            .core
+            .extension_to_add(&world.project, &source)
+            .unwrap_err();
+        assert!(
+            refused.message.contains("`out` is a link"),
+            "{}",
+            refused.message
+        );
     }
     // A folder of another content at the name: the question names it.
     World::extension(&users.join("other"), "other", "kept");
@@ -238,14 +297,27 @@ fn what_cannot_be_added_or_removed_is_refused_first() {
     let broken = world.dir.join("src/broken");
     World::extension(&broken, "broken", "x");
     std::fs::write(broken.join("main.js"), "throw new Error('broken');").unwrap();
-    let to_add = world.core.extension_to_add(&world.project, &broken).unwrap();
+    let to_add = world
+        .core
+        .extension_to_add(&world.project, &broken)
+        .unwrap();
     let refused = world
         .runtime
         .block_on(world.core.add_extension(to_add))
         .unwrap_err();
-    assert!(refused.message.contains("nothing was written or pinned"), "{}", refused.message);
+    assert!(
+        refused.message.contains("nothing was written or pinned"),
+        "{}",
+        refused.message
+    );
     assert!(!users.join("broken").exists());
-    assert!(world.core.extension_removal(&world.project, "broken").is_err(), "not pinned");
+    assert!(
+        world
+            .core
+            .extension_removal(&world.project, "broken")
+            .is_err(),
+        "not pinned"
+    );
     for name in ["..", "../../home", "a/b", ".hidden"] {
         assert!(
             world.core.extension_removal(&world.project, name).is_err(),
@@ -281,4 +353,3 @@ fn the_table_disable_names_is_one_key() {
     assert_eq!(table("tracker"), "[extensions.tracker]");
     assert_eq!(table("acme.lint"), "[extensions.\"acme.lint\"]");
 }
-

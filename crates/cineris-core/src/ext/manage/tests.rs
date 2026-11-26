@@ -71,7 +71,11 @@ fn discovered(source: Source, found: Vec<Found>, left: &[&str]) -> Discovered {
     }
 }
 
-fn standing_of<'a>(listed: &'a [ExtensionListed], source: Source, name: &str) -> &'a ExtensionListed {
+fn standing_of<'a>(
+    listed: &'a [ExtensionListed],
+    source: Source,
+    name: &str,
+) -> &'a ExtensionListed {
     listed
         .iter()
         .find(|one| one.source == source && one.name == name)
@@ -149,21 +153,20 @@ fn each_extension_stands_as_a_session_would_judge_it() {
     file.put(&gone_hash, Entry::new(&gone_manifest, registration, None))
         .unwrap();
     let cache: Cache = file.load().cache;
-    let judge = |pins: Result<&UserPins, String>,
-                 trust: Result<&ProjectTrust, String>,
-                 trusted: bool| {
-        judged(&Judging {
-            user: Some(&user),
-            project: Some(&project),
-            project_trusted: trusted,
-            pins,
-            trust,
-            for_the_run: &[],
-            disabled: &["off".to_owned()],
-            cache: Some(&cache),
-            confined: false,
-        })
-    };
+    let judge =
+        |pins: Result<&UserPins, String>, trust: Result<&ProjectTrust, String>, trusted: bool| {
+            judged(&Judging {
+                user: Some(&user),
+                project: Some(&project),
+                project_trusted: trusted,
+                pins,
+                trust,
+                for_the_run: &[],
+                disabled: &["off".to_owned()],
+                cache: Some(&cache),
+                confined: false,
+            })
+        };
     let listed = judge(Ok(&user_pins), Ok(&trust), true);
     let at = |source, name| standing_of(&listed, source, name).standing.clone();
     assert_eq!(at(Source::User, "approved"), ExtensionStanding::Approved);
@@ -171,10 +174,18 @@ fn each_extension_stands_as_a_session_would_judge_it() {
     assert_eq!(at(Source::User, "off"), ExtensionStanding::TurnedOff);
     assert_eq!(at(Source::User, "new"), ExtensionStanding::NotApproved);
     assert_eq!(at(Source::User, "gone"), ExtensionStanding::Gone);
-    assert!(matches!(at(Source::User, "linked"), ExtensionStanding::LeftOut(why) if why.contains("holds a link")));
+    assert!(
+        matches!(at(Source::User, "linked"), ExtensionStanding::LeftOut(why) if why.contains("holds a link"))
+    );
     assert_eq!(at(Source::Project, "theirs"), ExtensionStanding::Approved);
-    assert!(matches!(at(Source::Project, "APPROVED"), ExtensionStanding::NotUsed(_)));
-    assert_eq!(at(Source::Project, "unpinned"), ExtensionStanding::NotApproved);
+    assert!(matches!(
+        at(Source::Project, "APPROVED"),
+        ExtensionStanding::NotUsed(_)
+    ));
+    assert_eq!(
+        at(Source::Project, "unpinned"),
+        ExtensionStanding::NotApproved
+    );
     assert!(
         !listed.iter().any(|one| one.name == "extensions"),
         "a root's own note is no extension"
@@ -185,10 +196,20 @@ fn each_extension_stands_as_a_session_would_judge_it() {
         ["tool.before on edit"]
     );
     assert!(shown.pin.is_some());
-    assert!(shown.words.as_deref().unwrap().contains("It runs no program."));
+    assert!(
+        shown
+            .words
+            .as_deref()
+            .unwrap()
+            .contains("It runs no program.")
+    );
     let gone = standing_of(&listed, Source::User, "gone");
     assert_eq!(gone.folder, None);
-    assert_eq!(gone.registered.as_ref().unwrap().tools, ["find"], "from the pin's hash");
+    assert_eq!(
+        gone.registered.as_ref().unwrap().tools,
+        ["find"],
+        "from the pin's hash"
+    );
     // The project not trusted: nothing of it is used, and no pin of it is
     // gone.
     let untrusted = judge(Ok(&user_pins), Ok(&ProjectTrust::untrusted()), false);
@@ -197,7 +218,11 @@ fn each_extension_stands_as_a_session_would_judge_it() {
         ExtensionStanding::ProjectNotTrusted
     );
     // A store that cannot be read: what it holds cannot be judged.
-    let unread = judge(Err("the pin store is broken".to_owned()), Err("the trust store is broken".to_owned()), true);
+    let unread = judge(
+        Err("the pin store is broken".to_owned()),
+        Err("the trust store is broken".to_owned()),
+        true,
+    );
     assert!(matches!(
         &standing_of(&unread, Source::User, "approved").standing,
         ExtensionStanding::Unjudged(why) if why.contains("pin store")
@@ -222,8 +247,19 @@ fn a_name_must_be_one_a_session_finds_on_every_system() {
         assert_eq!(folder_name_refused(fine), None, "{fine}");
     }
     for refused in [
-        "", ".", "..", ".hidden", "trailing.", "con", "NUL", "aux.x", "com1", "LPT9.txt", "a/b",
-        "a\\b", "with space",
+        "",
+        ".",
+        "..",
+        ".hidden",
+        "trailing.",
+        "con",
+        "NUL",
+        "aux.x",
+        "com1",
+        "LPT9.txt",
+        "a/b",
+        "a\\b",
+        "with space",
     ] {
         assert!(folder_name_refused(refused).is_some(), "{refused:?}");
     }
@@ -239,7 +275,10 @@ fn a_path_that_leads_out_of_the_folder_of_extensions_is_not_deleted() {
     std::fs::create_dir_all(root.join("tracker")).unwrap();
     std::fs::create_dir_all(scratch.join("elsewhere/x")).unwrap();
     assert!(within(&root, &root.join("tracker")));
-    assert!(!within(&root, &root.join("..").join("..").join("elsewhere").join("x")));
+    assert!(!within(
+        &root,
+        &root.join("..").join("..").join("elsewhere").join("x")
+    ));
     assert!(!within(&root, &root.join("tracker").join("inner")));
     assert!(!within(&root, &root.join("..")));
     assert!(!within(&root, &scratch.join("elsewhere").join("x")));
@@ -270,7 +309,10 @@ fn a_link_at_the_name_is_unlinked_and_not_walked() {
     assert!(delete_unfollowed(&root.join("real")).unwrap());
     assert!(!root.join("real").exists());
     assert_eq!(std::fs::read_to_string(outside.join("keep")).unwrap(), "k");
-    assert!(!delete_unfollowed(&root.join("real")).unwrap(), "already gone");
+    assert!(
+        !delete_unfollowed(&root.join("real")).unwrap(),
+        "already gone"
+    );
 }
 
 /// The folder is written whole in place of what was there, a link at the
@@ -285,7 +327,10 @@ fn the_folder_is_written_whole_in_place_of_what_was_there() {
     let snapshot = found(Source::User, "tracker", "new").snapshot;
     write_folder(&root.join("tracker"), &snapshot).unwrap();
     assert_eq!(
-        Snapshot::read_unfollowed(&root.join("tracker")).0.unwrap().hash(),
+        Snapshot::read_unfollowed(&root.join("tracker"))
+            .0
+            .unwrap()
+            .hash(),
         snapshot.hash()
     );
     let names: Vec<String> = std::fs::read_dir(&root)
@@ -300,7 +345,16 @@ fn the_folder_is_written_whole_in_place_of_what_was_there() {
         std::fs::remove_dir_all(root.join("tracker")).unwrap();
         std::os::unix::fs::symlink(&outside, root.join("tracker")).unwrap();
         write_folder(&root.join("tracker"), &snapshot).unwrap();
-        assert!(!std::fs::symlink_metadata(root.join("tracker")).unwrap().file_type().is_symlink());
-        assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0, "nothing written through it");
+        assert!(
+            !std::fs::symlink_metadata(root.join("tracker"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            std::fs::read_dir(&outside).unwrap().count(),
+            0,
+            "nothing written through it"
+        );
     }
 }

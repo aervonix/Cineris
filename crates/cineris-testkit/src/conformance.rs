@@ -534,7 +534,9 @@ pub fn scenarios() -> Vec<Scenario> {
                 }),
                 call(|_| Op::McpStatus(Empty {})),
                 call(|_| {
-                    Op::ExtensionsStatus(cineris_protocol::methods::ExtensionsStatusParams::default())
+                    Op::ExtensionsStatus(
+                        cineris_protocol::methods::ExtensionsStatusParams::default(),
+                    )
                 }),
                 call(|ctx| {
                     Op::WorkspaceWarm(WorkspaceWarmParams {

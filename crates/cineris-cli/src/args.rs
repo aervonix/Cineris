@@ -1156,7 +1156,9 @@ fn ext(parser: &mut Parser) -> Result<Command, UsageError> {
             yes,
         },
         other => {
-            return Err(UsageError(format!("'{other}' is not a subcommand of 'ext'")));
+            return Err(UsageError(format!(
+                "'{other}' is not a subcommand of 'ext'"
+            )));
         }
     };
     Ok(Command::Ext(parsed))
@@ -1531,9 +1533,15 @@ mod tests {
             (&["ext", "inspect"][..], "takes an extension's name"),
             (&["ext", "add"], "takes the folder"),
             (&["ext", "add", "a", "b"], "takes the folder"),
-            (&["ext", "disable", "--yes", "x"], "unexpected argument '--yes'"),
+            (
+                &["ext", "disable", "--yes", "x"],
+                "unexpected argument '--yes'",
+            ),
             (&["ext", "list", "x"], "'list' is not a subcommand"),
-            (&["ext", "install", "x"], "'install' is not a subcommand of 'ext'"),
+            (
+                &["ext", "install", "x"],
+                "'install' is not a subcommand of 'ext'",
+            ),
         ] {
             let Err(UsageError(message)) = parse_words(words) else {
                 panic!("{words:?} was read");

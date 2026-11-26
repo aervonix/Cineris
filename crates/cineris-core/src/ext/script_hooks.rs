@@ -1283,8 +1283,10 @@ mod tests {
         let shown = way_out(Source::User, "lint", Some("~/x/lint"), unapproved);
         assert!(shown.contains("`cineris ext add ~/x/lint`"), "{shown}");
         assert!(
-            shown.contains("`cineris ext disable lint`, which sets `[extensions.lint] enabled = \
-                            false`"),
+            shown.contains(
+                "`cineris ext disable lint`, which sets `[extensions.lint] enabled = \
+                            false`"
+            ),
             "{shown}"
         );
         let unknown = way_out(Source::User, "lint", None, unapproved);

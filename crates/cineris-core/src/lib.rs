@@ -73,7 +73,6 @@ pub use crate::ext::manage::{
     Added, DisableOutcome, ExtensionListed, ExtensionStanding, ExtensionsListing, Registered,
     Removal, Removed, ToAdd,
 };
-pub use cineris_ext::source::Source as ExtensionSource;
 pub use crate::knowledge::AFTER_THE_RULES;
 pub use crate::manage::{
     Project, ProjectExtension, ProjectFiles, ProjectHookCommand, ProviderCredential, TrustState,
@@ -89,6 +88,7 @@ pub use crate::repo_map::Probe;
 pub use crate::rules::parse_rule;
 pub use crate::usage::AGGREGATES_READ;
 pub use crate::usage::StatsSummary;
+pub use cineris_ext::source::Source as ExtensionSource;
 /// The runtime's timer, which the core's options take: the provider layer's
 /// and the process runner's waits are on it.
 pub use cineris_llm::TokioTimer;

@@ -142,11 +142,7 @@ impl Folder {
 /// (or, on Windows, a `:` that names a stream) or a NUL.
 fn one_name(name: &OsStr) -> Result<(), Refused> {
     let bytes = name.as_encoded_bytes();
-    let separators: &[u8] = if cfg!(windows) {
-        b"/\\:\0"
-    } else {
-        b"/\0"
-    };
+    let separators: &[u8] = if cfg!(windows) { b"/\\:\0" } else { b"/\0" };
     if bytes.is_empty()
         || bytes == b"."
         || bytes == b".."
@@ -846,7 +842,10 @@ mod tests {
             Err(Refused::Link)
         ));
         assert!(matches!(root.file(OsStr::new("file")), Err(Refused::Link)));
-        assert!(matches!(Folder::open(&dir.join("named")), Err(Refused::Link)));
+        assert!(matches!(
+            Folder::open(&dir.join("named")),
+            Err(Refused::Link)
+        ));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
