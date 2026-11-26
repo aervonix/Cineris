@@ -1786,9 +1786,9 @@ impl Core {
                 // let go when the loop refuses it (the review of step 28's
                 // second pull request, M5, and its re-check).
                 let ticket = live.sink.sent_by(client.0);
-                let result =
-                    live.handle
-                        .prompt_from(input, params.delivery, Some(ticket), command);
+                let result = live
+                    .handle
+                    .prompt_from(input, params.delivery, Some(ticket), command);
                 if result.is_err() {
                     let _ = live.sink.forget(ticket);
                 }

@@ -1,0 +1,215 @@
+# Step 28, its third pull request's first part: custom commands. The rules
+# of `cineris_ext::commands` and of the core's side (`commands/list`, a
+# prompt that names a command, a command's profile), broken one at a time,
+# with the tests that must fail.
+
+[break] a-projects-command-takes-the-users-name
+rule: The user's command of a name is used over a project's, and the project's is not used.
+file: crates/cineris-ext/src/commands.rs
+in: find
+find: match users.iter().find(|(user, _)| *user == folded) {
+replace: match users.iter().find(|(user, _)| *user == folded && user.is_empty()) {
+packages: cineris-ext, cineris-core
+caught-by:
+    cineris-ext commands::tests::the_users_command_wins_over_a_projects_of_the_same_name
+    cineris-core::it commands::file_commands_are_listed_expanded_and_refused_with_reasons
+
+[break] a-users-name-is-taken-only-in-its-own-case
+rule: A name the user's command takes is compared with ASCII's case folded.
+file: crates/cineris-ext/src/commands.rs
+in: find
+find: let folded = command.name.to_ascii_lowercase();
+replace: let folded = command.name.clone();
+caught-by:
+    cineris-ext commands::tests::the_users_command_wins_over_a_projects_of_the_same_name
+
+[break] names-that-differ-only-in-case-are-both-used
+rule: Within one folder, commands whose names differ only in case are all left out.
+file: crates/cineris-ext/src/commands.rs
+in: look_in
+find: folded.iter().filter(|other| **other == fold).count() > 1
+replace: folded.iter().filter(|other| **other == fold).count() > 2
+caught-by:
+    cineris-ext commands::tests::a_folder_of_commands_is_read_within_its_bounds
+
+[break] a-projects-folder-may-lead-out-of-the-workspace
+rule: A project's folder of commands is read only where it leads inside the workspace.
+file: crates/cineris-ext/src/commands.rs
+in: open_root
+find: if root.owner == Owner::Project && !location_within(&real, workspace) {
+replace: if root.owner == Owner::Project && real.as_os_str().is_empty() {
+caught-by:
+    cineris-ext commands::tests::no_link_is_followed_in_a_folder_of_commands
+
+[break] a-command-file-may-be-larger
+rule: A command file is at most 64 KiB; a larger one is left out.
+file: crates/cineris-ext/src/commands.rs
+find: pub const MAX_FILE_BYTES: u64 = 64 * 1024;
+replace: pub const MAX_FILE_BYTES: u64 = 128 * 1024;
+caught-by:
+    cineris-ext commands::tests::a_folder_of_commands_is_read_within_its_bounds
+
+[break] a-folder-of-commands-is-read-past-its-entries
+rule: At most 100 entries are looked at in a folder of commands, and the rest is said.
+file: crates/cineris-ext/src/commands.rs
+in: look_in
+find: if names.len() == MAX_ENTRIES {
+replace: if names.len() == MAX_ENTRIES + 1 {
+caught-by:
+    cineris-ext commands::tests::a_folder_of_commands_is_read_within_its_bounds
+
+[break] a-key-given-twice-is-taken
+rule: A command's front matter is read strictly: a key given twice refuses the file.
+file: crates/cineris-ext/src/commands.rs
+in: parse
+find: if let Some(key) = front.repeated().first() {
+replace: if let Some(key) = front.repeated().get(99) {
+caught-by:
+    cineris-ext commands::tests::a_commands_file_is_read_strictly
+
+[break] a-line-that-is-no-field-is-passed-over
+rule: A command's front matter is read strictly: a line that is no field refuses the file.
+file: crates/cineris-ext/src/commands.rs
+in: parse
+find: if let Some(line) = front.unread().first() {
+replace: if let Some(line) = front.unread().get(99) {
+caught-by:
+    cineris-ext commands::tests::a_commands_file_is_read_strictly
+
+[break] an-unknown-key-is-taken
+rule: A command's front matter is read strictly: a key other than description, arguments and profile refuses the file.
+file: crates/cineris-ext/src/commands.rs
+in: parse
+find: "description" => {
+replace: "description" | "model" => {
+caught-by:
+    cineris-ext commands::tests::a_commands_file_is_read_strictly
+
+[break] a-placeholder-may-name-no-argument
+rule: A body puts in only `{{args}}` and the arguments its front matter names.
+file: crates/cineris-ext/src/commands.rs
+in: parse
+find: && !arguments.iter().any(|argument: &Argument| argument.name == *used)
+replace: && arguments.iter().any(|argument: &Argument| argument.name == *used)
+caught-by:
+    cineris-ext commands::tests::a_commands_file_is_read_strictly
+
+[break] more-words-than-arguments-are-dropped
+rule: A body without `{{args}}` takes no more words than it has arguments: more is refused.
+file: crates/cineris-ext/src/commands.rs
+in: expand
+find: if !assigned.rest.is_empty() && !takes_args {
+replace: if !assigned.rest.is_empty() && takes_args {
+packages: cineris-ext, cineris-core
+caught-by:
+    cineris-ext commands::tests::arguments_are_put_in_and_what_does_not_fit_is_refused
+    cineris-core::it commands::file_commands_are_listed_expanded_and_refused_with_reasons
+
+[break] an-expansion-is-unbounded
+rule: A command's text is at most 256 KiB once expanded.
+file: crates/cineris-ext/src/commands.rs
+in: expand
+find: if out.len() + put.len() > MAX_EXPANDED_BYTES {
+replace: if out.len() + put.len() > MAX_EXPANDED_BYTES * 4 {
+caught-by:
+    cineris-ext commands::tests::arguments_are_put_in_and_what_does_not_fit_is_refused
+
+[break] what-is-typed-is-unbounded
+rule: At most 16 KiB may be typed after a command.
+file: crates/cineris-ext/src/commands.rs
+in: assign
+find: if typed.len() > MAX_TYPED_BYTES {
+replace: if typed.len() > MAX_TYPED_BYTES * 4 {
+caught-by:
+    cineris-ext commands::tests::arguments_are_put_in_and_what_does_not_fit_is_refused
+
+[break] a-command-reaches-prompt-submit-unexpanded
+rule: A command is expanded before `prompt.submit`: its hooks see the text it sends.
+file: crates/cineris-core/src/core.rs
+find: (input, Some(command))
+replace: (vec![cineris_protocol::Part::text(format!("/{}", command.name))], Some(command))
+caught-by:
+    cineris-core::it commands::an_extensions_command_runs_and_prompt_submit_sees_the_expanded_text
+    cineris-core::it commands::file_commands_are_listed_expanded_and_refused_with_reasons
+
+[break] a-command-comes-with-a-prompt
+rule: A prompt that names a command holds nothing else.
+file: crates/cineris-core/src/core.rs
+find: if params.command.is_some() && !params.input.is_empty() {
+replace: if params.command.is_some() && params.input.len() > 1 {
+caught-by:
+    cineris-core::it commands::file_commands_are_listed_expanded_and_refused_with_reasons
+
+[break] the-record-forgets-the-command
+rule: The recorded prompt says which command it came from, and whose.
+file: crates/cineris-agent/src/turn.rs
+find: command: prompt.command
+replace: command: None
+packages: cineris-agent, cineris-core
+caught-by:
+    cineris-core::it commands::file_commands_are_listed_expanded_and_refused_with_reasons
+    cineris-core::it commands::an_extensions_command_runs_and_prompt_submit_sees_the_expanded_text
+
+[break] a-commands-profile-is-ignored
+rule: A command that names a settings profile is not sent: its profile is judged and never applied in this build.
+file: crates/cineris-core/src/commands.rs
+in: expand
+find: if let Some(profile) = &command.profile {
+replace: if let Some(profile) = command.profile.as_ref().filter(|_| false) {
+caught-by:
+    cineris-core::it commands::file_commands_are_listed_expanded_and_refused_with_reasons
+
+[break] an-untrusted-projects-profile-is-usable
+rule: A command's profile names only a profile of the user's layers, or of a trusted project's.
+file: crates/cineris-core/src/commands.rs
+in: judge_profile
+find: || (trusted && loaded.project_profiles.iter().any(|known| known == name));
+replace: || (trusted || loaded.project_profiles.iter().any(|known| known == name));
+caught-by:
+    cineris-core::it commands::file_commands_are_listed_expanded_and_refused_with_reasons
+
+[break] a-profile-may-raise-the-level
+rule: A command's profile never raises the level above the session's.
+file: crates/cineris-core/src/commands.rs
+in: judge
+find: (Some(wanted), Some(now)) if wanted <= now => Ok(()),
+replace: (Some(_), Some(_)) => Ok(()),
+caught-by:
+    cineris-core commands::tests::a_commands_profile_may_only_narrow_the_session
+    cineris-core::it commands::file_commands_are_listed_expanded_and_refused_with_reasons
+
+[break] a-profile-may-add-an-allow-rule
+rule: A command's profile adds no `allow` rule, nor anything else a list joins that widens.
+file: crates/cineris-core/src/commands.rs
+in: judge
+find: if class != TrustClass::Preference {
+replace: if class == TrustClass::KeptApart {
+caught-by:
+    cineris-core commands::tests::a_commands_profile_may_only_narrow_the_session
+
+[break] a-profile-may-change-the-model
+rule: A command's profile changes no provider or model to one the session does not use.
+file: crates/cineris-core/src/commands.rs
+in: judge
+find: TrustClass::RaisesCost if current.as_ref() == Some(value) => Ok(()),
+replace: TrustClass::RaisesCost => Ok(()),
+caught-by:
+    cineris-core commands::tests::a_commands_profile_may_only_narrow_the_session
+
+[break] an-extensions-text-is-sent-unlabelled
+rule: An extension's command's text is sent under a line that names the command and the extension.
+file: crates/cineris-core/src/commands.rs
+in: run_script
+in-string: written by its author, gave this prompt
+replace: gave this prompt
+caught-by:
+    cineris-core::it commands::an_extensions_command_runs_and_prompt_submit_sees_the_expanded_text
+
+[break] the-list-does-not-wait-for-the-extensions
+rule: `commands/list` gives an extension's commands once the session's extensions are found and registered.
+file: crates/cineris-core/src/commands.rs
+in: list
+find: let _ = live.extensions.wait().await;
+replace: let _ = &live.extensions;
+caught-by:
+    cineris-core::it commands::an_extensions_command_runs_and_prompt_submit_sees_the_expanded_text

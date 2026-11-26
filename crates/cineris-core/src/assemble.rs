@@ -620,16 +620,17 @@ pub(crate) fn path_options(inner: &Inner) -> PathOptions {
 fn place(inner: &Inner, wanted: &Wanted) -> Result<Place, Box<ErrorData>> {
     let options = &inner.options;
     let env = &options.env;
-    let resolver = PathResolver::new(&wanted.workspace, path_options(inner)).map_err(|failure| {
-        error(
-            ErrorKind::Usage,
-            "invalid_workspace",
-            format!(
-                "`{}` cannot be a workspace: {failure}",
-                cineris_base::in_code(&wanted.workspace.display().to_string())
-            ),
-        )
-    })?;
+    let resolver =
+        PathResolver::new(&wanted.workspace, path_options(inner)).map_err(|failure| {
+            error(
+                ErrorKind::Usage,
+                "invalid_workspace",
+                format!(
+                    "`{}` cannot be a workspace: {failure}",
+                    cineris_base::in_code(&wanted.workspace.display().to_string())
+                ),
+            )
+        })?;
     let resolver = Arc::new(resolver);
     let root = resolver.root().clone();
     let mut load = LoadOptions::new(env.clone());

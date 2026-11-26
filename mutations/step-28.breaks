@@ -7038,8 +7038,8 @@ caught-by:
 [break] a-prompt-has-no-ticket
 rule: Every prompt is handed to the loop with a ticket, so that one refused, by a hook or by a stop that came after it was sent, goes back whole to its sender alone (M5, and the re-check of the second pull request).
 file: crates/cineris-core/src/core.rs
-find: .prompt_with(params.input, params.delivery, Some(ticket));
-replace: .prompt_with(params.input, params.delivery, None);
+find: .prompt_from(input, params.delivery, Some(ticket), command);
+replace: .prompt_from(input, params.delivery, None, command);
 caught-by:
     cineris-core::it hook_wiring::a_projects_hooks_reach_a_session_only_through_trust
 
@@ -7047,8 +7047,8 @@ caught-by:
 rule: A prompt sent before a stop that then refuses it goes back whole to its sender (the re-check of the second pull request).
 os: linux
 file: crates/cineris-core/src/core.rs
-find: .prompt_with(params.input, params.delivery, Some(ticket));
-replace: .prompt_with(params.input, params.delivery, Some(ticket).filter(|_| live.command_hooks.commands.stop_pending()));
+find: .prompt_from(input, params.delivery, Some(ticket), command);
+replace: .prompt_from(input, params.delivery, Some(ticket).filter(|_| live.command_hooks.commands.stop_pending()), command);
 caught-by:
     cineris-core::it hook_commands::confined::sys_a_hooks_writes_are_confined_and_looked_at
 
@@ -7872,7 +7872,7 @@ caught-by:
 rule: A steering message taken at a boundary where the turn was interrupted is given back.
 file: crates/cineris-agent/src/turn.rs
 in: Session::return_pending
-find: Pending::Steer { input, ticket } => self.give_back(turn, input, Some(Delivery::Steer), ticket, Vec::new(), hooks::RETURNED_UNASKED.to_owned())
+find: Pending::Steer { input, ticket, .. } => self.give_back(turn, input, Some(Delivery::Steer), ticket, Vec::new(), hooks::RETURNED_UNASKED.to_owned())
 replace: Pending::Steer { .. } => {}
 caught-by:
     cineris-agent::it hooks::a_steering_message_a_hook_refuses_or_an_interrupt_stops_is_given_back
@@ -7981,9 +7981,9 @@ caught-by:
 [break] a-steering-message-loses-its-ticket
 rule: A steering message keeps the server's ticket for it while it waits for a boundary.
 file: crates/cineris-agent/src/session.rs
-in: SessionHandle::prompt_with
-find: inbox.pending.push_back(Pending::Steer { input, ticket });
-replace: inbox.pending.push_back(Pending::Steer { input, ticket: None });
+in: SessionHandle::prompt_from
+find: inbox.pending.push_back(Pending::Steer { input, ticket, command });
+replace: inbox.pending.push_back(Pending::Steer { input, ticket: None, command });
 caught-by:
     cineris-agent::it hooks::a_steering_message_a_hook_refuses_or_an_interrupt_stops_is_given_back
 

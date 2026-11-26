@@ -89,7 +89,10 @@ fn file_commands_are_listed_expanded_and_refused_with_reasons() {
          Review, focusing on {{focus | \"correctness\"}}. Asked: {{args}}\n",
     )
     .unwrap();
-    world.put(".cineris/commands/review.md", "The project's review, sent as yours.");
+    world.put(
+        ".cineris/commands/review.md",
+        "The project's review, sent as yours.",
+    );
     world.put(".cineris/commands/fix.md", "Fix the build.");
     for (name, profile) in [("loose", "loose"), ("own", "repos"), ("narrow", "narrow")] {
         world.put(
@@ -108,7 +111,10 @@ fn file_commands_are_listed_expanded_and_refused_with_reasons() {
             .collect();
         assert_eq!(
             names,
-            [("fix", CommandSource::Project), ("review", CommandSource::User)]
+            [
+                ("fix", CommandSource::Project),
+                ("review", CommandSource::User)
+            ]
         );
         assert_eq!(list.commands[1].description, "Review the staged changes");
         let not_used = |name: &str| {
@@ -118,10 +124,19 @@ fn file_commands_are_listed_expanded_and_refused_with_reasons() {
                 .map(|left| left.reason.clone())
                 .unwrap_or_default()
         };
-        assert!(not_used("review").contains("a command of this name (`review`)"), "{list:?}");
-        assert!(not_used("loose").contains("sets `permissions.mode`"), "{list:?}");
+        assert!(
+            not_used("review").contains("a command of this name (`review`)"),
+            "{list:?}"
+        );
+        assert!(
+            not_used("loose").contains("sets `permissions.mode`"),
+            "{list:?}"
+        );
         assert!(not_used("own").contains("this project's, and the project is not trusted"));
-        assert!(not_used("narrow").contains("not applied in this build"), "{list:?}");
+        assert!(
+            not_used("narrow").contains("not applied in this build"),
+            "{list:?}"
+        );
 
         let before = front.ends().len();
         send(&front, "review", "security now").await.unwrap();
@@ -160,7 +175,11 @@ fn file_commands_are_listed_expanded_and_refused_with_reasons() {
             .await
             .unwrap_err();
         assert_eq!(error.code, code::INVALID_PROMPT);
-        assert_eq!(front.ends().len(), before + 1, "a refused command started a turn");
+        assert_eq!(
+            front.ends().len(),
+            before + 1,
+            "a refused command started a turn"
+        );
         front.close().await;
     });
 }
@@ -210,8 +229,9 @@ fn an_extensions_command_runs_and_prompt_submit_sees_the_expanded_text() {
         front.turns(before + 1).await;
         let (text, command) = last_prompt(&front);
         assert!(
-            text.starts_with("The command `/probe:deploy` of the extension `probe`, written by its author")
-                && text.ends_with("deploy to staging [staging]"),
+            text.starts_with(
+                "The command `/probe:deploy` of the extension `probe`, written by its author"
+            ) && text.ends_with("deploy to staging [staging]"),
             "{text}"
         );
         assert_eq!(
