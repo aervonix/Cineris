@@ -2392,7 +2392,7 @@ caught-by:
 [break] an-mcp-argument-is-not-masked
 rule: Every argument of another client's server goes through the secret filter's formats before it leaves the reader.
 file: crates/cineris-config/src/import.rs
-in: server
+in: formats_masked
 find: let shown = filter.redact(part);
 replace: let shown = std::borrow::Cow::Borrowed(part);
 caught-by:
@@ -2402,7 +2402,7 @@ caught-by:
 [break] an-mcp-address-keeps-its-user-part
 rule: The user part of a server's address is masked before it leaves the reader.
 file: crates/cineris-config/src/import.rs
-in: server
+in: formats_masked
 find: crate::schema::redact::without_url_users(&shown).unwrap_or_else(|| shown.into_owned());
 replace: shown.into_owned();
 caught-by:
@@ -2750,7 +2750,7 @@ caught-by:
 [break] a-value-named-as-a-credential-is-shown
 rule: A value whose name says it is a credential is shown masked in NAME=value.
 file: crates/cineris-config/src/import.rs
-in: launch_view
+in: args_view
 find: format!("{name}={mask}")
 replace: arg.clone()
 caught-by:
@@ -2759,8 +2759,8 @@ caught-by:
 [break] a-value-after-a-credential-flag-is-shown
 rule: The value after a flag whose name says it is a credential is shown masked.
 file: crates/cineris-config/src/import.rs
-in: launch_view
-find: after_flag = arg.starts_with('-') && !arg.contains('=') && names_a_secret(arg);
+in: args_view
+find: after_flag = arg.starts_with('-') && !arg.contains('=') && names_a_secret(arg, false);
 replace: after_flag = false;
 caught-by:
     cineris-config import::tests::a_value_named_as_a_credential_is_shown_masked_and_imported_as_it_is
@@ -2769,8 +2769,8 @@ caught-by:
 rule: A query field of an address whose name says it is a credential is shown masked.
 file: crates/cineris-config/src/import.rs
 in: masked_fields
-find: if names_a_secret(name) && Masked::in_address(value, percent) != Masked::No =>
-replace: if false && names_a_secret(name) && Masked::in_address(value, percent) != Masked::No =>
+find: if names_a_secret(name, true) && Masked::in_address(value, percent) != Masked::No =>
+replace: if false && names_a_secret(name, true) && Masked::in_address(value, percent) != Masked::No =>
 caught-by:
     cineris-config import::tests::a_value_named_as_a_credential_is_shown_masked_and_imported_as_it_is
 
@@ -3245,7 +3245,7 @@ caught-by:
 [break] an-arguments-address-shows-its-query-credential
 rule: An address in an argument shows its host and path, and a credential in its query is masked, as in a server's own address (settled by the maintainers, after the review of the fixes).
 file: crates/cineris-config/src/import.rs
-in: launch_view
+in: args_view
 find: } else if arg.contains("://") {
 replace: } else if false {
 caught-by:
@@ -3396,8 +3396,13 @@ caught-by:
 [break] pwd-is-a-credential-word
 rule: `PWD` is the shell's working directory, not a password (Medium 2).
 file: crates/cineris-config/src/import.rs
-find: &["auth", "authorization"]
-replace: &["auth", "authorization", "pwd"]
+find:
+    "auth",
+    "authorization"
+replace:
+    "auth",
+    "authorization",
+    "pwd"
 caught-by:
     cineris-config import::tests::a_compound_credential_name_hides_its_value_and_pwd_does_not
 
@@ -3494,7 +3499,7 @@ caught-by:
 rule: `pwd` is a credential's word as the last of two or more, or as a flag: `MYSQL_PWD`, `--pwd` (the final review, the narrow check).
 file: crates/cineris-config/src/import.rs
 in: names_a_secret
-find: (pwd && (words.len() > 1 || name.starts_with('-'))) || words.iter()
+find: (pwd && (in_address || words.len() > 1 || name.starts_with('-'))) || words.iter()
 replace: words.iter()
 caught-by:
     cineris-config import::tests::a_compound_credential_name_hides_its_value_and_pwd_does_not
@@ -3503,7 +3508,7 @@ caught-by:
 rule: `PWD` alone is the shell's working directory, not a password (the final review).
 file: crates/cineris-config/src/import.rs
 in: names_a_secret
-find: pwd && (words.len() > 1 || name.starts_with('-'))
+find: pwd && (in_address || words.len() > 1 || name.starts_with('-'))
 replace: pwd
 caught-by:
     cineris-config import::tests::a_compound_credential_name_hides_its_value_and_pwd_does_not
@@ -3520,7 +3525,7 @@ caught-by:
 [break] an-addresss-first-field-is-taken-for-a-name
 rule: An address's first `=` is in its query or fragment, not after a credential's name: `https://h/cb#access_token=…&state=…` keeps its other fields (the final review).
 file: crates/cineris-config/src/import.rs
-in: launch_view
+in: args_view
 find: && !name.contains("://")
 replace:
 caught-by:
@@ -3594,7 +3599,7 @@ caught-by:
 [break] an-arguments-address-takes-a-percent
 rule: `%` is a token's only in a server's own address, not in an address inside an argument, which `cmd /c` expands (N-L2).
 file: crates/cineris-config/src/import.rs
-in: launch_view
+in: args_view
 find: masked_query(arg, false, cmd, 0)
 replace: masked_query(arg, true, cmd, 0)
 caught-by:
@@ -3725,7 +3730,7 @@ caught-by:
 [break] a-flags-name-is-not-judged
 rule: The value after a credential's flag is judged under that flag's name, and in an argument of `cmd` (B-M1, B-L4).
 file: crates/cineris-config/src/import.rs
-in: launch_view
+in: args_view
 find: Masked::of(arg).under(before, arg, cmd)
 replace: Masked::of(arg)
 caught-by:
@@ -3735,7 +3740,7 @@ caught-by:
 [break] the-flag-before-a-value-is-not-kept
 rule: The value after a credential's flag is judged under that flag's own name (B-M1).
 file: crates/cineris-config/src/import.rs
-in: launch_view
+in: args_view
 find: before = arg;
 replace:
 caught-by:
@@ -3744,7 +3749,7 @@ caught-by:
 [break] a-named-values-name-is-not-judged
 rule: The value of a credential's `NAME=value` is judged under that name, and in an argument of `cmd` (B-M1, B-L4).
 file: crates/cineris-config/src/import.rs
-in: launch_view
+in: args_view
 find: Masked::of(value).under(name, value, cmd)
 replace: Masked::of(value)
 caught-by:
@@ -3808,7 +3813,7 @@ caught-by:
 [break] an-arguments-address-is-not-read-as-cmds
 rule: An address in an argument of `cmd` is read as `cmd` reads it: a hidden token there with a `/` is loose (B-L4).
 file: crates/cineris-config/src/import.rs
-in: launch_view
+in: args_view
 find: masked_query(arg, false, cmd, 0)
 replace: masked_query(arg, false, false, 0)
 caught-by:

@@ -16,7 +16,9 @@ use cineris_protocol::project::{CommandPurpose, DetectedCommand};
 use cineris_protocol::session::{SessionState, TrustStanding};
 use cineris_protocol::{Op, OpResult};
 use cineris_term::{Event, Key, KeyCode};
-use cineris_tui::app::setup::{Found, KeyStore, McpFile, McpServer, Provider, Providers};
+use cineris_tui::app::setup::{
+    Found, KeyStore, McpFile, McpHeader, McpServer, Provider, Providers,
+};
 use cineris_tui::app::{App, GlyphSet, Inbound, Open, Settings, Start};
 use cineris_tui::highlight::Highlighter;
 use cineris_tui::history::MemoryHistory;
@@ -73,6 +75,7 @@ fn setup(windows: bool) -> FakeSetup {
                 hidden: false,
                 env: Vec::new(),
                 headers: Vec::new(),
+                host: None,
                 refused: None,
             },
             McpServer {
@@ -80,7 +83,12 @@ fn setup(windows: bool) -> FakeSetup {
                 shown: "https://tracker.example.com/mcp".to_owned(),
                 hidden: false,
                 env: Vec::new(),
-                headers: vec![("Authorization".to_owned(), "TRACKER_AUTH".to_owned())],
+                headers: vec![McpHeader {
+                    name: "Authorization".to_owned(),
+                    variable: "TRACKER_AUTH".to_owned(),
+                    set: false,
+                }],
+                host: Some("tracker.example.com".to_owned()),
                 refused: None,
             },
             McpServer {
@@ -91,6 +99,7 @@ fn setup(windows: bool) -> FakeSetup {
                 hidden: false,
                 env: Vec::new(),
                 headers: Vec::new(),
+                host: None,
                 refused: Some("holds a credential in its command".to_owned()),
             },
         ],

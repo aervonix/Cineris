@@ -9,17 +9,31 @@
 //!
 //! - **The environment's and the headers' values are dropped:** only their
 //!   names are given. An imported server takes each from a variable the
-//!   person sets ([`ImportedServer::header_variable`]).
+//!   person sets: an environment variable by its own name, and a header
+//!   from one named for the server and the header, never another's nor
+//!   one of the harness's ([`HeaderVariables`]).
 //! - **The command line and the address are given whole, as shown,** each
 //!   argument through the secret filter's formats and the address's user
 //!   part through 08's rule. A part that matches is replaced by
 //!   [`MASK`](cineris_base::redact::MASK) before it leaves this module, and
 //!   the server is [`Refusal::HoldsCredential`]: it cannot be imported, as
 //!   step 17 refuses an entry that holds one.
+//!   An argument that is an address with no scheme whose user part holds a
+//!   password (`--proxy me:password@proxy.example.com:8080`) has that part
+//!   masked and refuses too, read strictly so that `git@github.com:o/r`
+//!   and an email address are left alone (`without_bare_users`; since the
+//!   step 25 fixes, the review).
 //! - **A name, a command or an address with a control character or a
 //!   character that acts unseen** is [`Refusal::Unseen`], and is not
 //!   imported either; nor is a name that cannot be a setting's
-//!   ([`Refusal::Name`]: empty, or longer than [`MAX_NAME`]).
+//!   ([`Refusal::Name`]: empty, or longer than [`MAX_NAME`]); nor a server
+//!   with an argument that is not text, or arguments that are not a list
+//!   ([`Refusal::NotUnderstood`], the argument masked whole, never shown as
+//!   its JSON: since the step 25 fixes).
+//! - **What the first run showed `[redacted]` is `[redacted]` in every view
+//!   of the configuration,** by this module's own rule (`shown_args`,
+//!   `shown_address`), though it is imported as it is (since the step 25
+//!   fixes, the owner's choice).
 //!
 //! **What is shown masks more than what refuses** (since the full review
 //! of step 25's third pull request, [`ImportedServer::shown`]): a value
@@ -41,10 +55,15 @@
 //!   of [`SECRET_ENDINGS`] once its last digits are left off, or is one of
 //!   [`SECRET_WORDS`]: `--api-key`, `GITHUB_TOKEN`, `PGPASSWORD`,
 //!   `NGROK_AUTHTOKEN` and `API_KEY2` do; `--author`, `--keyboard`,
-//!   `--tokenizer` and `PWD` do not. `pwd`, its last digits left off, is a
-//!   credential's as the last of two words or more (`MYSQL_PWD2`) or as a
-//!   flag (`--pwd`), never as a whole variable's name, the shell's working
-//!   directory. A name of `NAME=value` that holds white
+//!   `--tokenizer` and `PWD` do not. Since the step 25 fixes (the review)
+//!   the list has `passphrase`, `credential`, `signature` (and their
+//!   plurals) among the endings and `pass`, `pw`, `bearer`, `cookie`,
+//!   `sig`, `session` and `oauth` among the whole words: `--passphrase`,
+//!   `DB_PASS`, `?sig=…`, `X-Amz-Signature`. `pwd`, its last digits left
+//!   off, is a credential's as the last of two words or more (`MYSQL_PWD2`),
+//!   as a flag (`--pwd`), or as a field's name in an address (`?pwd=…`,
+//!   since the step 25 fixes), never as a whole variable's name, the
+//!   shell's working directory. A name of `NAME=value` that holds white
 //!   space (`mcp --key=…` inside a script) is not a name, and shows its
 //!   value.
 //! - **Never one that ends in** [`SHOWN_ENDINGS`] (`command`, `cmd`, `hook`,
@@ -128,6 +147,12 @@ pub const MAX_NAME: usize = 64;
 /// What a word of a name whose value is taken for a credential is, or ends
 /// in, once its last digits are left off: `GITHUB_TOKEN=…`, `--api-key …`,
 /// `PGPASSWORD=…`, `NGROK_AUTHTOKEN=…`, `API_KEY2=…`.
+///
+/// **One list,** with [`SECRET_WORDS`]: the import reads it, every view of
+/// the configuration reads a server's arguments by it
+/// (`shown_args`), and the guess that redacts a reserved section by its
+/// keys' names reads it too (`schema::redact`; since the step 25 fixes, the
+/// review: the guess counted `credential` and this list did not).
 pub const SECRET_ENDINGS: &[&str] = &[
     "key",
     "keys",
@@ -138,11 +163,30 @@ pub const SECRET_ENDINGS: &[&str] = &[
     "password",
     "passwords",
     "passwd",
+    "passphrase",
+    "passphrases",
+    "credential",
+    "credentials",
+    "signature",
+    "signatures",
 ];
 
 /// The words of a name whose value is taken for a credential, matched
-/// whole: `--auth …`, `?auth=…` (not `--author`).
-pub const SECRET_WORDS: &[&str] = &["auth", "authorization"];
+/// whole: `--auth …`, `?auth=…` (not `--author`), `DB_PASS=…`, `--pw …`,
+/// `--bearer …`, `--cookie …`, `?sig=…` (an Azure SAS), `--session …`
+/// (not `--passthrough`, `--signal` or `--sessions-dir`).
+pub const SECRET_WORDS: &[&str] = &[
+    "auth",
+    "authorization",
+    "oauth",
+    "pass",
+    "pw",
+    "bearer",
+    "cookie",
+    "cookies",
+    "sig",
+    "session",
+];
 
 /// The last words of a name whose value is never masked: it says where a
 /// credential comes from, names a program that gives it, or names a place,
@@ -208,10 +252,18 @@ fn a_credentials_word(word: &str) -> bool {
     SECRET_WORDS.contains(&word) || SECRET_ENDINGS.iter().any(|ending| stem.ends_with(ending))
 }
 
+/// Whether a word of `name` is a credential's ([`a_credentials_word`]),
+/// whatever its last word: the guess that redacts a reserved section by its
+/// keys' names reads the import's one list through this (`schema::redact`).
+pub(crate) fn holds_a_credentials_word(name: &str) -> bool {
+    words(name).iter().any(|word| a_credentials_word(word))
+}
+
 /// Whether `name` says its value is a credential: it holds no white space,
 /// a word of it is a credential's, its last is not one of
 /// [`SHOWN_ENDINGS`], and it is not a switch turned off (`--no-auth`).
-fn names_a_secret(name: &str) -> bool {
+/// `in_address`: `name` is a field's of an address's query or fragment.
+fn names_a_secret(name: &str, in_address: bool) -> bool {
     if name.chars().any(char::is_whitespace) {
         return false;
     }
@@ -224,9 +276,11 @@ fn names_a_secret(name: &str) -> bool {
     }
     // `MYSQL_PWD2`, `--pwd`: a password's, as the last of two words or more
     // or as a flag; `PWD` alone is the shell's working directory (the final
-    // review and the narrow check).
+    // review and the narrow check). In an address's field it is a
+    // password's alone too (`?pwd=…`): no shell's working directory is there
+    // (the step 25 fixes, the review).
     let pwd = last.trim_end_matches(|character: char| character.is_ascii_digit()) == "pwd";
-    (pwd && (words.len() > 1 || name.starts_with('-')))
+    (pwd && (in_address || words.len() > 1 || name.starts_with('-')))
         || words.iter().any(|word| a_credentials_word(word))
 }
 
@@ -428,7 +482,8 @@ fn masked_fields(text: &str, percent: bool, cmd: bool, depth: usize) -> (String,
     for (field, separator) in fields(text) {
         match field.split_once('=') {
             Some((name, value))
-                if names_a_secret(name) && Masked::in_address(value, percent) != Masked::No =>
+                if names_a_secret(name, true)
+                    && Masked::in_address(value, percent) != Masked::No =>
             {
                 hidden = hidden.and(Masked::in_address(value, percent).under(name, value, cmd));
                 shown.push_str(name);
@@ -518,7 +573,9 @@ pub enum Refusal {
     /// An address inside a field's value deeper than is looked into is
     /// refused as one too.
     NamedValue,
-    /// It is neither a command nor an address this version reads.
+    /// It is neither a command nor an address this version reads: neither
+    /// is given, or an argument is not text, or the arguments are not a
+    /// list (the last two since the step 25 fixes).
     NotUnderstood,
 }
 
@@ -532,29 +589,183 @@ pub struct ImportedServer {
     pub launch: Launch,
     /// The names of the environment variables it is given.
     pub env: Vec<String>,
-    /// The names of the headers it sends.
-    pub headers: Vec<String>,
+    /// The headers it sends, each by its name, with the variable its value
+    /// is taken from once imported.
+    pub headers: Vec<Header>,
     /// Why it cannot be imported, if it cannot.
     pub refused: Option<Refusal>,
 }
 
-impl ImportedServer {
-    /// The variable a header's value is taken from once imported: the
-    /// server's name and the header's, in capitals, joined by `_`, each
-    /// character that cannot be in a variable's name made `_`
-    /// (`TRACKER_AUTHORIZATION`).
+/// A header a server sends, by its name, and the variable its value is
+/// taken from once imported ([`HeaderVariables`]). Its value in the other
+/// client's file is dropped as it is read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Header {
+    /// The header's name.
+    pub name: String,
+    /// The variable its value is taken from.
+    pub variable: String,
+}
+
+/// The variable a header's value would be taken from by the server's name
+/// and the header's alone: both in capitals, joined by `_`, each character
+/// that cannot be in a variable's name made `_` (`TRACKER_AUTHORIZATION`).
+/// [`HeaderVariables`] gives the variable that is written.
+#[must_use]
+pub fn derived_variable(server: &str, header: &str) -> String {
+    format!("{server}_{header}")
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character.to_ascii_uppercase()
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+/// What a variable that a header is taken from may not be, and which it
+/// is (since the step 25 fixes, the review): the name made from the
+/// server's and the header's ([`derived_variable`]) can be another
+/// server's (`my-tracker` and `my_tracker`, `MY.TRACKER`, two names whose
+/// letters other than ASCII ones are made `_`), so that a token set for one
+/// host would be sent to the other; and it can be a provider's key's
+/// (`anthropic` and `api-key` make `ANTHROPIC_API_KEY`), or one of the
+/// harness's own (`CINERIS_…`), so that the person's key would go to that
+/// server's host.
+///
+/// - **Never one of the harness's:** a provider's key's variable (those of
+///   [`cineris_base::child_env::KNOWN_KEYS`], and those the caller adds,
+///   the configuration's providers'), or one that begins `CINERIS_`, in any
+///   case. Such a name, and one that begins with a digit (which a shell
+///   cannot set), is given `MCP_` in front: `MCP_ANTHROPIC_API_KEY`.
+/// - **Never another's:** a name already given to a header of a server
+///   named with it, or a name any of those servers takes from the
+///   environment as it is, in any case, gets `_2`, `_3`, … after it until it
+///   is none: `MY_TRACKER_AUTHORIZATION_2`.
+///
+/// A name that is set in the environment already is given all the same;
+/// the first run says so on the server's row, and that its value would be
+/// sent to the server's host (`cineris-cli`'s first run).
+#[derive(Debug, Clone, Default)]
+pub struct HeaderVariables {
+    /// The providers' keys' variables beside [`KNOWN_KEYS`], in capitals.
+    ///
+    /// [`KNOWN_KEYS`]: cineris_base::child_env::KNOWN_KEYS
+    keys: std::collections::BTreeSet<String>,
+    /// The names given or taken, in capitals.
+    taken: std::collections::BTreeSet<String>,
+}
+
+impl HeaderVariables {
+    /// Names for headers that are none of `keys`, the variables of the
+    /// providers' keys the configuration knows (beside
+    /// [`KNOWN_KEYS`](cineris_base::child_env::KNOWN_KEYS), which are never
+    /// given whatever the caller says).
     #[must_use]
-    pub fn header_variable(&self, header: &str) -> String {
-        let name = format!("{}_{header}", self.name);
-        name.chars()
-            .map(|character| {
-                if character.is_ascii_alphanumeric() {
-                    character.to_ascii_uppercase()
-                } else {
-                    '_'
-                }
-            })
-            .collect()
+    pub fn new<I, S>(keys: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        Self {
+            keys: keys
+                .into_iter()
+                .map(|key| key.as_ref().to_ascii_uppercase())
+                .collect(),
+            taken: std::collections::BTreeSet::new(),
+        }
+    }
+
+    /// Marks `servers`' names as taken: each header's variable, and each
+    /// name it takes from the environment. For the servers of another file
+    /// read already, whose rows were drawn.
+    pub fn take(&mut self, servers: &[ImportedServer]) {
+        for server in servers {
+            for name in server
+                .env
+                .iter()
+                .chain(server.headers.iter().map(|header| &header.variable))
+            {
+                self.taken.insert(name.to_ascii_uppercase());
+            }
+        }
+    }
+
+    /// Gives each header of `servers` its variable, from its name and its
+    /// server's ([`derived_variable`]), by the rules above, in order; and
+    /// marks them taken. Each name `servers` take from the environment is
+    /// taken first, so that no header is given one.
+    pub fn name(&mut self, servers: &mut [ImportedServer]) {
+        for server in servers.iter() {
+            for name in &server.env {
+                self.taken.insert(name.to_ascii_uppercase());
+            }
+        }
+        for server in servers.iter_mut() {
+            let server_name = server.name.clone();
+            for header in &mut server.headers {
+                let variable = self.free(&derived_variable(&server_name, &header.name));
+                self.taken.insert(variable.clone());
+                header.variable = variable;
+            }
+        }
+    }
+
+    /// Whether `name` is one of the harness's: a provider's key's, or one
+    /// that begins `CINERIS_`, in any case.
+    fn the_harnesss(&self, name: &str) -> bool {
+        harnesss_variable(name) || self.keys.contains(&name.to_ascii_uppercase())
+    }
+
+    /// The first name from `derived` that is none of the harness's and not
+    /// taken.
+    fn free(&self, derived: &str) -> String {
+        let base =
+            if self.the_harnesss(derived) || derived.starts_with(|c: char| c.is_ascii_digit()) {
+                format!("MCP_{derived}")
+            } else {
+                derived.to_owned()
+            };
+        let mut name = base.clone();
+        let mut number = 2_u32;
+        while self.the_harnesss(&name) || self.taken.contains(&name.to_ascii_uppercase()) {
+            name = format!("{base}_{number}");
+            number += 1;
+        }
+        name
+    }
+}
+
+/// Whether `name` is a variable the harness reads, whatever the
+/// configuration says: a provider's key's of
+/// [`KNOWN_KEYS`](cineris_base::child_env::KNOWN_KEYS), or one that begins
+/// `CINERIS_`, in any case. A header is never given one, and the first
+/// run's writer refuses a file that gives one ([`HeaderVariables`]).
+#[must_use]
+pub fn harnesss_variable(name: &str) -> bool {
+    let name = name.to_ascii_uppercase();
+    name.starts_with("CINERIS_") || cineris_base::child_env::KNOWN_KEYS.contains(&name.as_str())
+}
+
+impl ImportedServer {
+    /// The host, and its port, that the server's headers are sent to: its
+    /// address's, after any user part. `None` for a server started as a
+    /// command.
+    #[must_use]
+    pub fn host(&self) -> Option<String> {
+        let Launch::Remote { url } = &self.launch else {
+            return None;
+        };
+        let after = url
+            .split_once("://")
+            .map_or(url.as_str(), |(_, after)| after);
+        let authority = after.split(['/', '?', '#']).next().unwrap_or(after);
+        let host = authority
+            .rsplit_once('@')
+            .map_or(authority, |(_, host)| host);
+        (!host.is_empty()).then(|| host.to_owned())
     }
 
     /// The command line or the address, as one text to show: each
@@ -580,49 +791,253 @@ impl ImportedServer {
 
 /// `launch` as it is shown, and what of it is masked by a name.
 fn launch_view(launch: &Launch) -> (String, Masked) {
-    let mask = cineris_base::redact::MASK;
     match launch {
         Launch::Command { program, args } => {
-            let mut hidden = Masked::No;
-            let mut parts = vec![quoted(program)];
-            let cmd = runs_cmd(program);
-            // The value after a flag whose name says it is a credential, and
-            // the argument before this one: that flag, when `after_flag`.
-            let mut after_flag = false;
-            let mut before = "";
-            for arg in args {
-                let shown = if after_flag && !arg.starts_with('-') && Masked::of(arg) != Masked::No
-                {
-                    hidden = hidden.and(Masked::of(arg).under(before, arg, cmd));
-                    mask.to_owned()
-                } else if let Some((name, value)) = arg.split_once('=')
-                        // An address's first `=` is in its query or fragment,
-                        // whose fields are masked below, not before a name.
-                        && !name.contains("://")
-                        && names_a_secret(name)
-                        && Masked::of(value) != Masked::No
-                {
-                    hidden = hidden.and(Masked::of(value).under(name, value, cmd));
-                    format!("{name}={mask}")
-                } else if arg.contains("://") {
-                    // An address (`--auth-url https://…`): its host and path
-                    // shown, and a credential in its query masked, as in a
-                    // server's own address; its user part was masked as it
-                    // was read.
-                    let (shown, masked) = masked_query(arg, false, cmd, 0);
-                    hidden = hidden.and(masked);
-                    shown
-                } else {
-                    arg.clone()
-                };
-                after_flag = arg.starts_with('-') && !arg.contains('=') && names_a_secret(arg);
-                before = arg;
-                parts.push(quoted(&shown));
-            }
+            let (shown, hidden) = args_view(args, runs_cmd(program));
+            let parts: Vec<String> = std::iter::once(quoted(program))
+                .chain(shown.iter().map(|arg| quoted(arg)))
+                .collect();
             (parts.join(" "), hidden)
         }
         Launch::Remote { url } => masked_query(url, true, false, 0),
     }
+}
+
+/// `args` each as it is shown, unquoted, and what of them is masked by a
+/// name. `cmd`: they are `cmd`'s ([`runs_cmd`]).
+fn args_view(args: &[String], cmd: bool) -> (Vec<String>, Masked) {
+    let mask = cineris_base::redact::MASK;
+    let mut hidden = Masked::No;
+    let mut parts = Vec::with_capacity(args.len());
+    // The value after a flag whose name says it is a credential, and the
+    // argument before this one: that flag, when `after_flag`.
+    let mut after_flag = false;
+    let mut before = "";
+    for arg in args {
+        let shown = if after_flag && !arg.starts_with('-') && Masked::of(arg) != Masked::No {
+            hidden = hidden.and(Masked::of(arg).under(before, arg, cmd));
+            mask.to_owned()
+        } else if let Some((name, value)) = arg.split_once('=')
+                // An address's first `=` is in its query or fragment, whose
+                // fields are masked below, not before a name.
+                && !name.contains("://")
+                && names_a_secret(name, false)
+                && Masked::of(value) != Masked::No
+        {
+            hidden = hidden.and(Masked::of(value).under(name, value, cmd));
+            format!("{name}={mask}")
+        } else if arg.contains("://") {
+            // An address (`--auth-url https://…`): its host and path shown,
+            // and a credential in its query masked, as in a server's own
+            // address; its user part was masked as it was read.
+            let (shown, masked) = masked_query(arg, false, cmd, 0);
+            hidden = hidden.and(masked);
+            shown
+        } else {
+            arg.clone()
+        };
+        after_flag = arg.starts_with('-') && !arg.contains('=') && names_a_secret(arg, false);
+        before = arg;
+        parts.push(shown);
+    }
+    (parts, hidden)
+}
+
+/// `part` with every credential the formats know masked, and an address's
+/// user part (`scheme://user:password@`); and, for an `argument`, the user
+/// part of an address with no scheme too ([`without_bare_users`]). What
+/// the import refuses a server for ([`Refusal::HoldsCredential`]), and what
+/// every view of the configuration masks first.
+fn formats_masked(filter: &SecretFilter, part: &str, argument: bool) -> String {
+    let shown = filter.redact(part);
+    let shown =
+        crate::schema::redact::without_url_users(&shown).unwrap_or_else(|| shown.into_owned());
+    if argument {
+        without_bare_users(&shown).unwrap_or(shown)
+    } else {
+        shown
+    }
+}
+
+/// An MCP server's arguments as every view of the configuration shows them
+/// (`cineris config show`, every `--layer`, `Loaded::effective` and
+/// `value`, the `Debug` forms, so `config/get` and the interface's
+/// `/config`): by the import's own rule, so that what the first run drew
+/// `[redacted]` is `[redacted]` everywhere (since the step 25 fixes, the
+/// review; the owner's choice): what the formats know, an address's user
+/// part with or without its scheme, and a value whose name says it is a
+/// credential, each masked; one argument for each, in place.
+#[must_use]
+pub(crate) fn shown_args(args: &[String]) -> Vec<String> {
+    let filter = SecretFilter::new();
+    let masked: Vec<String> = args
+        .iter()
+        .map(|arg| formats_masked(&filter, arg, true))
+        .collect();
+    args_view(&masked, false).0
+}
+
+/// An MCP server's address as every view of the configuration shows it
+/// ([`shown_args`]): what the formats know and its user part masked, and a
+/// field of its query or fragment named as a credential's.
+#[must_use]
+pub(crate) fn shown_address(url: &str) -> String {
+    let masked = formats_masked(&SecretFilter::new(), url, false);
+    masked_query(&masked, true, false, 0).0
+}
+
+/// An MCP server's program as every view of the configuration shows it:
+/// what the formats know masked, as the import masks it.
+#[must_use]
+pub(crate) fn shown_program(program: &str) -> String {
+    formats_masked(&SecretFilter::new(), program, false)
+}
+
+/// The schemes of an address that have no `//`, whose text before an `@`
+/// is no user part: `mailto:me@example.com`, `npm:pkg@1.2.3`.
+const NO_USER_SCHEMES: &[&str] = &[
+    "mailto", "sip", "sips", "xmpp", "im", "pres", "urn", "tel", "npm", "jsr",
+];
+
+/// `arg` with the user part of an address that has no scheme masked:
+/// `me:password@proxy.example.com:8080`, the whole argument or the value
+/// of its `NAME=` (`--proxy=me:password@…`), shows as
+/// `[redacted]@proxy.example.com:8080` (since the step 25 fixes, the
+/// review). `None` when it holds none.
+///
+/// **It is the import's, and not the secret filter's,** whose formats run
+/// over every line of a session's log and are kept narrow on purpose
+/// (`cineris_base::redact`): text of the form `a:b@c` is not only an
+/// address there. Here the text is a program's argument, and the shape is
+/// read strictly: a user and a password of no white space and no `/`, `?`,
+/// `#` or `@` in the user, a scheme with no `//` before it not among
+/// [`NO_USER_SCHEMES`], and after the `@` a host (`localhost`, an IPv4
+/// address, one in `[…]`, or a name of two labels or more whose last is
+/// letters alone) with a port of digits and a path, or a Go driver's
+/// `tcp(…)`, `tcp6(…)` or `unix(…)`. So `git@github.com:org/repo`,
+/// `me@example.com`, `a:b` in a sentence, `alpine:3.19@sha256:…` and
+/// `npm:pkg@1.2.3` are left as they are.
+pub(crate) fn without_bare_users(arg: &str) -> Option<String> {
+    if let Some(masked) = bare_user_masked(arg) {
+        return Some(masked);
+    }
+    let (name, value) = arg.split_once('=')?;
+    bare_user_masked(value).map(|masked| format!("{name}={masked}"))
+}
+
+/// `text`, an address with no scheme whose user part holds a password,
+/// with its user part masked ([`without_bare_users`]).
+fn bare_user_masked(text: &str) -> Option<String> {
+    let mask = cineris_base::redact::MASK;
+    // A password may hold an `@` written as it is: the last one ends the
+    // user part, so that all of it is masked.
+    let (userinfo, place) = text.rsplit_once('@')?;
+    let (user, password) = userinfo.split_once(':')?;
+    let user_character = |character: char| {
+        character.is_ascii_alphanumeric()
+            || matches!(
+                character,
+                '-' | '.'
+                    | '_'
+                    | '~'
+                    | '%'
+                    | '!'
+                    | '$'
+                    | '&'
+                    | '\''
+                    | '('
+                    | ')'
+                    | '*'
+                    | '+'
+                    | ','
+                    | ';'
+            )
+    };
+    let password_character = |character: char| {
+        !character.is_whitespace()
+            && !character.is_control()
+            && !matches!(character, '/' | '?' | '#')
+    };
+    if user.is_empty()
+        || password.is_empty()
+        || password == mask
+        || !user.chars().all(user_character)
+        || !password.chars().all(password_character)
+        || NO_USER_SCHEMES
+            .iter()
+            .any(|scheme| user.eq_ignore_ascii_case(scheme))
+        || !bare_place(place)
+    {
+        return None;
+    }
+    Some(format!("{mask}@{place}"))
+}
+
+/// Whether `place`, the text after an address's `@`, is a host, a port and
+/// a path ([`without_bare_users`]).
+fn bare_place(place: &str) -> bool {
+    if place
+        .chars()
+        .any(|character| character.is_whitespace() || character.is_control())
+    {
+        return false;
+    }
+    for driver in ["tcp(", "tcp6(", "unix("] {
+        if let Some(rest) = place.strip_prefix(driver) {
+            return rest.contains(')');
+        }
+    }
+    let end = place.find(['/', '?', '#']).unwrap_or(place.len());
+    let authority = &place[..end];
+    let (host, port) = if authority.starts_with('[') {
+        match authority.find(']') {
+            Some(close) => (&authority[..=close], &authority[close + 1..]),
+            None => return false,
+        }
+    } else {
+        match authority.rsplit_once(':') {
+            Some((host, _)) => (host, &authority[host.len()..]),
+            None => (authority, ""),
+        }
+    };
+    let port_ok = port.is_empty()
+        || port.strip_prefix(':').is_some_and(|digits| {
+            (1..=5).contains(&digits.len()) && digits.chars().all(|c| c.is_ascii_digit())
+        });
+    port_ok && bare_host(host)
+}
+
+/// Whether `host` is a host's name: `localhost`, an IPv4 address, an
+/// address in `[…]`, or two labels or more of letters, digits and `-`
+/// whose last is letters alone (a top-level domain's).
+fn bare_host(host: &str) -> bool {
+    if host.starts_with('[') {
+        return host.len() > 2 && host.ends_with(']');
+    }
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    let labels: Vec<&str> = host.split('.').collect();
+    if labels.len() == 4
+        && labels
+            .iter()
+            .all(|label| label.parse::<u8>().is_ok() && !label.is_empty())
+    {
+        return true;
+    }
+    labels.len() >= 2
+        && labels.iter().all(|label| {
+            !label.is_empty()
+                && label
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric() || character == '-')
+        })
+        && labels.last().is_some_and(|last| {
+            last.len() >= 2
+                && last
+                    .chars()
+                    .all(|character| character.is_ascii_alphabetic())
+        })
 }
 
 /// Why a file could not be read.
@@ -706,11 +1121,16 @@ pub fn servers_in(text: &str, toml: bool) -> Result<Vec<ImportedServer>, ImportE
         ));
     };
     let filter = SecretFilter::new();
-    Ok(servers
+    let mut servers: Vec<ImportedServer> = servers
         .iter()
         .take(MAX_SERVERS)
         .map(|(name, entry)| server(&filter, name, entry))
-        .collect())
+        .collect();
+    // Each header a variable of its own among the file's servers, and none
+    // of the harness's; the first run names them again among every file it
+    // read, with the providers' keys the configuration knows.
+    HeaderVariables::default().name(&mut servers);
+    Ok(servers)
 }
 
 fn server(filter: &SecretFilter, name: &str, entry: &serde_json::Value) -> ImportedServer {
@@ -723,37 +1143,54 @@ fn server(filter: &SecretFilter, name: &str, entry: &serde_json::Value) -> Impor
             .unwrap_or_default()
     };
     let mut masked = false;
-    let mut mask = |part: &str| -> String {
-        let shown = filter.redact(part);
-        let shown =
-            crate::schema::redact::without_url_users(&shown).unwrap_or_else(|| shown.into_owned());
+    let mut mask = |part: &str, argument: bool| -> String {
+        let shown = formats_masked(filter, part, argument);
         masked |= shown != part;
         shown
     };
+    // An argument that is not text (an object, a list, a number), or
+    // arguments that are not a list, is not a command line this version
+    // reads: the server is refused, and the argument shown masked whole,
+    // never as its JSON (since the step 25 fixes, the review: `{"token":
+    // "…"}` was drawn and imported as its text).
+    let mut not_text = false;
     let launch = match (text("command"), text("url")) {
         (Some(program), _) => {
-            let args = entry
-                .get("args")
-                .and_then(serde_json::Value::as_array)
-                .map(|args| {
-                    args.iter()
-                        .map(|arg| match arg {
-                            serde_json::Value::String(arg) => arg.clone(),
-                            other => other.to_string(),
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
+            let args = match entry.get("args") {
+                None | Some(serde_json::Value::Null) => Vec::new(),
+                Some(serde_json::Value::Array(args)) => args
+                    .iter()
+                    .map(|arg| match arg {
+                        serde_json::Value::String(arg) => mask(arg, true),
+                        _ => {
+                            not_text = true;
+                            cineris_base::redact::MASK.to_owned()
+                        }
+                    })
+                    .collect(),
+                Some(_) => {
+                    not_text = true;
+                    vec![cineris_base::redact::MASK.to_owned()]
+                }
+            };
             Some(Launch::Command {
-                program: mask(program),
-                args: args.iter().map(|arg| mask(arg)).collect(),
+                program: mask(program, false),
+                args,
             })
         }
-        (None, Some(url)) => Some(Launch::Remote { url: mask(url) }),
+        (None, Some(url)) => Some(Launch::Remote {
+            url: mask(url, false),
+        }),
         (None, None) => None,
     };
     let env = names("env");
-    let headers = names("headers");
+    let headers: Vec<Header> = names("headers")
+        .into_iter()
+        .map(|header| Header {
+            variable: derived_variable(name, &header),
+            name: header,
+        })
+        .collect();
     let Some(launch) = launch else {
         return ImportedServer {
             name: name.to_owned(),
@@ -777,7 +1214,7 @@ fn server(filter: &SecretFilter, name: &str, entry: &serde_json::Value) -> Impor
     let names_unseen = server
         .env
         .iter()
-        .chain(&server.headers)
+        .chain(server.headers.iter().map(|header| &header.name))
         .any(|name| unseen(name) || name.is_empty());
     let launch_unseen = match &server.launch {
         Launch::Command { program, args } => unseen(program) || args.iter().any(|arg| unseen(arg)),
@@ -787,6 +1224,8 @@ fn server(filter: &SecretFilter, name: &str, entry: &serde_json::Value) -> Impor
         Some(Refusal::Unseen)
     } else if !settable_name(&server.name) {
         Some(Refusal::Name)
+    } else if not_text {
+        Some(Refusal::NotUnderstood)
     } else if masked {
         Some(Refusal::HoldsCredential)
     } else if launch_view(&server.launch).1 == Masked::Loose {
@@ -838,11 +1277,15 @@ mod tests {
         assert_eq!(docs.refused, None);
         let tracker = by_name(&servers, "tracker");
         assert_eq!(tracker.shown(), "https://tracker.example.com/mcp");
-        assert_eq!(tracker.headers, ["Authorization"]);
         assert_eq!(
-            tracker.header_variable("Authorization"),
-            "TRACKER_AUTHORIZATION"
+            tracker.headers,
+            [Header {
+                name: "Authorization".to_owned(),
+                variable: "TRACKER_AUTHORIZATION".to_owned(),
+            }]
         );
+        assert_eq!(tracker.host().as_deref(), Some("tracker.example.com"));
+        assert_eq!(docs.host(), None);
         assert_eq!(tracker.refused, None);
         let debug = format!("{servers:?}");
         for value in ["dt_live", "tk_9f8e", "ghp_abc", "hunter2"] {
@@ -1083,7 +1526,7 @@ mod tests {
             "MYSQL_PWD2",
             "--pwd",
         ] {
-            assert!(names_a_secret(name), "{name}");
+            assert!(names_a_secret(name, false), "{name}");
         }
         for name in [
             "--author",
@@ -1093,7 +1536,7 @@ mod tests {
             "PWD2",
             "--no-auth",
         ] {
-            assert!(!names_a_secret(name), "{name}");
+            assert!(!names_a_secret(name, false), "{name}");
         }
         let servers = servers_in(
             r#"{"mcpServers": {
@@ -1614,5 +2057,317 @@ mod tests {
             read_servers(&scratch.join("missing.json")),
             Err(ImportError::Unreadable(_))
         ));
+    }
+
+    /// A token of no known format, under one name or another.
+    const TOKEN: &str = "x7Kq9mPz2Lw4Rt8vB3nD";
+
+    /// One server of `entry` (JSON, `VALUE` standing for [`TOKEN`]), read
+    /// as a file's only server.
+    fn one(entry: &str) -> ImportedServer {
+        let entry = entry.replace("VALUE", TOKEN);
+        let servers = servers_in(&format!(r#"{{"mcpServers": {{"s": {entry}}}}}"#), false)
+            .unwrap_or_else(|error| panic!("{entry}: {error}"));
+        servers.into_iter().next().unwrap()
+    }
+
+    /// A credential's name the list did not know, in any of its spellings,
+    /// hides its value, which is imported as it is; `pwd` in an address's
+    /// field is a password's (the step 25 fixes, the review: each of these
+    /// was drawn whole by the first run, and imported).
+    #[test]
+    fn a_credentials_name_of_any_spelling_hides_its_value() {
+        for (entry, shown) in [
+            (
+                r#"{"url": "https://db.example.com/mcp?user=me&pwd=VALUE"}"#,
+                format!("https://db.example.com/mcp?user=me&pwd={MASK}"),
+            ),
+            (
+                r#"{"url": "https://db.example.com/mcp?user=me&PWD=VALUE"}"#,
+                format!("https://db.example.com/mcp?user=me&PWD={MASK}"),
+            ),
+            (
+                r#"{"url": "https://db.example.com/mcp?user=me&pass=VALUE"}"#,
+                format!("https://db.example.com/mcp?user=me&pass={MASK}"),
+            ),
+            (
+                r#"{"url": "https://s.example.com/mcp?sv=2024-01-01&sig=VALUE"}"#,
+                format!("https://s.example.com/mcp?sv=2024-01-01&sig={MASK}"),
+            ),
+            (
+                r#"{"url": "https://s3.example.com/mcp?X-Amz-Signature=VALUE&X-Amz-Credential=VALUE"}"#,
+                format!(
+                    "https://s3.example.com/mcp?X-Amz-Signature={MASK}&X-Amz-Credential={MASK}"
+                ),
+            ),
+            (
+                r#"{"command": "db-mcp", "args": ["--passphrase", "VALUE", "--credential", "VALUE",
+                    "--credentials=VALUE", "--bearer", "VALUE", "--cookie", "session=VALUE",
+                    "--session", "VALUE", "--pw", "VALUE", "--pass", "VALUE", "--sig=VALUE",
+                    "--signature", "VALUE", "--oauth", "VALUE"]}"#,
+                format!(
+                    "db-mcp --passphrase {MASK} --credential {MASK} --credentials={MASK} --bearer \
+                     {MASK} --cookie {MASK} --session {MASK} --pw {MASK} --pass {MASK} \
+                     --sig={MASK} --signature {MASK} --oauth {MASK}"
+                ),
+            ),
+            (
+                r#"{"command": "env", "args": ["DB_PASS=VALUE", "DB_PW=VALUE", "MYSQL_PWD=VALUE",
+                    "PWD=/app", "db-mcp"]}"#,
+                format!("env DB_PASS={MASK} DB_PW={MASK} MYSQL_PWD={MASK} PWD=/app db-mcp"),
+            ),
+            (
+                r#"{"command": "x-mcp", "args": ["--api_key", "VALUE", "--apiKey", "VALUE",
+                    "-api-key", "VALUE", "--API-KEY", "VALUE", "--APIKEY", "VALUE",
+                    "--Api_Key=VALUE", "--token=VALUE", "--token", "VALUE", "-p", "8080:80"]}"#,
+                format!(
+                    "x-mcp --api_key {MASK} --apiKey {MASK} -api-key {MASK} --API-KEY {MASK} \
+                     --APIKEY {MASK} --Api_Key={MASK} --token={MASK} --token {MASK} -p 8080:80"
+                ),
+            ),
+        ] {
+            let server = one(entry);
+            assert_eq!(server.shown(), shown, "{entry}");
+            assert!(server.hidden(), "{entry}: the row says a value is unseen");
+            assert_eq!(server.refused, None, "{entry}: imported as it is");
+        }
+        for name in [
+            "--passthrough",
+            "--signal",
+            "--sessions-dir",
+            "--cookie-file",
+            "PWD",
+        ] {
+            assert!(!names_a_secret(name, false), "{name}");
+        }
+        assert!(names_a_secret("pwd", true), "an address's field");
+    }
+
+    /// An address with no scheme whose user part holds a password has that
+    /// part masked and refuses its server, as one with a scheme does; text
+    /// of the same look that is no such address is shown as it is (the
+    /// step 25 fixes, the review).
+    #[test]
+    fn a_password_in_an_address_with_no_scheme_is_masked_and_refused() {
+        for (args, shown) in [
+            (
+                r#"["--proxy", "me:VALUE@proxy.example.com:8080"]"#,
+                format!("--proxy {MASK}@proxy.example.com:8080"),
+            ),
+            (
+                r#"["--proxy=me:VALUE@10.0.0.1:3128"]"#,
+                format!("--proxy={MASK}@10.0.0.1:3128"),
+            ),
+            (r#"["me:VALUE@localhost"]"#, format!("{MASK}@localhost")),
+            (
+                r#"["--dsn", "me:VALUE@tcp(db.internal:3306)/app"]"#,
+                format!("--dsn {MASK}@tcp(db.internal:3306)/app"),
+            ),
+            (
+                r#"["DATABASE=me:p@ss:VALUE@db.example.com/x"]"#,
+                format!("DATABASE={MASK}@db.example.com/x"),
+            ),
+            (r#"["me:VALUE@[::1]:5432"]"#, format!("{MASK}@[::1]:5432")),
+        ] {
+            let server = one(&format!(r#"{{"command": "db-mcp", "args": {args}}}"#));
+            assert_eq!(server.shown(), format!("db-mcp {shown}"), "{args}");
+            assert_eq!(server.refused, Some(Refusal::HoldsCredential), "{args}");
+        }
+        for plain in [
+            "git@github.com:org/repo",
+            "me@example.com",
+            "a:b",
+            "time 10:30@home",
+            "alpine:3.19@sha256:0123abcd",
+            "npm:pkg@1.2.3",
+            "npm:pkg@latest",
+            "mailto:me@example.com",
+            "ghcr.io/example/github-mcp:1.4@sha256:0123",
+            "user:pass@",
+            "x:y@notahost",
+        ] {
+            assert_eq!(without_bare_users(plain), None, "{plain}");
+        }
+    }
+
+    /// An argument that is not text, or arguments that are not a list, is
+    /// not a command line this version reads: the server is refused, and
+    /// the argument is shown masked whole, never as its JSON (the step 25
+    /// fixes, the review: `{"token": "…"}` was drawn and imported).
+    #[test]
+    fn an_argument_that_is_not_text_refuses_and_is_never_shown() {
+        for args in [
+            r#"[{"token": "VALUE"}]"#,
+            r#"[["--api-key", "VALUE"]]"#,
+            r#"["--verbose", 7]"#,
+            r#""--api-key VALUE""#,
+            r#"{"api-key": "VALUE"}"#,
+        ] {
+            let server = one(&format!(r#"{{"command": "db-mcp", "args": {args}}}"#));
+            assert_eq!(server.refused, Some(Refusal::NotUnderstood), "{args}");
+            assert!(server.shown().contains(MASK), "{args}: {}", server.shown());
+            assert!(!format!("{server:?}").contains(TOKEN), "{args}");
+        }
+        let fine = one(r#"{"command": "db-mcp", "args": null}"#);
+        assert_eq!(fine.refused, None);
+    }
+
+    /// A reference to a variable under a credential's name is refused as
+    /// before (finding 23 of the review, left to a later step), and never
+    /// drawn whole; a value given in the environment's or a header's own
+    /// field is never read at all, whatever its name.
+    #[test]
+    fn a_reference_is_refused_as_before_and_a_fields_value_never_leaves() {
+        for value in ["${SEARCH_API_KEY}", "$SEARCH_API_KEY"] {
+            let server = one(&format!(
+                r#"{{"command": "search-mcp", "args": ["--api-key", "{value}"]}}"#
+            ));
+            assert_eq!(server.refused, Some(Refusal::NamedValue), "{value}");
+            assert_eq!(server.shown(), format!("search-mcp --api-key {MASK}"));
+        }
+        let server = one(
+            r#"{"url": "https://h.example.com/mcp", "env": {"DB_PASS": "VALUE"},
+                "headers": {"Cookie": "session=VALUE", "X-Api-Key": "VALUE"}}"#,
+        );
+        assert_eq!(server.env, ["DB_PASS"]);
+        assert!(!format!("{server:?}").contains(TOKEN), "{server:?}");
+    }
+
+    /// Each header is given a variable of its own among the servers named
+    /// together, whatever their names' punctuation, case or letters other
+    /// than ASCII ones; never one of a provider's key, the configuration's
+    /// own providers' included, nor one that begins `CINERIS_`, nor one a
+    /// server takes from the environment by its own name; and never one
+    /// that begins with a digit, which a shell cannot set (the step 25
+    /// fixes, the review: `my-tracker` and `my_tracker` shared one, and
+    /// `anthropic` with `api-key` was given `ANTHROPIC_API_KEY`).
+    #[test]
+    fn each_header_is_given_a_variable_of_its_own_and_none_of_the_harnesss() {
+        let remote = |name: &str, headers: &[&str]| {
+            let headers: Vec<String> = headers
+                .iter()
+                .map(|header| format!(r#""{header}": "VALUE""#))
+                .collect();
+            format!(
+                r#""{name}": {{"url": "https://{}.example.com/mcp", "headers": {{{}}}}}"#,
+                name.len(),
+                headers.join(", ")
+            )
+        };
+        let text = format!(
+            r#"{{"mcpServers": {{{}, "docs": {{"url": "https://d.example.com/mcp",
+                "env": {{"DOCS_TOKEN": "VALUE"}}, "headers": {{"Token": "VALUE"}}}}}}}}"#,
+            [
+                remote("my-tracker", &["Authorization"]),
+                remote("my_tracker", &["Authorization"]),
+                remote("MY.TRACKER", &["Authorization"]),
+                remote("ñ-x", &["A"]),
+                remote("ü-x", &["A"]),
+                remote("github", &["Token"]),
+                remote("anthropic", &["api-key", "auth_token"]),
+                remote("openai", &["API_KEY"]),
+                remote("openrouter", &["api-key"]),
+                remote("cineris", &["config"]),
+                remote("Cineris", &["Home"]),
+                remote("1password", &["token"]),
+                remote("x", &["X-Token", "X_Token"]),
+            ]
+            .join(", ")
+        )
+        .replace("VALUE", TOKEN);
+        let mut servers = servers_in(&text, false).unwrap();
+        let variable = |servers: &[ImportedServer], name: &str, header: &str| -> String {
+            servers
+                .iter()
+                .find(|server| server.name == name)
+                .unwrap()
+                .headers
+                .iter()
+                .find(|found| found.name == header)
+                .unwrap()
+                .variable
+                .clone()
+        };
+        let trackers: std::collections::BTreeSet<String> =
+            ["my-tracker", "my_tracker", "MY.TRACKER"]
+                .iter()
+                .map(|name| variable(&servers, name, "Authorization"))
+                .collect();
+        assert_eq!(trackers.len(), 3, "{trackers:?}");
+        assert!(
+            trackers.contains("MY_TRACKER_AUTHORIZATION"),
+            "{trackers:?}"
+        );
+        assert_ne!(
+            variable(&servers, "ñ-x", "A"),
+            variable(&servers, "ü-x", "A")
+        );
+        assert_eq!(variable(&servers, "github", "Token"), "GITHUB_TOKEN");
+        assert_eq!(
+            variable(&servers, "anthropic", "api-key"),
+            "MCP_ANTHROPIC_API_KEY"
+        );
+        assert_eq!(
+            variable(&servers, "anthropic", "auth_token"),
+            "MCP_ANTHROPIC_AUTH_TOKEN"
+        );
+        assert_eq!(
+            variable(&servers, "openai", "API_KEY"),
+            "MCP_OPENAI_API_KEY"
+        );
+        assert_eq!(
+            variable(&servers, "cineris", "config"),
+            "MCP_CINERIS_CONFIG"
+        );
+        assert_eq!(variable(&servers, "Cineris", "Home"), "MCP_CINERIS_HOME");
+        assert_eq!(
+            variable(&servers, "1password", "token"),
+            "MCP_1PASSWORD_TOKEN"
+        );
+        assert_eq!(variable(&servers, "docs", "Token"), "DOCS_TOKEN_2");
+        assert_eq!(variable(&servers, "x", "X-Token"), "X_X_TOKEN");
+        assert_eq!(variable(&servers, "x", "X_Token"), "X_X_TOKEN_2");
+        // The configuration's own providers' keys, which this crate does
+        // not know alone, in any case.
+        assert_eq!(
+            variable(&servers, "openrouter", "api-key"),
+            "OPENROUTER_API_KEY"
+        );
+        HeaderVariables::new(["openrouter_api_key"]).name(&mut servers);
+        assert_eq!(
+            variable(&servers, "openrouter", "api-key"),
+            "MCP_OPENROUTER_API_KEY"
+        );
+        // Named again, apart from another file's servers, read before.
+        let mut later = servers_in(
+            &format!(
+                r#"{{"mcpServers": {{{}}}}}"#,
+                remote("my-tracker", &["Authorization"])
+            ),
+            false,
+        )
+        .unwrap();
+        let mut variables = HeaderVariables::default();
+        variables.take(&servers);
+        variables.name(&mut later);
+        assert!(
+            !trackers.contains(&variable(&later, "my-tracker", "Authorization")),
+            "{later:?}"
+        );
+        // Every one of them can be written, and reads back.
+        let importable: Vec<ImportedServer> = servers
+            .iter()
+            .filter(|server| server.refused.is_none())
+            .cloned()
+            .collect();
+        assert_eq!(importable.len(), servers.len(), "{servers:?}");
+        crate::write::user_config_text(&crate::write::FirstRunChoices {
+            imports: Some(crate::write::Imports {
+                servers: importable,
+                ..crate::write::Imports::default()
+            }),
+            ..crate::write::FirstRunChoices::default()
+        })
+        .expect("written");
     }
 }

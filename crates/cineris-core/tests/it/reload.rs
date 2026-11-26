@@ -451,6 +451,46 @@ fn config_get_says_where_each_value_came_from() {
     });
 }
 
+/// `config/get`, which the interface's `/config` draws and any client is
+/// handed, shows an MCP server's token as the first run showed it,
+/// `[redacted]`, though the user's file holds it as it was imported (the
+/// step 25 fixes, the review's finding 2).
+#[test]
+fn config_get_shows_an_imported_token_as_the_first_run_did() {
+    const TOKEN: &str = "x7Kq9mPz2Lw4Rt8vB3nD";
+    let world = World::new("reload_mcp_token", [says("Done.")]);
+    world.user_config(&format!(
+        "[mcp.servers.search]\ncommand = \"search-mcp\"\nargs = [\"--api-key\", \"{TOKEN}\"]\n\
+         [mcp.servers.remote]\nurl = \"https://s.example.com/mcp?api_key={TOKEN}\"\n"
+    ));
+    let core = world.core();
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        for key in ["mcp", "mcp.servers.search.args"] {
+            let result = get(&front, key).await;
+            let text = serde_json::to_string(&result.config).unwrap();
+            assert!(!text.contains(TOKEN), "{key}: {text}");
+            assert!(text.contains("[redacted]"), "{key}: {text}");
+        }
+        assert_eq!(
+            value(&front, "mcp.servers.search.args").await,
+            Some(serde_json::json!(["--api-key", "[redacted]"]))
+        );
+        let OpResult::ConfigGet(all) = front
+            .op(Op::ConfigGet(ConfigGetParams {
+                session_id: None,
+                keys: Vec::new(),
+            }))
+            .await
+            .expect("config/get answers")
+        else {
+            panic!("not the result of config/get");
+        };
+        assert!(!serde_json::to_string(&all.config).unwrap().contains(TOKEN));
+        front.close().await;
+    });
+}
+
 /// The start of a turn is a moment the files are looked at: a change made
 /// between two turns is in force for the second, and told before it.
 #[test]
