@@ -367,6 +367,7 @@ in: through_a_link
 find: Ok(true) => return Ok(true)
 replace: Ok(true) => return Ok(false)
 packages: cineris-session, cineris-core
+os: linux
 caught-by:
     cineris-session snapshot::tests::a_path_reached_through_a_link_is_not_put_back
 
