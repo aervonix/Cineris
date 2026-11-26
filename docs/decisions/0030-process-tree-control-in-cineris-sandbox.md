@@ -1,6 +1,6 @@
 # 0030: Process trees are controlled from `cineris-sandbox`, and a guard process kills what a dead harness left
 
-- **Status:** Accepted by the owner on 2026-11-13.
+- **Status:** Accepted by the owner on 2026-11-13. Amended on 2026-11-26 by step 28's third pull request: two more modules of `cineris-sandbox` call the system, a folder read through handles and the check of a session's command. The amendment is at the end.
 - **Date:** 2026-11-13
 
 ## Context
@@ -79,3 +79,12 @@ So some `unsafe` of ours is needed unless the polite interrupt on Windows, or th
 - The standard library gains a stable way to start a session and to set the death signal without `pre_exec`. The fork then goes.
 - The standard library hands out the first thread's handle on Windows. The pass over the thread list then goes.
 - A Linux mechanism appears that kills a whole tree with its parent for an unprivileged process. The guard then goes.
+
+## Amended in step 28's third pull request (2026-11-26): a folder read through handles, and the check of a session's command
+
+Settled by the maintainers during the build, on the condition that the early review of `cineris ext add` read both systems' halves of the new `unsafe` code before the pull request, which it did ([steps/28/parts/pr3b-manage.md](../steps/28/parts/pr3b-manage.md)). `cineris-sandbox` is where calls to the system that the standard library does not make live, and two more modules make them. The rule about where `unsafe` may be written does not change.
+
+- **`unfollowed`: a folder read through handles that follow no link** (what `cineris ext add`, discovery, the trust question and a runtime's start read an extension's folder with). On Linux each name is opened with `openat` relative to its folder's descriptor and `O_NOFOLLOW`, and a folder is listed through a descriptor of its own (`fdopendir`, `rewinddir`, `readdir`, `closedir`, with `fstatat` for a name the listing does not type); on Windows with `NtCreateFile` relative to the folder's handle and `FILE_OPEN_REPARSE_POINT`, every handle held without sharing deletion, and a folder listed through its handle (`GetFileInformationByHandleEx`). The standard library opens only by a path, which a folder swapped for a link between a look and an open is followed through. Elsewhere it is not built, and every open is refused.
+- **`session`: whether a process runs under a session's command** (what the subcommands that approve and trust refuse under). On Linux it reads `/proc` with the standard library and calls nothing. On Windows a harness makes and joins a job of its own for its sessions' commands, with a security descriptor written as text (`ConvertStringSecurityDescriptorToSecurityDescriptorW`, the user's SID from its token), and a subcommand asks the system's list of processes (`CreateToolhelp32Snapshot`), when each was made (`GetProcessTimes`), whether it is in a harness's job (`OpenJobObjectW`, `IsProcessInJob`), and which process runs the task scheduler's service (`QueryServiceStatusEx`, with the right to read a status alone).
+- **The dependencies** are features of the crates the module already used: no package is added, and `Cargo.lock` does not change ([dependencies.md](../dependencies.md), the `libc` and `windows-sys` rows).
+- **Every block has a `// SAFETY:` comment,** as the tree module's do, and each module's API is safe.
