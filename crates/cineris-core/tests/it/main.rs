@@ -337,7 +337,9 @@ pub struct World {
     /// The session store's writes, and a command, stay real threads and
     /// processes: their order is the machine's.
     _order: Option<cineris_tools::InlineBlocking>,
-    /// Removes the test's directory when the test ends, unless it failed.
+    /// Removes the test's directory when the test ends, unless it failed,
+    /// or the job's own run on a hosted runner leaves it
+    /// (`cineris_testkit::scratch::leaves_directories`).
     _scratch: cineris_testkit::Scratch,
 }
 
@@ -593,10 +595,11 @@ impl World {
 impl Drop for World {
     fn drop(&mut self) {
         cineris_testkit::profile::tear_down();
-        // Not on a runner whose disk is thrown away with the job, where
-        // removing the world's directories took 2.7 ms of each test on
-        // Windows (`docs/steps/ci-budgets-2/answered.md`).
-        if !cineris_testkit::scratch::disk_thrown_away() {
+        // Not in the test job's own runs on a hosted runner, whose disk
+        // goes with the job, where removing the world's directories took
+        // 2.7 ms of each test on Windows (`docs/steps/ci-budgets-2/
+        // answered.md`).
+        if !cineris_testkit::scratch::leaves_directories() {
             let _ = std::fs::remove_dir_all(&self.dir);
         }
     }

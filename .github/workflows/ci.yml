@@ -239,6 +239,11 @@ jobs:
         run: bash .github/scripts/date-the-checkout.sh "$RESTORED"
       - name: Tests
         if: steps.changes.outputs.code == 'true'
+        # A hosted runner's disk goes with the job: the tests leave their
+        # directories there, where removing them was 2.7 ms of each core
+        # test on Windows (docs/steps/ci-budgets-2/answered.md).
+        env:
+          CINERIS_TESTKIT_KEEP_DIRECTORIES: "1"
         run: cargo run --locked --quiet --package xtask -- ci test
       # Said before anything else runs, so that a job the time limit cuts off
       # after this (while it uploads the report, say) is told apart from one

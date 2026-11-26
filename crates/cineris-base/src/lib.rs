@@ -43,7 +43,8 @@
 //! Two modules of this crate may use `unsafe`, both on Windows only:
 //! `private::windows`, which sets access lists through the Windows API,
 //! reads the reparse tag and the identity of an open file for [`nofollow`],
-//! and a name's attributes for the path resolver's walk
+//! and a name's attributes and whether its drive is a fixed disk for the
+//! path resolver's walk
 //! (`docs/decisions/0029-owner-only-files-on-windows.md`); and
 //! `zone::windows`, which reads the system's time zone, which only that API
 //! can give. Everywhere else in the crate the workspace's

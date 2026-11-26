@@ -1893,10 +1893,30 @@ fn run(arguments: &[String]) -> Result<ExitCode> {
     if first == "mutate" {
         return Ok(crate::mutate::main(rest));
     }
-    if let Some((name, value)) = commit_variable(first, plan.inputs.commit.as_deref()) {
-        return run_as_child(&plan.command, name, value);
+    let variables = variables_for(first, plan.inputs.commit.as_deref());
+    if !variables.is_empty() {
+        return run_as_child(&plan.command, &variables);
     }
     crate::run(first, rest).map(|()| ExitCode::SUCCESS)
+}
+
+/// The variable that tells the tests their directories may be left on a
+/// hosted runner (`cineris_testkit::scratch::KEEP`, which a test holds this
+/// to).
+const KEEP_DIRECTORIES: &str = "CINERIS_TESTKIT_KEEP_DIRECTORIES";
+
+/// The variables a command needs set: [`commit_variable`]'s, and for the
+/// runs of the tests as the blocking job makes them (`ci`, the tiers' run;
+/// `ab`, an A/B of the tests or of the whole job) [`KEEP_DIRECTORIES`], so
+/// that they measure the job as it is. A stress run and a break's are not
+/// told, and remove what their tests made: they repeat the tests.
+fn variables_for<'a>(verb: &str, commit: Option<&'a str>) -> Vec<(&'static str, &'a str)> {
+    let mut variables: Vec<(&'static str, &'a str)> =
+        commit_variable(verb, commit).into_iter().collect();
+    if matches!(verb, "ci" | "ab") {
+        variables.push((KEEP_DIRECTORIES, "1"));
+    }
+    variables
 }
 
 /// The variable a command run for `commit` needs set to it, when the
@@ -1912,14 +1932,14 @@ fn commit_variable<'a>(verb: &str, commit: Option<&'a str>) -> Option<(&'static 
     }
 }
 
-/// `cargo xtask COMMAND…` as a child of this `xtask`, with `name` set to
-/// `value`, and its exit code.
-fn run_as_child(command: &[String], name: &str, value: &str) -> Result<ExitCode> {
+/// `cargo xtask COMMAND…` as a child of this `xtask`, with `variables`
+/// set, and its exit code.
+fn run_as_child(command: &[String], variables: &[(&str, &str)]) -> Result<ExitCode> {
     let exe = std::env::current_exe()
         .map_err(|error| format!("could not find this xtask to run it again: {error}"))?;
     let status = std::process::Command::new(exe)
         .args(command)
-        .env(name, value)
+        .envs(variables.iter().copied())
         .status()
         .map_err(|error| format!("could not run `cargo xtask {}`: {error}", command.join(" ")))?;
     Ok(if status.success() {
@@ -3604,6 +3624,25 @@ mod tests {
         );
         assert_eq!(super::commit_variable("size", None), None, "the ref's head");
         assert_eq!(super::commit_variable("ci", Some(HASH)), None);
+    }
+
+    /// The runs of the tests as the job makes them leave their directories
+    /// on a hosted runner, as the job does; a stress run and a break's,
+    /// which repeat the tests, are not told to.
+    #[test]
+    fn only_the_jobs_runs_of_the_tests_are_told_to_leave_their_directories() {
+        let keep = (super::KEEP_DIRECTORIES, "1");
+        assert_eq!(super::variables_for("ci", None), [keep]);
+        assert_eq!(super::variables_for("ab", None), [keep]);
+        for repeats in ["stress", "mutate", "perf", "startup"] {
+            assert_eq!(super::variables_for(repeats, None), [], "{repeats}");
+        }
+        assert_eq!(
+            super::variables_for("size", Some(HASH)),
+            [("GITHUB_SHA", HASH)]
+        );
+        // The test kit's own name for it.
+        assert_eq!(super::KEEP_DIRECTORIES, cineris_testkit::scratch::KEEP);
     }
 
     #[test]

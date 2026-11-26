@@ -438,7 +438,10 @@ fn sys_a_reparse_point_that_is_no_link_is_a_plain_name() {
             continue;
         }
         assert!(
-            !fs::symlink_metadata(&file).unwrap().file_type().is_symlink(),
+            !fs::symlink_metadata(&file)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
             "the standard library takes no overlay file for a link"
         );
         assert!(!cineris_base::path::is_link(&file).unwrap());
@@ -451,7 +454,10 @@ fn sys_a_reparse_point_that_is_no_link_is_a_plain_name() {
         assert_eq!(fs::read(resolved.to_fs_path()).unwrap().len(), 8 * 65_536);
         return;
     }
-    assert!(!in_ci(), "no volume of the CI runner compressed the file: {said:?}");
+    assert!(
+        !in_ci(),
+        "no volume of the CI runner compressed the file: {said:?}"
+    );
     println!("skipped: no volume here compresses with the overlay filter: {said:?}");
 }
 
