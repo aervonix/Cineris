@@ -1,0 +1,8 @@
+The test that a session with the map turned off starts no background pass can miss its break under load: with the break, the pass it should see may not have reached its gate before the session closes.
+
+- Area: cineris-core
+- Owner: the maintainers, a small-fix session
+
+| Item | Who | When |
+|---|---|---|
+| **What was seen.** The second small fixes' run of the breaks its change can affect (`mutate --changed`, on the reference machine during a disk stall in which every task waited on the disk up to 82% of a 10 s span) found `step-18/the-map-off-still-indexes` not caught; run again alone, its named test `cineris-core::it index::with_the_map_off_no_pass_runs_in_the_background` caught it. **Why it can miss:** the test proves an absence. With the map off and the break made (`.filter(|_| true)` in place of the map's setting, `crates/cineris-core/src/core.rs`), a background pass starts, and the test sees it only if the pass reaches the index's gate, or writes its cache, before the session's turn and close are over; a pass slowed by the load and cancelled at the close touches nothing. The same shape as `step-12-redecide/narrowing-ignored` before the second small fixes gave its tests a made order. **What would close it:** an awaited test point where a session decides whether to start the background pass (nothing without the test hooks), which the test reaches and reads before it closes, so that with the break the pass is seen to start whatever the load; then stress the test with the break made (`stress -p cineris-core --cores 2 --load 6`). | The maintainers, a small-fix session | With the next small fixes |
