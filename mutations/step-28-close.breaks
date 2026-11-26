@@ -332,6 +332,14 @@ replace: filter: None
 caught-by:
     cineris-core ext::hook_points::tests::a_held_gate_is_on_its_event_and_its_tools_and_refuses_with_why
 
+[break] the-loop-is-given-no-held-gate
+rule: A session's hooks as the loop reaches them (`PointHooks::of`) hold the gates held in a build without the script engine, beside the refused hooks. Survives: in the ordinary build, the one tested, the held list is always empty (the engine holds an extension's gates itself), and the build without the engine, the only one that fills it, is linted by `cargo xtask check no-scripts` and not tested. What `failing` makes of a held list is tested (`a-held-gate-is-not-put-on-its-event`); that `PointHooks::of` hands it the list is not.
+file: crates/cineris-core/src/ext/hook_points.rs
+in: PointHooks::of
+find: on.extend(failing(&hooks.refused, &hooks.held));
+replace: on.extend(failing(&hooks.refused, &[]));
+expect: survives
+
 [break] a-session-without-the-engine-judges-no-project
 rule: A session without the script engine judges the trusted project's extensions from its view, as the finding would, and holds their gates.
 file: crates/cineris-core/src/ext/without_engine.rs
