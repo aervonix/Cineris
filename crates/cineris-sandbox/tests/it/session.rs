@@ -109,7 +109,12 @@ fn the_roles_this_binary_is_run_again_in() {
 /// The same terminal opened before every harness is the person's own, but
 /// that is shown by `a_services_start_counts_only_after_a_running_harness_began`
 /// alone: while the tests run, other tests' harnesses (the CLI's) may have
-/// begun before it.
+/// begun before it. **The subcommand runs from a copy of this binary,**
+/// another file under another name: this binary is the check's own here
+/// (no test switch reaches an integration test's build of the crate), so
+/// the test above the terminal, run by it with the test runner's
+/// `--exact`, would be a harness on the subcommand's line of parents by
+/// its program and its arguments, and decide first.
 #[test]
 fn sys_a_service_hosts_start_after_a_harness_began_is_under_a_session() {
     use std::io::Write as _;
@@ -128,6 +133,8 @@ fn sys_a_service_hosts_start_after_a_harness_began_is_under_a_session() {
     };
     let host = link("taskhostw.exe");
     let terminal = link("cmd.exe");
+    let probe = scratch.join("probe.exe");
+    std::fs::copy(&own, &probe).unwrap();
     let mut harness = in_role(&own, HARNESS, &[])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -138,7 +145,7 @@ fn sys_a_service_hosts_start_after_a_harness_began_is_under_a_session() {
         &mut std::io::BufReader::new(harness.stdout.take().unwrap()),
         "marked",
     );
-    let mut opened = in_role(&host, HOST, &[&terminal, &own])
+    let mut opened = in_role(&host, HOST, &[&terminal, &probe])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -153,4 +160,5 @@ fn sys_a_service_hosts_start_after_a_harness_began_is_under_a_session() {
     drop(harness.stdin.take());
     harness.wait().unwrap();
     assert_eq!(code, Some(11), "{said}");
+    assert!(said.contains("`taskhostw.exe`, started it"), "{said}");
 }
