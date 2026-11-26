@@ -13,7 +13,7 @@ cineris -p "fix it" --continue                    # continue the latest session 
 
 | Flag | Meaning |
 |---|---|
-| `-p`, `--print [PROMPT]` | Run headless. The prompt is the argument, standard input, or both (standard input first, as context). |
+| `-p`, `--print [PROMPT]` | Run headless. The prompt is the argument, standard input, or both (standard input first, as context). A command named after `-p` (`cineris -p "/review"`) is the exception: its expanded text comes first, and standard input after it (since step 28); a command is never read from standard input. |
 | `--output text\|json\|jsonl` | Output format. Default `text`. |
 | `--continue`, `--resume <id>`, `--fork <id>` | Session selection, as in the TUI. |
 | `--no-session` | Do not write a session log. |
