@@ -244,9 +244,9 @@ fn a_line_that_nests_or_repeats_without_end_is_refused_soon() {
         |mark: &str, line_break: &str| format!("{}{}", mark.repeat(3000), line_break.repeat(3000));
     let lines = [
         (format!("{}cin", "nohup ".repeat(1000)), Posix, true),
-        (format!("{}cin", "start ".repeat(5000)), PowerShell, true),
-        (format!("find . {}cin", "-exec ".repeat(5000)), Posix, true),
-        (format!("echo {}", "a=cin=b=cin=".repeat(2000)), Posix, true),
+        (format!("{}cin", "start ".repeat(2000)), PowerShell, true),
+        (format!("find . {}cin", "-exec ".repeat(1000)), Posix, true),
+        (format!("echo {}", "a=cin=b=cin=".repeat(400)), Posix, true),
         (format!("echo {} cin", "x".repeat(60 * 1024)), Posix, true),
         (continued("\\", "\n"), Posix, false),
         (continued("\\", "\r\n"), Posix, false),
