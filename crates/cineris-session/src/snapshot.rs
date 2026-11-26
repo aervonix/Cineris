@@ -670,3 +670,57 @@ mod tests {
         assert!(!through_a_link(&root, "real/file-link", false).unwrap());
     }
 }
+
+/// The same on Windows, where each name of the way is looked at by its
+/// attributes and a reparse point by the standard library
+/// (`cineris_base::path::is_link`; CI budgets II, whose change of this look
+/// had no test on Windows). A directory link needs a right an ordinary
+/// account lacks unless Developer Mode is on: CI's runners have it, and
+/// there the links must be made.
+#[cfg(all(test, windows))]
+mod windows_tests {
+    #![allow(
+        clippy::disallowed_methods,
+        clippy::unwrap_used,
+        reason = "a test prepares real directories, and fails by panicking"
+    )]
+
+    use cineris_base::{AbsPath, PathStyle};
+
+    use super::through_a_link;
+
+    #[test]
+    fn a_path_reached_through_a_link_is_not_put_back() {
+        let scratch = cineris_testkit::Scratch::outside("cineris-session-snapshot", "links");
+        let root_dir = scratch.dir("ws");
+        scratch.file("ws/real/file.txt", "x");
+        scratch.dir("elsewhere");
+        scratch.file("elsewhere/target.txt", "y");
+        let made =
+            std::os::windows::fs::symlink_dir(scratch.join("elsewhere"), root_dir.join("linked"))
+                .and_then(|()| {
+                    std::os::windows::fs::symlink_file(
+                        scratch.join("elsewhere").join("target.txt"),
+                        root_dir.join("real").join("file-link"),
+                    )
+                });
+        if let Err(error) = made {
+            assert!(
+                std::env::var_os("CI").is_none(),
+                "a link could not be made on CI: {error}"
+            );
+            return;
+        }
+        let root = AbsPath::parse(root_dir.to_str().unwrap(), PathStyle::NATIVE).unwrap();
+        // Plain paths, there or not.
+        assert!(!through_a_link(&root, "real/file.txt", true).unwrap());
+        assert!(!through_a_link(&root, "real/new/deeper.txt", true).unwrap());
+        // A directory on the way is a link.
+        assert!(through_a_link(&root, "linked/config", true).unwrap());
+        assert!(through_a_link(&root, "linked/config", false).unwrap());
+        // The file itself is a link: refused for a write, not for removing
+        // the link.
+        assert!(through_a_link(&root, "real/file-link", true).unwrap());
+        assert!(!through_a_link(&root, "real/file-link", false).unwrap());
+    }
+}
