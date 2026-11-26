@@ -3,6 +3,66 @@
 # prompt that names a command, a command's profile), broken one at a time,
 # with the tests that must fail.
 
+[break] an-early-interrupt-does-not-stop-a-command
+rule: An interrupt stops an extension's command running in `turn/start`'s step the moment it is sent, without waiting behind it.
+file: crates/cineris-core/src/core.rs
+in: Core::early
+find: command.cancel();
+replace: let _ = command;
+caught-by:
+    cineris-core::it commands::an_interrupt_stops_a_running_command_and_its_questions_are_its_own
+
+[break] an-interrupt-does-not-stop-a-command
+rule: `turn/interrupt` stops an extension's command running in `turn/start`'s step, as headless mode sends it beside the start.
+file: crates/cineris-core/src/core.rs
+in: Core::handle_op
+find: command.cancel();
+replace: let _ = command;
+caught-by:
+    cineris-core::it commands::an_interrupt_stops_a_running_command_and_its_questions_are_its_own
+
+[break] a-commands-runs-share-their-ids
+rule: Each run of an extension's command is known by ids of its own, so that no run takes another's "allow once".
+file: crates/cineris-core/src/commands.rs
+in: run_ids
+find: let run = RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+replace: let run = RUNS.load(std::sync::atomic::Ordering::Relaxed);
+caught-by:
+    cineris-core::it commands::an_interrupt_stops_a_running_command_and_its_questions_are_its_own
+
+[break] a-commands-run-is-named-as-a-turn
+rule: A run of an extension's command is never named as a turn (`t_`), so that its question is never read as a real turn's.
+file: crates/cineris-core/src/commands.rs
+in: run_ids
+find: cineris_protocol::TurnId::new(format!("cmd_{run}"))
+replace: cineris_protocol::TurnId::new(format!("t_{run}"))
+caught-by:
+    cineris-core::it commands::an_interrupt_stops_a_running_command_and_its_questions_are_its_own
+
+[break] a-returned-prompt-forgets-its-command
+rule: A prompt a hook refuses is given back with the command it came from.
+file: crates/cineris-agent/src/turn.rs
+in: Session::give_back
+find:
+    hooks: refused,
+    command
+replace:
+    hooks: refused,
+    command: None
+packages: cineris-agent, cineris-core
+caught-by:
+    cineris-agent::it hooks::a_steering_message_a_hook_refuses_or_an_interrupt_stops_is_given_back
+    cineris-core::it commands::an_extensions_command_runs_and_prompt_submit_sees_the_expanded_text
+
+[break] an-interrupt-forgets-the-commands-of-its-messages
+rule: An interrupt's undelivered steering messages come back with the commands they came from.
+file: crates/cineris-agent/src/session.rs
+in: SessionHandle::interrupt
+find: commands.push(command.clone());
+replace: commands.push(None);
+caught-by:
+    cineris-agent::it steering::after_an_interrupt_queued_prompts_are_held_and_follow_the_next_prompt
+
 [break] a-projects-command-takes-the-users-name
 rule: The user's command of a name is used over a project's, and the project's is not used.
 file: crates/cineris-ext/src/commands.rs
