@@ -362,6 +362,7 @@ pub(crate) fn core_options(
     log: Option<&Arc<LogHandle>>,
 ) -> Result<CoreOptions, String> {
     let mut options = CoreOptions::new(env.clone(), Arc::new(TokioTimer));
+    options.own_commands = Some(crate::nested::own_commands());
     options.profile.clone_from(&run.common.profile);
     options.overrides = crate::headless::overrides(run);
     options.loaded = Some(loaded.clone());

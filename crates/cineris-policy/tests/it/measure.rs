@@ -162,3 +162,52 @@ fn measure_deciding() {
         "making the engine (compiling 20 rules):      median {start_median:?}, slowest {start_max:?}"
     );
 }
+
+/// What the check of the harness's own approving commands costs on one
+/// line (the early review's L2): a line that never names Cineris, one that
+/// does, a long one of quoted words that name it, and a nested one; each
+/// against one analysis of the same line, which every command pays.
+#[test]
+#[ignore = "a measurement, run by hand in a release build"]
+fn perf_the_check_of_the_harnesss_own_commands() {
+    use cineris_policy::approving::refused;
+    use cineris_policy::command::{ShellSyntax, analyse};
+    const RUNS: usize = 2_000;
+    let long = (0..400)
+        .map(|at| format!("'cineris ext list {at}'"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let long = format!("echo {long}");
+    let lines = [
+        (
+            "plain",
+            "cargo test --workspace -- --nocapture && git status".to_owned(),
+        ),
+        (
+            "typical",
+            "cineris ext list && cineris -p 'summarize the change' --output json".to_owned(),
+        ),
+        ("long", long),
+        (
+            "nested",
+            "sh -c 'bash -lc \"cineris -p hi --output json\"'".to_owned(),
+        ),
+    ];
+    for (name, line) in &lines {
+        let (check, _) = time(RUNS, || {
+            std::hint::black_box(refused(line, ShellSyntax::Posix, None));
+        });
+        let (one, _) = time(RUNS, || {
+            std::hint::black_box(analyse(line, ShellSyntax::Posix));
+        });
+        println!(
+            "{name} ({} bytes): the check {check:?}, one analysis {one:?}",
+            line.len()
+        );
+        cineris_testkit::numbers::report(
+            &format!("approving.{name}"),
+            check.as_secs_f64() * 1e6,
+            "us",
+        );
+    }
+}

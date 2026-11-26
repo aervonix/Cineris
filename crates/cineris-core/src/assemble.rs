@@ -1486,6 +1486,7 @@ fn engine_parts(
         locate: Arc::clone(resolver) as Arc<dyn cineris_policy::Locate>,
         store,
         clock: Arc::clone(&inner.options.clock),
+        own_commands: inner.options.own_commands.clone(),
     }
 }
 

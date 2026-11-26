@@ -187,6 +187,11 @@ pub struct CoreOptions {
     /// through it where the sandbox enforces. `None`: nothing is confined,
     /// and every session reports the sandbox off.
     pub launcher: Option<(PathBuf, Vec<OsString>)>,
+    /// What the front end tells the permission engine of its own commands:
+    /// its names and its grammar, by which a session's commands that run
+    /// its approving subcommands are refused at every level (since step
+    /// 28's third pull request). `None`: the engine's fallback reads them.
+    pub own_commands: Option<Arc<cineris_policy::approving::OwnCommands>>,
     /// What the system offers the sandbox, in place of asking it
     /// (`cineris_sandbox::support::detect`): a test's, which says the kernel
     /// has no Landlock, or an old one.
@@ -351,6 +356,7 @@ impl CoreOptions {
             approval_timeout: None,
             guard: None,
             launcher: None,
+            own_commands: None,
             sandbox: None,
             protect_limits: None,
             api_keys: BTreeMap::new(),

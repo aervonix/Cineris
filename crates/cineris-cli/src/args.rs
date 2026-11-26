@@ -35,10 +35,37 @@ pub(crate) struct Flag {
     pub(crate) value: Option<&'static str>,
     /// One line of help.
     pub(crate) help: &'static str,
+    /// Whether a headless run a session's command starts may carry it
+    /// (the maintainers' Option A on the early review of step 28's third
+    /// pull request): each flag's own choice, so that none is added
+    /// without one.
+    pub(crate) nested: Nested,
 }
 
-const fn flag(names: &'static str, value: Option<&'static str>, help: &'static str) -> Flag {
-    Flag { names, value, help }
+/// Whether a headless run started by a session's command may carry a flag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Nested {
+    /// It may: it neither trusts the project nor widens the run.
+    Safe,
+    /// It may not: it trusts the project, widens what the run may do, or
+    /// takes its configuration or its session from elsewhere.
+    Refused,
+    /// Only with one of these values, which narrow.
+    Narrowing(&'static [&'static str]),
+}
+
+const fn flag(
+    names: &'static str,
+    value: Option<&'static str>,
+    help: &'static str,
+    nested: Nested,
+) -> Flag {
+    Flag {
+        names,
+        value,
+        help,
+        nested,
+    }
 }
 
 /// Every flag a run takes, in the order the help shows them.
@@ -47,113 +74,154 @@ pub(crate) const FLAGS: &[Flag] = &[
         "-p, --print",
         None,
         "Run headless: the prompt is the words given, standard input, or both",
+        Nested::Safe,
     ),
     flag(
         "--output",
         Some("FORMAT"),
         "text (the default), json, or jsonl: a line per event",
+        Nested::Safe,
     ),
     flag(
         "--include-deltas",
         None,
         "With jsonl: also write streaming deltas",
+        Nested::Safe,
     ),
     flag(
         "--continue",
         None,
         "Continue the latest session of this workspace",
+        Nested::Refused,
     ),
-    flag("--resume", Some("ID"), "Continue the session ID"),
+    flag(
+        "--resume",
+        Some("ID"),
+        "Continue the session ID",
+        Nested::Refused,
+    ),
     flag(
         "--fork",
         Some("ID"),
         "Start a new session from a copy of the session ID",
+        Nested::Refused,
     ),
-    flag("--no-session", None, "Keep the session in memory: no log"),
+    flag(
+        "--no-session",
+        None,
+        "Keep the session in memory: no log",
+        Nested::Safe,
+    ),
     flag(
         "--fullscreen",
         None,
         "Draw the interface on the whole window, for this run",
+        Nested::Safe,
     ),
-    flag("--model", Some("MODEL"), "The main model, for this run"),
+    flag(
+        "--model",
+        Some("MODEL"),
+        "The main model, for this run",
+        Nested::Safe,
+    ),
     flag(
         "--effort",
         Some("LEVEL"),
         "The reasoning level: minimal, low, medium, high, max, or the model's own",
+        Nested::Safe,
     ),
     flag(
         "--speed",
         Some("TIER"),
         "The speed tier: standard, or fast where the model offers it",
+        Nested::Safe,
     ),
     flag(
         "--permission-mode",
         Some("MODE"),
         "read-only, supervised, autonomous or unrestricted",
+        Nested::Narrowing(&["read-only", "supervised"]),
     ),
     flag(
         "--allow",
         Some("RULE"),
         "Allow what a rule matches, for this run: 'exec:cargo test *'",
+        Nested::Refused,
     ),
     flag(
         "--deny",
         Some("RULE"),
         "Deny what a rule matches, for this run: 'write src/generated/**'",
+        Nested::Safe,
     ),
     flag(
         "--trust-project",
         None,
         "Treat the project as trusted, for this run",
+        Nested::Refused,
     ),
     flag(
         "--fail-on-denial",
         None,
         "End the run at the first call nobody can approve (exit code 6)",
+        Nested::Safe,
     ),
     flag(
         "--max-requests",
         Some("N"),
         "Stop after N requests to a model (exit code 7)",
+        Nested::Safe,
     ),
     flag(
         "--max-cost",
         Some("USD"),
         "Stop when the run has cost this many US dollars (exit code 7)",
+        Nested::Safe,
     ),
     flag(
         "--max-time",
         Some("DURATION"),
         "Stop after this long, as in 90s or 10m (exit code 7)",
+        Nested::Safe,
     ),
     flag(
         "--system-append",
         Some("TEXT"),
         "Add text to the end of the system prompt",
+        Nested::Safe,
     ),
     flag(
         "--profile",
         Some("NAME"),
         "Load configuration with the profile NAME",
+        Nested::Refused,
     ),
     flag(
         "-c",
         Some("KEY=VALUE"),
         "Set a configuration key for this run: -c retry.attempts=3",
+        Nested::Refused,
     ),
     flag(
         "--log-level",
         Some("LEVEL"),
         "What the log file takes: error, warn, info, debug, trace",
+        Nested::Safe,
     ),
-    flag("-q, --quiet", None, "Write nothing to standard error"),
+    flag(
+        "-q, --quiet",
+        None,
+        "Write nothing to standard error",
+        Nested::Safe,
+    ),
     flag(
         "-v, --verbose",
         None,
         "Write more to standard error: what each step does",
+        Nested::Safe,
     ),
-    flag("-h, --help", None, "Print this help"),
-    flag("-V, --version", None, "Print the version"),
+    flag("-h, --help", None, "Print this help", Nested::Safe),
+    flag("-V, --version", None, "Print the version", Nested::Safe),
 ];
 
 /// What the command line asks for.
@@ -555,24 +623,30 @@ fn named_hash(flag: &str, value: &str) -> Result<(String, String), UsageError> {
 }
 
 /// Reads the arguments after the program's name.
+/// Every subcommand, by the word that names it: what [`parse`] reads the
+/// first argument by, and so what the permission engine is told runs.
+pub(crate) const SUBCOMMANDS: &[(&str, Topic)] = &[
+    ("sessions", Topic::Sessions),
+    ("config", Topic::Config),
+    ("permissions", Topic::Permissions),
+    ("auth", Topic::Auth),
+    ("models", Topic::Models),
+    ("usage", Topic::Usage),
+    ("stats", Topic::Stats),
+    ("project", Topic::Project),
+    ("ext", Topic::Ext),
+    ("setup", Topic::Setup),
+    ("serve", Topic::Serve),
+    ("attach", Topic::Attach),
+];
+
 pub(crate) fn parse(arguments: Vec<OsString>) -> Result<Command, UsageError> {
     let mut parser = Parser::from_args(arguments.clone());
     if let Some(first) = arguments.first().and_then(|first| first.to_str()) {
-        let topic = match first {
-            "sessions" => Some(Topic::Sessions),
-            "config" => Some(Topic::Config),
-            "permissions" => Some(Topic::Permissions),
-            "auth" => Some(Topic::Auth),
-            "models" => Some(Topic::Models),
-            "usage" => Some(Topic::Usage),
-            "stats" => Some(Topic::Stats),
-            "project" => Some(Topic::Project),
-            "ext" => Some(Topic::Ext),
-            "setup" => Some(Topic::Setup),
-            "serve" => Some(Topic::Serve),
-            "attach" => Some(Topic::Attach),
-            _ => None,
-        };
+        let topic = SUBCOMMANDS
+            .iter()
+            .find(|(word, _)| *word == first)
+            .map(|(_, topic)| *topic);
         if let Some(topic) = topic {
             // Past the subcommand's own name.
             let _ = parser.next()?;

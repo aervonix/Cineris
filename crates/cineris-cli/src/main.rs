@@ -42,6 +42,7 @@ mod help;
 mod history;
 mod interactive;
 mod json;
+mod nested;
 mod project_view;
 mod report;
 mod serve;

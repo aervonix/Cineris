@@ -1169,6 +1169,11 @@ fn decide(
         NotRun::Stopped(_) => {
             HostError::Failed("it was not started: its turn was stopped".to_owned())
         }
+        // The engine's own refusal of the harness's approving commands is
+        // no rule's, and says so itself (the early review's L5).
+        NotRun::Denied(reason) if reason.starts_with(cineris_policy::approving::REFUSED) => {
+            HostError::Denied(format!("it was not started: {}", visible(&reason)))
+        }
         NotRun::Denied(reason) => HostError::Denied(format!(
             "it was not started: a permission rule refuses it: {}",
             visible(&reason)

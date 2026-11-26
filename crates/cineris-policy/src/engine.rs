@@ -418,6 +418,11 @@ pub struct Parts {
     pub store: Option<ApprovalStore>,
     /// The clock, for the time an approval is given.
     pub clock: SharedClock,
+    /// What the front end tells of its own commands: its names and its
+    /// grammar, by which the harness's approving commands are refused
+    /// ([`crate::approving`]). `None`: `cineris` and `cin`, read by the
+    /// fallback.
+    pub own_commands: Option<Arc<crate::approving::OwnCommands>>,
 }
 
 /// Why an engine could not be made.
@@ -471,6 +476,7 @@ pub struct Engine {
     locate: Arc<dyn Locate>,
     store: Option<ApprovalStore>,
     clock: SharedClock,
+    own_commands: Option<Arc<crate::approving::OwnCommands>>,
     /// The roots of the lease's scope, read once.
     roots: Vec<AbsPath>,
     /// The protected paths, read once.
@@ -979,6 +985,7 @@ impl Engine {
             locate: parts.locate,
             store: parts.store,
             clock: parts.clock,
+            own_commands: parts.own_commands,
             rules: RwLock::new(Rules {
                 configured: parts.rules,
                 approved: parts.approved,
@@ -1526,10 +1533,12 @@ impl Engine {
         // The harness's own approving commands: refused at every level, by
         // a protection no rule lifts, before any rule is read (since step
         // 28's third pull request, the owner's answer).
-        if let Some(what) = crate::approving::refused(command, self.shell) {
+        if let Some(refusal) =
+            crate::approving::refused(command, self.shell, self.own_commands.as_deref())
+        {
             return (
                 vec![Finding::Deny {
-                    reason: crate::approving::reason(&what),
+                    reason: crate::approving::reason(&refusal),
                     built_in: true,
                 }],
                 false,
