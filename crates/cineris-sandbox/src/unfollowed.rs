@@ -800,7 +800,10 @@ mod tests {
 
     /// A link is never followed: at the folder's own name, at a folder's
     /// name in it, or at a file's; and a link's listing says what it is.
-    #[cfg(unix)]
+    ///
+    /// On Windows a symbolic link needs a privilege an ordinary account lacks
+    /// unless Developer Mode is on: the CI runner has it, and there the
+    /// links must be made; elsewhere the test says it skipped.
     #[test]
     fn a_link_at_any_name_is_refused_and_never_followed() {
         let dir = scratch("links");
@@ -809,9 +812,27 @@ mod tests {
         std::fs::write(outside.join("secret"), "x").unwrap();
         let tree = dir.join("tree");
         std::fs::create_dir(&tree).unwrap();
-        std::os::unix::fs::symlink(&outside, tree.join("folder")).unwrap();
-        std::os::unix::fs::symlink(outside.join("secret"), tree.join("file")).unwrap();
-        std::os::unix::fs::symlink(&tree, dir.join("named")).unwrap();
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&outside, tree.join("folder")).unwrap();
+            std::os::unix::fs::symlink(outside.join("secret"), tree.join("file")).unwrap();
+            std::os::unix::fs::symlink(&tree, dir.join("named")).unwrap();
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::{symlink_dir, symlink_file};
+            let made = symlink_dir(&outside, tree.join("folder"))
+                .and_then(|()| symlink_file(outside.join("secret"), tree.join("file")))
+                .and_then(|()| symlink_dir(&tree, dir.join("named")));
+            if let Err(error) = made {
+                assert!(
+                    std::env::var_os("GITHUB_ACTIONS").is_none(),
+                    "the CI runner cannot make a symbolic link: {error}"
+                );
+                println!("skipped: cannot make a symbolic link here ({error})");
+                return;
+            }
+        }
         let mut root = Folder::open(&tree).unwrap();
         let kinds: Vec<Kind> = root
             .entries()

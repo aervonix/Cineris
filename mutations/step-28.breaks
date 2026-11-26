@@ -4307,7 +4307,7 @@ caught-by:
 [break] pinned-file-over-its-cap-read
 rule: A file over its 1 MiB cap is refused by its length before it is read: nothing of it is read.
 file: crates/cineris-ext/src/folder.rs
-in: read_file
+in: read_open
 find: if metadata.len() > MAX_FILE_BYTES {
 replace: if metadata.len() > MAX_FILE_BYTES * 4 {
 caught-by:
@@ -4316,7 +4316,7 @@ caught-by:
 [break] pinned-folder-read-past-its-total
 rule: A file that would take its folder past 4 MiB is refused by its length before it is read.
 file: crates/cineris-ext/src/folder.rs
-in: read_file
+in: read_open
 find: if total.saturating_add(metadata.len()) > MAX_TOTAL_BYTES {
 replace: if total.saturating_add(metadata.len()) > MAX_TOTAL_BYTES * 2 {
 caught-by:

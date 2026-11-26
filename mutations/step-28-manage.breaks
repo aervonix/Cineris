@@ -1,0 +1,197 @@
+# Step 28, the management of extensions (the first half of the third pull
+# request): `cineris ext list|inspect|disable|remove|add <path>`, the read
+# through handles that follow no link, the way out naming the commands, and
+# `extensions/status`. Each rule broken on purpose, with the tests that must
+# fail. Written with the code (docs/steps/28/answered.md, point 10).
+
+[break] unfollowed-opens-follow-a-link
+rule: A folder read for `cineris ext add` follows no link at any name: every open relative to a folder's descriptor, and the folder's own, has `O_NOFOLLOW`.
+os: linux
+file: crates/cineris-sandbox/src/unfollowed.rs
+find: const UNFOLLOWED: i32 = libc::O_NOFOLLOW | libc::O_NONBLOCK
+replace: const UNFOLLOWED: i32 = libc::O_NONBLOCK
+caught-by:
+    cineris-sandbox unfollowed::tests::a_link_at_any_name_is_refused_and_never_followed
+
+[break] unfollowed-takes-the-parent-as-a-name
+rule: A name opened relative to a folder is one name: `..` is refused before the system is asked, so nothing above the folder is reached through its handle.
+file: crates/cineris-sandbox/src/unfollowed.rs
+in: one_name
+find: || bytes == b".."
+replace: || false
+caught-by:
+    cineris-sandbox unfollowed::tests::a_folder_is_read_one_name_at_a_time_through_its_handle
+
+[break] snapshot-passes-over-a-link
+rule: A link anywhere in a folder read through handles refuses the extension, never passed over: what is shown, written and pinned is the folder whole.
+file: crates/cineris-ext/src/folder.rs
+in: read_unfollowed_into
+find: Kind::Link => return Err(FolderError::Link(relative)),
+replace: Kind::Link => continue,
+caught-by:
+    cineris-ext folder::tests::the_read_through_handles_is_the_plain_reads_and_follows_no_link
+    cineris-cli::bin/cineris ext::tests::what_cannot_be_added_or_removed_is_refused_first
+
+[break] add-pins-another-hash
+rule: `cineris ext add` pins the hash of the snapshot it showed, so that the folder it wrote stands approved.
+file: crates/cineris-core/src/ext/manage.rs
+in: Core::add_extension
+find: hash: to_add.hash
+replace: hash: ContentHash::of(b"another")
+caught-by:
+    cineris-cli::bin/cineris ext::tests::an_extension_is_added_listed_turned_off_and_removed
+
+[break] add-takes-a-name-of-another-case
+rule: `cineris ext add` refuses a name that differs only in case from a folder of the user's own: on Windows they are one name, and discovery refuses both.
+file: crates/cineris-core/src/ext/manage.rs
+in: Core::extension_to_add
+find: *other != name && other.eq_ignore_ascii_case(&name)
+replace: false && other.eq_ignore_ascii_case(&name)
+caught-by:
+    cineris-cli::bin/cineris ext::tests::what_cannot_be_added_or_removed_is_refused_first
+
+[break] add-takes-a-dotted-folder-name
+rule: An extension's name that a session would never look in (one beginning with `.`) cannot be a folder of the user's.
+file: crates/cineris-core/src/ext/manage.rs
+in: folder_name_refused
+find: if name.starts_with('.') {
+replace: if false {
+caught-by:
+    cineris-core ext::manage::tests::a_name_must_be_one_a_session_finds_on_every_system
+
+[break] add-takes-a-device-name
+rule: An extension's name that Windows keeps for a device (`con`, `nul`, `com1`) cannot be a folder of the user's, on any system.
+file: crates/cineris-core/src/ext/manage.rs
+in: folder_name_refused
+find: if DEVICES.contains(&base.as_str()) || numbered {
+replace: if false {
+caught-by:
+    cineris-core ext::manage::tests::a_name_must_be_one_a_session_finds_on_every_system
+
+[break] add-question-hides-the-replacement
+rule: An existing folder of another hash at the destination is replaced only on a yes to a question that names it.
+file: crates/cineris-cli/src/ext.rs
+in: add_question
+find: Some(what) => format!("Approve `{code}` as shown, and replace {what} with it?"),
+replace: Some(_) => format!("Approve `{code}` as shown?"),
+caught-by:
+    cineris-cli::bin/cineris ext::tests::what_cannot_be_added_or_removed_is_refused_first
+
+[break] remove-deletes-outside-the-folder
+rule: `cineris ext remove` deletes only a name directly in the user's folder of extensions, judged where both lead after resolving.
+file: crates/cineris-core/src/ext/manage.rs
+in: within
+find: (Ok(parent), Ok(root)) => same_location(&parent, &root),
+replace: (Ok(_), Ok(_)) => true,
+caught-by:
+    cineris-core ext::manage::tests::a_path_that_leads_out_of_the_folder_of_extensions_is_not_deleted
+
+[break] remove-deletes-without-a-yes
+rule: `cineris ext remove` deletes the folder only after a yes naming it; without one it unpins alone.
+file: crates/cineris-core/src/ext/manage.rs
+in: Core::remove_extension
+find: if delete && std::fs::symlink_metadata(&removal.target).is_ok() {
+replace: if std::fs::symlink_metadata(&removal.target).is_ok() {
+caught-by:
+    cineris-cli::bin/cineris ext::tests::an_extension_is_added_listed_turned_off_and_removed
+
+[break] remove-takes-a-projects
+rule: `cineris ext remove` refuses a project's extension, naming `cineris permissions trust`.
+file: crates/cineris-core/src/ext/manage.rs
+in: Core::remove_extension
+find: if removal.project_only {
+replace: if false {
+caught-by:
+    cineris-cli::bin/cineris ext::tests::an_extension_is_added_listed_turned_off_and_removed
+
+[break] disable-takes-a-projects
+rule: `cineris ext disable` of a project's extension writes nothing and says how instead: `cineris permissions trust`.
+file: crates/cineris-core/src/ext/manage.rs
+in: Core::disable_extension
+find: return Ok(DisableOutcome::Project);
+replace: return Err(usage(String::new()));
+caught-by:
+    cineris-cli::bin/cineris ext::tests::an_extension_is_added_listed_turned_off_and_removed
+
+[break] disable-writes-again-what-is-off
+rule: `cineris ext disable` of an extension the user's file turns off already writes nothing.
+file: crates/cineris-config/src/write/extension.rs
+in: disabled_text
+find: Some(Value::Boolean(false)) => return Ok(None),
+replace: Some(Value::Boolean(false)) => None,
+caught-by:
+    cineris-config write::extension::tests::the_users_file_is_edited_by_one_change_that_reads_back
+
+[break] listing-gives-a-projects-the-users-name
+rule: A project's extension of a name the user's folder of extensions takes is listed as not used.
+file: crates/cineris-core/src/ext/manage.rs
+in: judged
+find: Source::Project if users.takes(&name) =>
+replace: Source::Project if false =>
+caught-by:
+    cineris-core ext::manage::tests::each_extension_stands_as_a_session_would_judge_it
+
+[break] listing-ignores-the-users-word
+rule: The user's own extension turned off in their configuration is listed as turned off, whatever its pin.
+file: crates/cineris-core/src/ext/manage.rs
+in: judged
+find: Source::User if judging.disabled.contains(&name) =>
+replace: Source::User if false =>
+caught-by:
+    cineris-core ext::manage::tests::each_extension_stands_as_a_session_would_judge_it
+
+[break] listing-judges-an-untrusted-projects
+rule: A project's extension, the project not trusted, is listed as such: nothing of it is used.
+file: crates/cineris-core/src/ext/manage.rs
+in: judged
+find: Source::Project if !judging.project_trusted =>
+replace: Source::Project if false =>
+caught-by:
+    cineris-core ext::manage::tests::each_extension_stands_as_a_session_would_judge_it
+
+[break] listing-says-a-gone-one-is-approved
+rule: A pinned extension whose folder is gone is listed as gone, its gates held.
+file: crates/cineris-core/src/ext/manage.rs
+in: judged
+find: } else { ExtensionStanding::Gone };
+replace: } else { ExtensionStanding::Approved };
+caught-by:
+    cineris-core ext::manage::tests::each_extension_stands_as_a_session_would_judge_it
+
+[break] way-out-names-no-disable
+rule: The way out of the user's own extension names `cineris ext disable <name>` beside the table it writes.
+file: crates/cineris-core/src/ext/script_hooks.rs
+in: way_out
+find: let disable = format!("`cineris ext disable {name}`");
+replace: let disable = table.clone();
+caught-by:
+    cineris-core ext::script_hooks::tests::the_way_out_of_the_users_own_names_the_commands
+    cineris-core::it extensions_hooks::an_extensions_gates_hold_while_it_does_not_stand_approved
+
+[break] way-out-names-no-remove
+rule: The way out of the user's own extension whose folder is gone names `cineris ext remove <name>`.
+file: crates/cineris-core/src/ext/script_hooks.rs
+in: way_out
+find: let remove = format!("`cineris ext remove {name}`");
+replace: let remove = table.clone();
+caught-by:
+    cineris-core ext::script_hooks::tests::the_way_out_of_the_users_own_names_the_commands
+    cineris-core::it extensions_hooks::an_extensions_gates_hold_while_it_does_not_stand_approved
+
+[break] status-holds-no-gate
+rule: `extensions/status` gives each gating hook the session holds of an extension, with why it refuses.
+file: crates/cineris-core/src/ext/manage.rs
+in: status
+find: .filter(|(extension, ..)| *extension == one.name)
+replace: .filter(|_| false)
+caught-by:
+    cineris-core::it extensions_hooks::an_extensions_gates_hold_while_it_does_not_stand_approved
+
+[break] status-says-a-gone-one-is-ready
+rule: `extensions/status` says an extension that does not stand approved, and is not off or waiting for approval, has failed.
+file: crates/cineris-core/src/ext/manage.rs
+in: component_state
+find: _ => (ComponentState::Failed, Some(standing.words()))
+replace: _ => (ComponentState::Ready, None)
+caught-by:
+    cineris-core::it extensions_hooks::an_extensions_gates_hold_while_it_does_not_stand_approved

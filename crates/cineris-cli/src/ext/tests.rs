@@ -155,16 +155,27 @@ fn an_extension_is_added_listed_turned_off_and_removed() {
     let again = world.core.extension_to_add(&world.project, &kept).unwrap();
     assert!(again.in_place && again.pinned_before.is_some());
     assert!(add_question(&again).contains(&again.destination));
-    // Removed: unpinned, and its folder deleted on the yes.
+    // Removed with no yes: unpinned, its folder left as it is.
     let removal = world
         .core
         .extension_removal(&world.project, "tracker")
         .unwrap();
     assert!(removal.pin.is_some());
+    let removed = world.core.remove_extension(&removal, false).unwrap();
+    assert!(removed.unpinned && !removed.deleted);
+    assert!(kept.exists());
+    let listing = world.core.extensions(&world.project).unwrap();
+    assert!(listing.extensions.iter().all(|one| one.pin.is_none()), "{listing:#?}");
+    // Removed on the yes, the question naming its folder under `~`: its
+    // folder deleted.
+    let removal = world
+        .core
+        .extension_removal(&world.project, "tracker")
+        .unwrap();
     let question = removal_question(&removal.folder.as_ref().unwrap().0, false);
     assert!(question.contains("~/") && question.contains("extensions/tracker"), "{question}");
     let removed = world.core.remove_extension(&removal, true).unwrap();
-    assert!(removed.unpinned && removed.deleted);
+    assert!(!removed.unpinned && removed.deleted);
     assert!(!kept.exists());
     // A project's extension: pointed at the project's trust.
     World::extension(
@@ -212,6 +223,29 @@ fn what_cannot_be_added_or_removed_is_refused_first() {
         let refused = world.core.extension_to_add(&world.project, &source).unwrap_err();
         assert!(refused.message.contains("`out` is a link"), "{}", refused.message);
     }
+    // A folder of another content at the name: the question names it.
+    World::extension(&users.join("other"), "other", "kept");
+    let other = world.dir.join("src/other");
+    World::extension(&other, "other", "new");
+    let to_add = world.core.extension_to_add(&world.project, &other).unwrap();
+    let question = add_question(&to_add);
+    assert!(
+        question.contains(&format!("replace `{}`", to_add.destination))
+            && question.contains("holds something else"),
+        "{question}"
+    );
+    // A script that cannot be evaluated: nothing is written or pinned.
+    let broken = world.dir.join("src/broken");
+    World::extension(&broken, "broken", "x");
+    std::fs::write(broken.join("main.js"), "throw new Error('broken');").unwrap();
+    let to_add = world.core.extension_to_add(&world.project, &broken).unwrap();
+    let refused = world
+        .runtime
+        .block_on(world.core.add_extension(to_add))
+        .unwrap_err();
+    assert!(refused.message.contains("nothing was written or pinned"), "{}", refused.message);
+    assert!(!users.join("broken").exists());
+    assert!(world.core.extension_removal(&world.project, "broken").is_err(), "not pinned");
     for name in ["..", "../../home", "a/b", ".hidden"] {
         assert!(
             world.core.extension_removal(&world.project, name).is_err(),
