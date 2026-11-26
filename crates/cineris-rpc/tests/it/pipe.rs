@@ -963,7 +963,8 @@ fn sys_one_of_the_servers_own_commands_is_refused() {
     done.recv().unwrap();
 }
 
-/// A hook command and an extension's program (`cineris.exec`) are the
+/// A hook command, an extension's program (`cineris.exec`) and a program
+/// the model's shell runs (a hand-written client of the server) are the
 /// server's own commands: each is started inside the job the server joined
 /// when it bound the pipe, so its connection is closed unanswered, and the
 /// session's first turn is told so by their `session.start` hooks (since
@@ -1019,7 +1020,7 @@ fn sys_a_hook_and_an_extensions_program_are_refused_as_the_servers_own_commands(
         }
     }
     let said = crate::probes_said(&world);
-    for probe in ["hook", "exec"] {
+    for probe in ["hook", "exec", "shell"] {
         assert!(
             said.contains(&format!("{probe} opened True read 0 bytes")),
             "the {probe}'s connection was answered: {said}"
