@@ -1,16 +1,18 @@
 [0;90m·[0m [0;90mProvider: anthropic, its key from ANTHROPIC_API_KEY.[0m
 [0;90m·[0m [0;90mImports: AGENTS.md and CLAUDE.md read; the MCP server docs.[0m
-
+[0;90m·[0m [0;90mSkill folders: a read of your own is asked about. `cineris setup[0m
+[0m  [0;90mskill-folders` changes it.[0m
+[0m
 [0;90m╭──────────────────────────────────────────────────────────────╮[0m
 [0;90m│[0m [0;1;38;2;122;60;251m◆[0m [0;1mCineris[0;90m 0.1.0[0m                                              [0;90m│[0m
 [0;90m│[0m                                                              [0;90m│[0m
 [0;90m│[0m   Setting up, in four short steps. Each one can be skipped,  [0;90m│[0m
 [0;90m│[0m   and x skips them all.                                      [0;90m│[0m
 [0;90m╰──────────────────────────────────────────────────────────────╯[0m
-
-[0;38;2;122;60;251m◇[0m [0;1mMode[0;90m  3 of 4[0m
+[0m
+[0;38;2;122;60;251m◇[0m [0;1mMode[0;90m  4 of 5[0m
 [0m  How much the agent does before it asks you. /mode changes it at any time.[0m
-
+[0m
 [0m    read-only   [0;90mreads, and runs only commands known to read; asks before any[0m
 [0m                [0;90mother, and never writes[0m
 [0m  [0;38;2;122;60;251m◆[0m [0;1;38;2;141;87;252msupervised[0m  [0;90mreads and edits files in this project without asking; asks[0m

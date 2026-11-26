@@ -311,7 +311,7 @@ impl Run {
 
     /// Whether the last frame `live` shows the commands' step.
     fn shows_commands(live: &[String]) -> bool {
-        live.iter().any(|row| row == "◇ Commands  4 of 4")
+        live.iter().any(|row| row == "◇ Commands  5 of 5")
     }
 }
 
@@ -338,11 +338,14 @@ fn to_the_servers(run: &mut Run) {
 }
 
 /// `s` at the provider (whose skip asks for what other tools left), at
-/// the imports and at the mode (whose skip writes the file).
+/// the imports, at the skill folders and at the mode (whose skip writes the
+/// file).
 fn skip_three(run: &mut Run) {
     let _ = run.ready();
     run.key("s");
     run.answer();
+    let _ = run.ready();
+    run.key("s");
     let _ = run.ready();
     run.key("s");
     let _ = run.ready();
@@ -378,7 +381,7 @@ fn the_first_run_reaches_a_session_made_with_what_was_chosen() {
         "{live:#?}"
     );
     assert!(
-        live.iter().any(|row| row == "◇ Provider  1 of 4"),
+        live.iter().any(|row| row == "◇ Provider  1 of 5"),
         "{live:#?}"
     );
     assert!(
@@ -391,7 +394,7 @@ fn the_first_run_reaches_a_session_made_with_what_was_chosen() {
     run.answer();
     let live = run.ready();
     assert!(
-        live.iter().any(|row| row == "◇ Imports  2 of 4"),
+        live.iter().any(|row| row == "◇ Imports  2 of 5"),
         "{live:#?}"
     );
     // Down to the first file, read it, down to its first server, pick it.
@@ -411,8 +414,26 @@ fn the_first_run_reaches_a_session_made_with_what_was_chosen() {
     let live = run.frame();
     assert!(live.iter().any(|row| row.contains("☑ docs")), "{live:#?}");
     run.key("enter");
+    // The skill folders: no is preselected, and the question says plainly
+    // what a yes sends (the owner's answer); here the person says yes.
     let live = run.ready();
-    assert!(live.iter().any(|row| row == "◇ Mode  3 of 4"), "{live:#?}");
+    assert!(
+        live.iter().any(|row| row == "◇ Skill folders  3 of 5"),
+        "{live:#?}"
+    );
+    assert!(
+        live.iter().any(|row| row.starts_with("  ◆ no")),
+        "no is preselected: {live:#?}"
+    );
+    let asked = squash(&live.join(" "));
+    assert!(
+        asked.contains("secrets kept there included, is sent to the model's provider"),
+        "{asked}"
+    );
+    run.moves("down");
+    run.key("enter");
+    let live = run.ready();
+    assert!(live.iter().any(|row| row == "◇ Mode  4 of 5"), "{live:#?}");
     assert!(
         live.iter().any(|row| row.starts_with("  ◆ supervised")),
         "supervised is preselected: {live:#?}"
@@ -432,6 +453,7 @@ fn the_first_run_reaches_a_session_made_with_what_was_chosen() {
                 servers: vec![("~/.claude.json".to_owned(), "docs".to_owned())],
             }),
             mode: Some("supervised".to_owned()),
+            read_skill_folders: true,
         }]
     );
     assert!(
@@ -458,7 +480,7 @@ fn the_first_run_reaches_a_session_made_with_what_was_chosen() {
     );
     let live = run.ready();
     assert!(
-        live.iter().any(|row| row == "◇ Commands  4 of 4"),
+        live.iter().any(|row| row == "◇ Commands  5 of 5"),
         "{live:#?}"
     );
     assert!(
@@ -511,6 +533,8 @@ fn the_first_run_reaches_a_session_made_with_what_was_chosen() {
     for line in [
         "· Provider: anthropic, its key from ANTHROPIC_API_KEY.",
         "· Imports: the MCP server docs.",
+        "· Skill folders: your own are read without asking, and what is read is sent to the \
+         model's provider.",
         "· Mode: supervised. Written to ~/.config/cineris/config.toml.",
         "· Project: ~/src/parser trusted.",
         "· Commands: test kept in this project's profile.",
@@ -534,11 +558,21 @@ fn the_first_run_reaches_a_session_made_with_what_was_chosen() {
 
 /// `s` skips each step: nothing is stored, picked or kept, the file is
 /// written with each step's comment, and the session opens all the same.
+/// The skill folders' skip is no (the owner's answer).
 #[test]
 fn every_step_can_be_skipped() {
     let mut run = Run::new(fake());
     skip_three(&mut run);
     assert_eq!(run.written(), [Chosen::default()]);
+    assert!(!run.written()[0].read_skill_folders);
+    assert!(
+        squash(&run.scrollback.join(" ")).contains(
+            "· Skill folders: a read of your own is asked about. `cineris setup skill-folders` \
+             changes it."
+        ),
+        "{:?}",
+        run.scrollback
+    );
     assert!(run.setup.log().stored.is_empty());
     assert!(run.setup.log().read.is_empty(), "no file was read");
     let _ = run.open(TrustStanding::Untrusted);
@@ -604,7 +638,7 @@ fn a_prompt_typed_at_the_first_frame_chooses_nothing() {
     key(&mut run.app, "s", run.now + Duration::from_millis(900));
     let live = run.frame();
     assert!(
-        live.iter().any(|row| row == "◇ Provider  1 of 4"),
+        live.iter().any(|row| row == "◇ Provider  1 of 5"),
         "{live:#?}"
     );
     assert!(run.written().is_empty() && run.setup.log().stored.is_empty());
@@ -617,7 +651,7 @@ fn a_prompt_typed_at_the_first_frame_chooses_nothing() {
     run.key("enter");
     let live = run.frame();
     assert!(
-        live.iter().any(|row| row == "◇ Imports  2 of 4"),
+        live.iter().any(|row| row == "◇ Imports  2 of 5"),
         "{live:#?}"
     );
 }
@@ -872,6 +906,8 @@ fn nothing_unpicked_is_imported() {
     let _ = run.ready();
     run.key("enter");
     let _ = run.ready();
+    run.key("s");
+    let _ = run.ready();
     run.key("enter");
     run.answer();
     assert_eq!(
@@ -942,6 +978,8 @@ fn every_listing_holds_hostile_text() {
         let _ = run.ready();
         run.key("enter");
         let _ = run.ready();
+        run.key("s");
+        let _ = run.ready();
         run.key("enter");
         run.answer();
         let _ = run.open(TrustStanding::Untrusted);
@@ -972,6 +1010,8 @@ fn autonomous_is_offered_only_where_the_sandbox_enforces() {
         let _ = run.ready();
         run.key("s");
         run.answer();
+        let _ = run.ready();
+        run.key("s");
         let _ = run.ready();
         run.key("s");
         let live = run.ready();
@@ -1233,6 +1273,8 @@ fn the_key_that_answered_a_step_holds_the_dialog_after_it() {
     let _ = run.ready();
     run.key("s");
     let _ = run.ready();
+    run.key("s");
+    let _ = run.ready();
     let chosen = run.now;
     run.key("enter");
     run.answer();
@@ -1358,14 +1400,14 @@ fn the_providers_and_what_was_found_start_the_grace_again() {
     let live = run.frame();
     assert!(run.scrollback.is_empty(), "nothing chosen: {live:#?}");
     assert!(
-        live.iter().any(|row| row == "◇ Provider  1 of 4"),
+        live.iter().any(|row| row == "◇ Provider  1 of 5"),
         "{live:#?}"
     );
     let _ = run.ready();
     run.key("enter");
     let live = run.ready();
     assert!(
-        live.iter().any(|row| row == "◇ Imports  2 of 4"),
+        live.iter().any(|row| row == "◇ Imports  2 of 5"),
         "{live:#?}"
     );
     found.open();
@@ -1444,7 +1486,7 @@ fn in_a_short_window_the_step_keeps_its_title_and_the_selected_row_whole() {
         let live = run.frame();
         assert!(live.len() <= 24, "{} rows: {live:#?}", live.len());
         assert!(
-            live.iter().any(|row| row == "◇ Imports  2 of 4"),
+            live.iter().any(|row| row == "◇ Imports  2 of 5"),
             "{live:#?}"
         );
         let selected = live
@@ -1474,6 +1516,8 @@ fn in_a_short_window_the_step_keeps_its_title_and_the_selected_row_whole() {
     }
     run.key("space");
     run.key("enter");
+    let _ = run.ready();
+    run.key("s");
     let _ = run.ready();
     run.key("enter");
     run.answer();
@@ -1540,6 +1584,8 @@ fn a_file_that_could_not_be_written_opens_the_session_with_what_was_chosen() {
     run.key("space");
     run.key("enter");
     let _ = run.ready();
+    run.key("s");
+    let _ = run.ready();
     run.moves("up");
     run.key("enter");
     run.answer();
@@ -1547,7 +1593,7 @@ fn a_file_that_could_not_be_written_opens_the_session_with_what_was_chosen() {
     // the fixes).
     let chosen = serde_json::json!({
         "compat": { "instructions": true, "skills": false },
-        "permissions": { "mode": "read-only" },
+        "permissions": { "mode": "read-only", "read_skill_folders": false },
         "model": { "main": MODEL },
     });
     let sent = run.link.take_sent();
@@ -1625,7 +1671,10 @@ fn a_configuration_that_could_not_be_read_again_opens_the_session_with_what_was_
         let config = run.opened(TrustStanding::Trusted);
         assert_eq!(
             serde_json::Value::Object(config),
-            serde_json::json!({ "compat": { "instructions": false, "skills": false } })
+            serde_json::json!({
+                "compat": { "instructions": false, "skills": false },
+                "permissions": { "read_skill_folders": false }
+            })
         );
         let _ = run.frame();
         let said = squash(&run.scrollback.join(" "));
@@ -1755,6 +1804,8 @@ fn a_second_server_of_a_name_picked_is_not_picked() {
         "{live}"
     );
     run.key("enter");
+    let _ = run.ready();
+    run.key("s");
     let _ = run.ready();
     run.key("enter");
     run.answer();
@@ -1894,12 +1945,14 @@ fn a_step_starts_its_grace_again_after_fg() {
     let _ = run.ready();
     run.key("s");
     let _ = run.ready();
+    run.key("s");
+    let _ = run.ready();
     run.app.terminal(&cineris_term::Event::Resumed, run.now);
     run.key("enter");
     run.answer();
     assert!(run.written().is_empty(), "nothing chosen");
     let live = run.frame();
-    assert!(live.iter().any(|row| row == "◇ Mode  3 of 4"), "{live:#?}");
+    assert!(live.iter().any(|row| row == "◇ Mode  4 of 5"), "{live:#?}");
 }
 
 /// After one `Ctrl+C` the hint row says what a second does, not the
@@ -1915,7 +1968,7 @@ fn a_key_after_one_ctrl_c_answers_nothing() {
     let live = run.frame();
     assert!(run.scrollback.is_empty(), "nothing chosen: {live:#?}");
     assert!(
-        live.iter().any(|row| row == "◇ Provider  1 of 4"),
+        live.iter().any(|row| row == "◇ Provider  1 of 5"),
         "{live:#?}"
     );
 }
@@ -2115,7 +2168,7 @@ fn the_last_step_waits_for_the_full_screens_search() {
     let wait = |app: &mut crate::app::App| assert!(app.wait_for_setup(Duration::from_secs(10)));
     frame(&mut app, now);
     wait(&mut app);
-    for _ in 0..3 {
+    for _ in 0..4 {
         now += Duration::from_secs(2);
         frame(&mut app, now);
         now += Duration::from_millis(1500);
@@ -2191,7 +2244,10 @@ fn a_first_run_that_cannot_start_is_said() {
     let config = run.opened(TrustStanding::Trusted);
     assert_eq!(
         serde_json::Value::Object(config),
-        serde_json::json!({ "compat": { "instructions": false, "skills": false } })
+        serde_json::json!({
+            "compat": { "instructions": false, "skills": false },
+            "permissions": { "read_skill_folders": false }
+        })
     );
     let _ = run.frame();
     assert!(
@@ -2219,6 +2275,8 @@ fn a_model_another_provider_has_too_names_its_provider_in_the_runs_configuration
     let _ = run.ready();
     run.key("enter");
     run.answer();
+    let _ = run.ready();
+    run.key("s");
     let _ = run.ready();
     run.key("s");
     let _ = run.ready();
@@ -2306,7 +2364,10 @@ fn a_first_run_asked_to_resume_opens_a_new_session_when_its_choices_are_not_in_f
         };
         assert_eq!(
             serde_json::Value::Object(params.config),
-            serde_json::json!({ "compat": { "instructions": false, "skills": false } })
+            serde_json::json!({
+                "compat": { "instructions": false, "skills": false },
+                "permissions": { "read_skill_folders": false }
+            })
         );
         let _ = run.frame();
         assert!(
@@ -2337,7 +2398,10 @@ fn a_first_run_asked_to_resume_opens_a_new_session_when_its_choices_are_not_in_f
     let config = run.opened(TrustStanding::Trusted);
     assert_eq!(
         serde_json::Value::Object(config),
-        serde_json::json!({ "compat": { "instructions": false, "skills": false } })
+        serde_json::json!({
+            "compat": { "instructions": false, "skills": false },
+            "permissions": { "read_skill_folders": false }
+        })
     );
     let _ = run.frame();
     assert!(
@@ -2369,6 +2433,8 @@ fn a_file_found_at_the_name_is_read_now_and_what_was_chosen_applies_over_it() {
     run.key("s");
     let _ = run.ready();
     run.key("s");
+    let _ = run.ready();
+    run.key("s");
     run.answer();
     let sent = run.link.take_sent();
     let reload = sent
@@ -2390,6 +2456,7 @@ fn a_file_found_at_the_name_is_read_now_and_what_was_chosen_applies_over_it() {
         serde_json::json!({
             "compat": { "instructions": false, "skills": false },
             "model": { "main": MODEL, "roles": { "main": { "provider": "anthropic" } } },
+            "permissions": { "read_skill_folders": false },
         }),
         "what was chosen applies over it, its provider named"
     );
@@ -2434,7 +2501,10 @@ fn a_file_found_that_cannot_be_read_is_said_so() {
     let config = run.opened(TrustStanding::Trusted);
     assert_eq!(
         serde_json::Value::Object(config),
-        serde_json::json!({ "compat": { "instructions": false, "skills": false } })
+        serde_json::json!({
+            "compat": { "instructions": false, "skills": false },
+            "permissions": { "read_skill_folders": false }
+        })
     );
     let _ = run.frame();
     run.detect(Vec::new());

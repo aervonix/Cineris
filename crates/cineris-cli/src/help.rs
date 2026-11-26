@@ -200,6 +200,23 @@ A project's extensions are approved with the project:
 `{name} permissions trust`.
 "
         ),
+        Topic::Setup => format!(
+            "\
+Usage: {name} setup <COMMAND>
+
+A choice the first run asks, made again in your own configuration.
+
+Commands:
+  skill-folders [on|off]   Whether your own skill folders, outside the
+                           project, are read without asking you first
+                           (permissions.read_skill_folders, off unless
+                           you turn it on). With nothing after it, it
+                           asks, no being the default. With it on, any
+                           file in them, secrets kept there included, is
+                           sent to the model's provider without a
+                           question. It takes effect in the next session
+"
+        ),
         Topic::Usage => format!(
             "\
 Usage: {name} usage [--range R] [--by G] [--project KEY] [--json] [--refresh]
@@ -282,6 +299,7 @@ Commands:
   stats         The local statistics: show or reset
   project       What is known about this project: review, accept, turn off
   ext           Extensions: list, inspect, disable, remove, add
+  setup         A choice of the first run's, made again
   serve         Serve the RPC protocol to another program
   attach        Run the interactive application on a running server
 
@@ -328,6 +346,7 @@ mod tests {
             Topic::Stats,
             Topic::Project,
             Topic::Ext,
+            Topic::Setup,
             Topic::Serve,
             Topic::Attach,
         ] {

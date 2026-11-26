@@ -9,7 +9,7 @@
 //! │   and x skips them all.                                      │
 //! ╰──────────────────────────────────────────────────────────────╯
 //!
-//! ◇ Mode  3 of 4
+//! ◇ Mode  4 of 5
 //!   How much the agent does before it asks you. /mode changes it at any time.
 //!
 //!     read-only      reads, and runs only commands known to read; asks before
@@ -51,7 +51,7 @@ use crate::theme::Token;
 pub const CARD_WIDTH: usize = super::header::HEADER_WIDTH;
 
 /// The steps, in all.
-pub const STEPS: usize = 4;
+pub const STEPS: usize = 5;
 
 /// The set-up card: the program and its version, and what is about to
 /// happen.
@@ -606,7 +606,7 @@ mod tests {
             &look(),
         );
         let rows = text(&shown);
-        assert_eq!(rows[0], "◇ Imports  2 of 4");
+        assert_eq!(rows[0], "◇ Imports  2 of 5");
         assert_eq!(rows[3], "    MCP servers");
         assert_eq!(rows[4], "  ◆   ☑ docs    npx -y docs");
         assert!(
@@ -784,7 +784,7 @@ mod tests {
         let rows = text(&one_short.lines);
         assert!(one_short.whole);
         assert_eq!(rows.len(), 14, "{rows:#?}");
-        assert_eq!(rows[0], "◇ Imports  2 of 4");
+        assert_eq!(rows[0], "◇ Imports  2 of 5");
         assert_eq!(rows[1], "  Pick what to bring in.");
         assert!(rows.contains(&"    … 2 more above".to_owned()), "{rows:#?}");
         assert!(rows.iter().any(|row| row.starts_with("  ◆ ☐ server-6")));
@@ -837,7 +837,7 @@ mod tests {
         assert!(fitted(&tall, 60, &look, height + 3).whole);
         let cut = fitted(&tall, 60, &look, height + 2);
         assert!(!cut.whole, "the selected row is cut, and said not whole");
-        assert_eq!(text(&cut.lines)[0], "◇ Imports  2 of 4");
+        assert_eq!(text(&cut.lines)[0], "◇ Imports  2 of 5");
         assert!(cut.lines.len() <= height + 2);
     }
 }

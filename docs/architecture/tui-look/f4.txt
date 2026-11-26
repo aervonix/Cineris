@@ -1,5 +1,7 @@
 · Provider: anthropic, its key from ANTHROPIC_API_KEY.
 · Imports: AGENTS.md and CLAUDE.md read; the MCP server docs.
+· Skill folders: a read of your own is asked about. `cineris setup
+  skill-folders` changes it.
 · Mode: supervised. Written to ~/.config/cineris/config.toml.
 
 ╭──────────────────────────────────────────────────────────────╮
@@ -10,7 +12,7 @@
 
 · Project: ~/src/parser trusted.
 
-◇ Commands  4 of 4
+◇ Commands  5 of 5
   Found in Cargo.toml. Each one picked joins the project's profile as an entry
   you wrote: it runs without asking, and the checks at a turn's end use it.
 

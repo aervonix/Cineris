@@ -55,11 +55,13 @@ use crate::document;
 use crate::import::{ImportedServer, Launch, MAX_SERVERS, settable_name};
 
 pub mod extension;
+pub mod setting;
 
 use crate::layer::LayerKind;
 use crate::schema::{CONFIG_VERSION, table_of};
 use crate::validate::{Checked, validate};
 pub use extension::{Disabled, disable_extension};
+pub use setting::set_switch;
 
 /// What the first run chose. `None` for a step skipped: its comment then
 /// says how to do it later.
@@ -84,6 +86,11 @@ pub struct FirstRunChoices {
     /// `permissions.mode`, `None` when the step was skipped: the default,
     /// `supervised`, holds.
     pub mode: Option<String>,
+    /// `permissions.read_skill_folders`: written always, `false` unless the
+    /// person said yes to reading their own skill folders without asking,
+    /// a skip being no (since step 28's third pull request, the owner's
+    /// answer).
+    pub read_skill_folders: bool,
 }
 
 /// What the imports step picked.
@@ -161,6 +168,12 @@ pub fn user_config_text(choices: &FirstRunChoices) -> Result<String, WriteError>
     }
     if choices.mode.is_none() {
         text.push_str("# The mode was skipped: supervised holds, and `/mode` changes it.\n");
+    }
+    if !choices.read_skill_folders {
+        text.push_str(
+            "# A read of your own skill folders is asked about: `cineris setup skill-folders`\n\
+             # changes it.\n",
+        );
     }
     text.push('\n');
     text.push_str(&body);
@@ -293,11 +306,15 @@ fn table(choices: &FirstRunChoices) -> Result<Table, WriteError> {
     if !model.is_empty() {
         root.insert("model".to_owned(), Value::Table(model));
     }
+    let mut permissions = Table::new();
     if let Some(mode) = &choices.mode {
-        let mut permissions = Table::new();
         permissions.insert("mode".to_owned(), Value::String(mode.clone()));
-        root.insert("permissions".to_owned(), Value::Table(permissions));
     }
+    permissions.insert(
+        "read_skill_folders".to_owned(),
+        Value::Boolean(choices.read_skill_folders),
+    );
+    root.insert("permissions".to_owned(), Value::Table(permissions));
     let imports = choices.imports.clone().unwrap_or_default();
     let mut compat = Table::new();
     compat.insert(
@@ -522,6 +539,7 @@ mod tests {
                 servers: vec![docs, tracker],
             }),
             mode: Some("read-only".to_owned()),
+            read_skill_folders: true,
         }
     }
 
@@ -537,6 +555,11 @@ mod tests {
         assert!(text.contains("`/model` chooses another"), "{text}");
         assert!(!text.contains("model.roles.main.provider"), "{text}");
         assert_eq!(parsed["permissions"]["mode"].as_str(), Some("read-only"));
+        assert_eq!(
+            parsed["permissions"]["read_skill_folders"].as_bool(),
+            Some(true),
+            "a yes is written"
+        );
         assert_eq!(parsed["compat"]["instructions"].as_bool(), Some(true));
         assert_eq!(parsed["compat"]["skills"].as_bool(), Some(false));
         let docs = &parsed["mcp"]["servers"]["docs"];
@@ -569,7 +592,14 @@ mod tests {
         let parsed: Table = text.parse().unwrap();
         assert_eq!(parsed["compat"]["instructions"].as_bool(), Some(false));
         assert_eq!(parsed["compat"]["skills"].as_bool(), Some(false));
-        assert!(parsed.get("permissions").is_none());
+        // A skipped mode writes none; the skill folders are written off,
+        // a skip being no.
+        assert!(parsed["permissions"].get("mode").is_none());
+        assert_eq!(
+            parsed["permissions"]["read_skill_folders"].as_bool(),
+            Some(false)
+        );
+        assert!(text.contains("`cineris setup skill-folders`"), "{text}");
         assert!(parsed.get("mcp").is_none());
         assert!(parsed.get("model").is_none());
     }
@@ -640,7 +670,16 @@ mod tests {
             };
             let text = user_config_text(&choices).unwrap();
             let parsed: Table = text.parse().unwrap();
-            assert!(parsed.get("permissions").is_none(), "{name:?}: {text}");
+            // Only the skill folders' switch is in `[permissions]`.
+            assert_eq!(
+                parsed["permissions"].as_table().map(toml::Table::len),
+                Some(1),
+                "{name:?}: {text}"
+            );
+            assert!(
+                parsed["permissions"].get("mode").is_none(),
+                "{name:?}: {text}"
+            );
             let servers = parsed["mcp"]["servers"].as_table().unwrap();
             assert_eq!(servers.len(), 1);
             assert!(servers.contains_key(name));

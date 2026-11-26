@@ -159,7 +159,36 @@ pub struct Chosen {
     pub imports: Option<Imported>,
     /// `permissions.mode`; `None`, skipped (supervised holds).
     pub mode: Option<String>,
+    /// `permissions.read_skill_folders`: whether the user's own skill
+    /// folders are read without asking. `false` unless the person said yes:
+    /// a skip is no (since step 28's third pull request, the owner's
+    /// answer).
+    pub read_skill_folders: bool,
 }
+
+/// The question of whether the user's own skill folders are read without
+/// asking, as the first run and `cineris setup skill-folders` put it (the
+/// owner's answer, `docs/steps/28/answered.md`: no is the default, and it
+/// says plainly what a yes sends).
+pub const SKILL_FOLDERS_QUESTION: &str = "May the agent read your own skill folders, outside the \
+     project, without asking you first? With yes, any file in them, secrets kept there included, \
+     is sent to the model's provider without a question, and some providers keep what they are \
+     sent. `cineris setup skill-folders` changes it later.";
+
+/// The answers to [`SKILL_FOLDERS_QUESTION`], no first: each with what it
+/// means.
+pub const SKILL_FOLDERS_ANSWERS: [(&str, &str); 2] = [
+    (
+        "no",
+        "a read of a file in your own skill folders is asked about, as any read outside the \
+         project is",
+    ),
+    (
+        "yes",
+        "your own skill folders are read without asking, and what is read, secrets included, \
+         goes to the model's provider",
+    ),
+];
 
 /// What the imports step picked.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

@@ -44,7 +44,8 @@ use crate::validate::{Checked, validate};
 /// The largest file the loader reads.
 const MAX_BYTES: u64 = 1024 * 1024;
 
-/// What [`disable_extension`] did.
+/// What [`disable_extension`], and [`set_switch`](super::setting::set_switch),
+/// did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Disabled {
     /// The file says so now. `made`: the file was not there, and was made
@@ -111,7 +112,7 @@ pub fn disabled_text(old: &str, name: &str) -> Result<Option<String>, WriteError
                         .copied()
                         .ok_or_else(|| by_hand("is not on a line of its own"))?;
                     Some(
-                        flipped(old, line)
+                        flipped(old, line, false)
                             .ok_or_else(|| by_hand("is not written `enabled = true`"))?,
                     )
                 }
@@ -164,7 +165,7 @@ pub fn disabled_text(old: &str, name: &str) -> Result<Option<String>, WriteError
 }
 
 /// The errors the loader would give `document` as a user's file, if any.
-fn errors_of(document: &document::Document) -> Option<String> {
+pub(super) fn errors_of(document: &document::Document) -> Option<String> {
     let mut diagnostics = Vec::new();
     let usable = validate(
         &Checked {
@@ -187,9 +188,15 @@ fn errors_of(document: &document::Document) -> Option<String> {
     }
 }
 
-/// `text` with the value `true` of line `line` (counted from 1), after its
-/// `=`, made `false`; `None` when that line holds no such value.
-fn flipped(text: &str, line: u32) -> Option<String> {
+/// `text` with the switch of line `line` (counted from 1), after its `=`,
+/// made `value`: the other word made this one; `None` when that line holds
+/// no such word.
+pub(super) fn flipped(text: &str, line: u32, value: bool) -> Option<String> {
+    let (from, to) = if value {
+        ("false", "true")
+    } else {
+        ("true", "false")
+    };
     let index = usize::try_from(line).ok()?.checked_sub(1)?;
     let mut out = String::with_capacity(text.len() + 1);
     let mut found = false;
@@ -197,12 +204,12 @@ fn flipped(text: &str, line: u32) -> Option<String> {
         if at == index {
             let (key, value) = piece.split_once('=')?;
             let trimmed = value.trim_start();
-            let rest = trimmed.strip_prefix("true")?;
+            let rest = trimmed.strip_prefix(from)?;
             let space = &value[..value.len() - trimmed.len()];
             out.push_str(key);
             out.push('=');
             out.push_str(space);
-            out.push_str("false");
+            out.push_str(to);
             out.push_str(rest);
             found = true;
         } else {
@@ -221,6 +228,21 @@ fn flipped(text: &str, line: u32) -> Option<String> {
 /// edit makes it, or changed while it was written;
 /// [`WriteError::Failed`] when the disk refused.
 pub fn disable_extension(path: &Path, name: &str) -> Result<Disabled, WriteError> {
+    write_edit(path, "`cineris ext disable`", |old| {
+        disabled_text(old, name)
+    })
+}
+
+/// Writes into the user's file at `path` what `edit` makes of its text
+/// (empty when there is no file; `None` when nothing is to change), as the
+/// [module documentation](self) says: read again just before the write and
+/// back from the disk after it, atomically, a file made new owner-only and
+/// opened by a comment that names `made_by`.
+pub(super) fn write_edit(
+    path: &Path,
+    made_by: &str,
+    edit: impl Fn(&str) -> Result<Option<String>, WriteError>,
+) -> Result<Disabled, WriteError> {
     let shown = path.display().to_string();
     let failed = |error: std::io::Error| WriteError::Failed {
         path: shown.clone(),
@@ -244,14 +266,11 @@ pub fn disable_extension(path: &Path, name: &str) -> Result<Disabled, WriteError
     };
     let old = read()?;
     let made = old.is_none();
-    let Some(text) = disabled_text(old.as_deref().unwrap_or_default(), name)? else {
+    let Some(text) = edit(old.as_deref().unwrap_or_default())? else {
         return Ok(Disabled::Already);
     };
     let text = if made {
-        format!(
-            "# Cineris's settings. `cineris ext disable` made this file to turn an extension\n\
-             # off; it is yours to edit.\n\n{text}"
-        )
+        format!("# Cineris's settings, made by {made_by}: this file is yours to edit.\n\n{text}")
     } else {
         text
     };
@@ -378,7 +397,10 @@ mod tests {
             Disabled::Written { made: true }
         );
         let made = std::fs::read_to_string(&path).unwrap();
-        assert!(made.starts_with("# Cineris's settings."), "{made}");
+        assert!(
+            made.starts_with("# Cineris's settings, made by `cineris ext disable`"),
+            "{made}"
+        );
         assert_eq!(enabled(&made, "x"), Some(false));
         #[cfg(unix)]
         {

@@ -7,7 +7,7 @@
 │   and x skips them all.                                      │
 ╰──────────────────────────────────────────────────────────────╯
 
-◇ Imports  2 of 4
+◇ Imports  2 of 5
   Other tools left these. None is read, started or put in the prompt unless you
   pick it, and what is left unpicked stays off. What you pick holds in every
   project.

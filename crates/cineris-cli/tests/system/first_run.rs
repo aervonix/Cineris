@@ -108,7 +108,7 @@ fn sys_the_first_run_in_an_empty_home_reaches_a_working_session() {
     // The key in the environment is offered by its variable's name.
     wait_all(
         &mut session,
-        &["Provider  1 of 4", "ANTHROPIC_API_KEY", "enter chooses"],
+        &["Provider  1 of 5", "ANTHROPIC_API_KEY", "enter chooses"],
     );
     // The key in the environment is offered by its variable's name; the
     // second row stores a key for the same provider. Down as the terminal
@@ -134,14 +134,18 @@ fn sys_the_first_run_in_an_empty_home_reaches_a_working_session() {
     wait_all(
         &mut session,
         &[
-            "Imports  2 of 4",
+            "Imports  2 of 5",
             "no other client's file was found",
             "enter keeps what is picked",
         ],
     );
     session.send(b"\r");
+    phases.mark("the skill folders");
+    // No is the default, and kept (since step 28's third pull request).
+    wait_all(&mut session, &["Skill folders  3 of 5", "s keeps it off"]);
+    session.send(b"\r");
     phases.mark("the mode");
-    wait_all(&mut session, &["Mode  3 of 4", "enter chooses"]);
+    wait_all(&mut session, &["Mode  4 of 5", "enter chooses"]);
     session.send(b"\r");
 
     phases.mark("the session opens");

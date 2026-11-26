@@ -5,7 +5,7 @@
 [0;90m│[0m   and x skips them all.                                      [0;90m│[0m
 [0;90m╰──────────────────────────────────────────────────────────────╯[0m
 [0m
-[0;38;2;122;60;251m◇[0m [0;1mProvider[0;90m  1 of 4[0m
+[0;38;2;122;60;251m◇[0m [0;1mProvider[0;90m  1 of 5[0m
 [0m  A key for anthropic is in the environment, in ANTHROPIC_API_KEY. Use it from[0m
 [0m  there, or store a key: it is kept in ~/.config/cineris/credentials.toml, which[0m
 [0m  only you can read, and never in a file of settings.[0m
