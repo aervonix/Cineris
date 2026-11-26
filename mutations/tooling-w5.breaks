@@ -48,7 +48,7 @@ caught-by:
 [break] scratch-takes-any-name
 rule: A test's directory is named by one plain name, so that making it new never removes another test's.
 file: crates/cineris-testkit/src/scratch.rs
-in: Scratch::under
+in: Scratch::under_on
 find: is_one_name(name)
 replace: true
 caught-by:
