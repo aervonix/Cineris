@@ -267,7 +267,7 @@ From the build plan ([build-plan.md](../../build-plan.md), "Step 28: Extensions 
 | The stress of the step's crates | **Met.** 30 rounds at the close's head on hosted runners, every test passing every time: `cineris-ext`, `-policy`, `-sandbox` and `-config` (785 tests on Linux, 739 on Windows), `cineris-core` (714, 625), `cineris-cli` and `-rpc` (230, 232). Two tests that failed once each at the head before (a child's name read before its start finished, on Linux; an abandoned runtime's order, on Windows) were made to pin their orders, and stressed 100 to 300 times | `try` 45907855697, 45907858596, 45907861183 |
 | The start-up test; decision 0005's cost; Windows identical | The rows above | As there |
 | The step's open items gone through: `quickjs-with-the-windows-toolchain` settled by the engine check and deleted, and every item the step opened named with its owner | The item deleted at the close; the items the step leaves, with their owners, below | Met |
-| The step's report, with its budget table, and this page and [ci.md](ci.md) brought up to date | This report; the close's CI times in [ci.md](ci.md): <!-- close: to be written --> | |
+| The step's report, with its budget table, and this page and [ci.md](ci.md) brought up to date | **Met.** This report; the close's CI times, its tiers on one runner and its sizes in [ci.md](ci.md), "The close: its examples, the build without the engine, and the report", written after its merge | |
 
 ## What must not change
 
@@ -306,7 +306,7 @@ From the build plan ([build-plan.md](../../build-plan.md), "Step 28: Extensions 
 | #129 | `try --final` 45757355503, 9.0 ms | 19.9 s (+0.6) | 47.3 s (+0.9) | 83.9 s (−0.1) | 69%, 72%, 69% |
 | #131 | `try --final` 45848437204, 8.0 ms | 25.8 s (+0.7) | 53.9 s (−0.5) | 93.8 s (+4.0) | 101%, 79%, 76% |
 | The close, at its examples | `try` 45868670942 | | +0.1 s | +1.0 s | |
-| The close, at its head | <!-- close: to be written --> | | | | |
+| The close, at its head | `try --final` 45918837708, 8.0 ms | 26.5 s (−0.1) | 55.0 s (−0.1) | 98.3 s (+2.9; its own tests about 1.5 s, the rest a session test's swing) | 66%, 67%, 66% |
 
 **The binary's size, by pull request** (the shipped `dist` build, each against `main` just before it):
 
@@ -323,7 +323,7 @@ From the build plan ([build-plan.md](../../build-plan.md), "Step 28: Extensions 
 | #131, managing extensions and the harness's own approvals | +368,640 | +504,320 | [ci.md](ci.md) |
 | **Step 28's own, in all** | **+2,884,240** | **+3,613,696** | [decision 0039](../../decisions/0039-the-binary-s-budgets-are-20-mib-on-linux-and-25-on-windows.md) |
 | Decision 0039's outlook for step 28 | +1.3 to +1.8 MB | +1.45 to +2.0 MB | The same |
-| The close, against step 28's merge | 0 | −512 | `try` 45881422815; its pull request's own check: <!-- close: to be written --> |
+| The close, against step 28's merge | 0 | −512 | `try` 45881422815; its pull request's own check (run 45918932405): Linux 17,513,528 bytes, +0, and Windows 21,227,520 bytes, +3,072, against `main`'s record |
 
 ## What later steps inherit
 
@@ -384,4 +384,4 @@ The items in [outstanding/](../../outstanding/README.md) whose text names step 2
 
 ## The close's runs
 
-`try --final` at the close's head, and its pull request's CI: <!-- close: to be written -->
+`try --final` at the close's head (45918837708, at `c63a0e4`): nothing failed; Windows' tiers against `main` on one runner at 8.0 ms −0.1, −0.1 and +2.9 s, and Linux 22.04's at 66%, 67% and 66% of their budgets. Its pull request's CI (run 45918932405): every job passed, `test-windows` in 293 s, and both size checks within their budgets. Merged on 2026-11-27 as `b86a4462`.
