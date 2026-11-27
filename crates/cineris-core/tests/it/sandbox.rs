@@ -22,6 +22,9 @@ use crate::{Front, World};
 use crate::{calls, says};
 
 /// This test binary as the sandbox launcher: it enters [`crate::launcher_entry`].
+/// Its role comes after a `--` of the test runner's own, so that the runner
+/// does not read the launcher's option (`--policy-bytes`, step 30) as one
+/// of its.
 ///
 /// On Unix it is started through a shell, which tells the harness's own
 /// git (the launcher's command is the git the harness found) from a
@@ -35,8 +38,8 @@ pub(crate) fn launcher() -> (PathBuf, Vec<OsString>) {
     if let Some(git) = cineris_base::program::git() {
         let script = format!(
             "case \" $* \" in \" -- {git} \"*) exec \"$0\" --exact launcher_entry --nocapture \
-             {own} \"$@\" 2>&1 >/dev/null;; esac; exec \"$0\" --exact launcher_entry \
-             --nocapture {launch} \"$@\"",
+             -- {own} \"$@\" 2>&1 >/dev/null;; esac; exec \"$0\" --exact launcher_entry \
+             --nocapture -- {launch} \"$@\"",
             git = git.display(),
             own = crate::LAUNCH_GIT,
             launch = crate::LAUNCH,
@@ -48,9 +51,15 @@ pub(crate) fn launcher() -> (PathBuf, Vec<OsString>) {
     }
     (
         exe,
-        ["--exact", "launcher_entry", "--nocapture", crate::LAUNCH]
-            .map(OsString::from)
-            .to_vec(),
+        [
+            "--exact",
+            "launcher_entry",
+            "--nocapture",
+            "--",
+            crate::LAUNCH,
+        ]
+        .map(OsString::from)
+        .to_vec(),
     )
 }
 

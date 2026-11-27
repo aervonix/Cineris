@@ -299,7 +299,16 @@ enum Given {
     /// Closed: it sees its end at once.
     Closed,
     /// The sealed memory file of the input that followed the policy.
-    Sealed(std::fs::File),
+    Sealed(
+        #[cfg_attr(
+            not(unix),
+            expect(
+                dead_code,
+                reason = "only Unix has a launcher that becomes the command"
+            )
+        )]
+        std::fs::File,
+    ),
     /// The launcher's own, past the policy: what the harness writes while
     /// the command runs.
     Live,

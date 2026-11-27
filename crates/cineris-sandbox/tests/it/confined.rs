@@ -667,12 +667,15 @@ fn sys_a_confined_command_reads_exactly_its_input_and_cannot_change_it() {
 fn sys_a_confined_command_with_no_input_reads_its_end_at_once() {
     let Some(landlock) = enforcing() else { return };
     let place = Place::new("no_input");
+    // Closed, not the launcher's own input at its end (the early review of
+    // step 30's live input): it is the null device.
     let ran = sh(
         &place,
         place.policy(Network::Off, landlock),
-        "cat > got; echo done",
+        "echo \"input: $(readlink /proc/self/fd/0)\"; cat > got; echo done",
     );
     assert!(ran.ok() && ran.output.contains("done"), "{ran:?}");
+    assert!(ran.output.contains("input: /dev/null"), "{ran:?}");
     assert_eq!(place.scratch.read_text("ws/got"), "");
 }
 
@@ -977,11 +980,17 @@ fn sys_a_live_length_that_is_not_the_policys_runs_nothing() {
         .policy()
         .encode_with_input(b"abc")
         .expect("a small input");
+    // An `input` field of no bytes is an `input` field all the same.
+    let with_no_input = launcher
+        .policy()
+        .encode_with_input(b"")
+        .expect("an empty input");
     for (length, stdin) in [
         (policy.len() - 1, &policy),
         (policy.len() + 1, &longer),
         (longer.len(), &longer),
         (with_input.len(), &with_input),
+        (with_no_input.len(), &with_no_input),
     ] {
         let ran = launched_with(
             &place,
@@ -1031,4 +1040,66 @@ fn sys_a_policy_written_after_the_live_policy_is_only_input() {
         std::fs::read(place.ws().join("got")).expect("what it read"),
         wider
     );
+}
+
+/// A descriptor the launcher inherited by mistake never reaches the
+/// command, which with a live input may run all session (the early review
+/// of step 30's live input): the launcher marks every one above the
+/// standard three to close as it becomes the command. Without the launcher
+/// the same descriptor reaches the shell, so the test can see one.
+#[test]
+#[allow(
+    unsafe_code,
+    reason = "a test of the launcher leaves a descriptor open on purpose, which only `dup2` can"
+)]
+fn sys_a_descriptor_the_launcher_inherited_never_reaches_the_command() {
+    use std::io::BufRead;
+    use std::os::fd::AsRawFd;
+
+    /// The descriptor left open, without close-on-exec.
+    const STRAY: i32 = 77;
+    let Some(landlock) = enforcing() else { return };
+    let place = Place::new("stray_descriptor");
+    let file = std::fs::File::open(place.ws().join("README")).expect("a file to leave open");
+    // SAFETY: `dup2` takes two descriptors and touches no memory; 77 is
+    // free in a test process of its own, and stays open until it exits.
+    let made = unsafe { libc::dup2(file.as_raw_fd(), STRAY) };
+    assert_eq!(made, STRAY, "{}", std::io::Error::last_os_error());
+    let check = format!("if [ -e /proc/self/fd/{STRAY} ]; then echo leaked; else echo closed; fi");
+
+    // The control: started directly, the shell has it.
+    let direct = Command::new("/bin/sh")
+        .args(["-c", &check])
+        .output()
+        .expect("the shell runs");
+    assert_eq!(String::from_utf8_lossy(&direct.stdout), "leaked\n");
+
+    let launcher = launcher(place.policy(Network::Off, landlock));
+    let script = format!("{check}; IFS= read -r line; echo \"got $line\"");
+    let wrapped = launcher.wrap_live(
+        "/bin/sh".as_ref(),
+        &["-c", &script].map(std::ffi::OsString::from),
+    );
+    let mut child = Command::new(&wrapped.program)
+        .args(&wrapped.arguments)
+        .current_dir(place.ws())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .expect("start the launcher");
+    let mut input = child.stdin.take().expect("its input");
+    input
+        .write_all(&wrapped.stdin)
+        .expect("the policy is written");
+    input.write_all(b"hello\n").expect("a line is written");
+    drop(input);
+    let output = std::io::BufReader::new(child.stdout.take().expect("its output"));
+    let said: Vec<String> = output
+        .lines()
+        .map_while(Result::ok)
+        .filter(|line| line == "closed" || line == "leaked" || line.starts_with("got "))
+        .collect();
+    assert_eq!(said, ["closed", "got hello"]);
+    assert!(child.wait().expect("it ends").success());
 }
