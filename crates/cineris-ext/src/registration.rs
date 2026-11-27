@@ -310,7 +310,7 @@ impl ToolDef {
     /// Why it would not have.
     pub fn check(&self) -> Result<(), String> {
         check_contribution_name(&self.name)?;
-        check_description(&self.description)?;
+        check_registered_description(&self.description)?;
         check_schema(&self.input)
     }
 }
@@ -325,7 +325,7 @@ impl CommandDef {
     /// Why it would not have.
     pub fn check(&self) -> Result<(), String> {
         check_contribution_name(&self.name)?;
-        check_description(&self.description)?;
+        check_registered_description(&self.description)?;
         if self.arguments.len() > MAX_ARGUMENTS {
             return Err(format!(
                 "`arguments` lists at most {MAX_ARGUMENTS}, and this lists {}",

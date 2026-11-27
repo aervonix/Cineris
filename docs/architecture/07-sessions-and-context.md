@@ -262,6 +262,7 @@ The first user message of an epoch also carries what is useful but not stable en
 - **Size.** A total cap (default 48 KiB, `context.instructions_cap`). Beyond it, files are cut from the innermost end with a visible warning in the UI. A warning is never silent truncation.
 - **Nested files.** When a tool first touches a file under a directory that has its own instruction file, that file is appended once as a notice.
 - **Changes on disk.** Checked at the start of each turn. A changed file is appended as a notice that says it replaces the earlier version. The system prompt itself is not rewritten until the next epoch.
+- **What the model is given hides nothing** (since the fixes to step 28): a file's text, in section 4 and in a notice of a change, has its line breaks of every kind made `\n`, its tabs kept, and every other character that acts unseen and every variation selector taken out, as an extension's text in section 7 has. A repository's file needs no trust, and a run of selectors, or one after each character, carries bytes no reader of the file sees. An emoji reads the same without its selector. A file's hash is of that text, so a file that held such a character, or Windows line endings, has a new hash once: a resume over a log written before is told the file anew, as a changed file is.
 
 **As built in step 15** (`cineris_agent::context::instructions`, read through the core's `instructions`):
 

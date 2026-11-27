@@ -512,7 +512,7 @@ fn cut(text: &str, max: usize) -> String {
 /// step 28 found a skill's description hiding an instruction so). What
 /// `cineris_base::one_line` takes as white space and makes a space, this
 /// takes as a line break and keeps.
-fn plain(text: &str) -> String {
+pub(crate) fn plain(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut characters = text.chars().peekable();
     while let Some(character) = characters.next() {
