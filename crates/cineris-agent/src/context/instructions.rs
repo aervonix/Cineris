@@ -189,7 +189,8 @@ pub(crate) fn places(
         for name in DEFAULT_NAMES {
             if let Ok(path) = dir.join(name) {
                 out.push(Place {
-                    shown: cineris_base::visible(&path.to_native_string()).into_owned(),
+                    shown: cineris_base::visible_to_the_model(&path.to_native_string())
+                        .into_owned(),
                     path,
                     user: true,
                     dir: dir.clone(),
@@ -239,7 +240,10 @@ pub(crate) fn told_date(text: &str) -> Option<&str> {
 /// review of step 18). The key leads back to its file read back
 /// (`cineris_base::unescape`).
 pub(crate) fn shown(root: &AbsPath, path: &AbsPath) -> String {
-    cineris_base::visible(&relative(root, path)).into_owned()
+    // Every variation selector an escape too, since the fixes to step 28:
+    // one kept after each character of a folder's name would carry a byte
+    // unseen to the model in every heading and notice.
+    cineris_base::visible_to_the_model(&relative(root, path)).into_owned()
 }
 
 /// A file in the workspace as data: relative, with `/`, as it is named.

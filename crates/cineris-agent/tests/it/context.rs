@@ -450,6 +450,51 @@ fn a_nested_instruction_file_under_a_name_shown_escaped_is_not_told_removed() {
     assert!(!notices[0].contains(&joiner.text));
 }
 
+/// A nested instruction file under a folder whose name holds a variation
+/// selector after each letter is named to the model with each selector as
+/// its escape, so the name carries no byte unseen, and is found by that name
+/// again and not told removed (the fixes to step 28).
+#[test]
+fn a_nested_instruction_files_name_carries_no_selector_to_the_model() {
+    let folder = "d\u{e0101}o\u{e0102}c\u{fe0f}s";
+    let world = World::new(
+        "instructions_nested_selectors",
+        [
+            calls(&[(
+                "c1",
+                "read",
+                json!({"path": format!("{folder}/guide.rs"), "record": true}),
+            )]),
+            says("Done."),
+            says("Again."),
+        ],
+    );
+    let rig = Setup::new(&world).start(&world);
+    rig.instructions.set(
+        &root_file(&rig, &format!("{folder}/AGENTS.md")),
+        "Write docs.",
+    );
+    world.run(async {
+        rig.prompt("go");
+        rig.events.turns(1).await;
+        rig.prompt("again");
+        rig.events.turns(2).await;
+    });
+    let notices = notice_texts(&rig);
+    assert_eq!(notices.len(), 1, "{notices:#?}");
+    assert!(
+        notices[0]
+            .starts_with("Instruction file `d\\u{e0101}o\\u{e0102}c\\u{fe0f}s/AGENTS.md` applies"),
+        "{}",
+        notices[0]
+    );
+    assert!(
+        !notices[0].chars().any(cineris_base::visible::is_selector),
+        "{}",
+        notices[0]
+    );
+}
+
 /// A nested instruction file under a name that holds `\n` as two
 /// characters, which [`cineris_base::unescape`] reads as a line break, is
 /// found by its name as it is and not told removed (the independent review

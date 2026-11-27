@@ -951,3 +951,13 @@ replace: let _ = &hook.name;
 packages: cineris-core
 caught-by:
     cineris-core ext::hooks::tests::an_approved_projects_hook_holds_both_gates_once_not_as_approved
+
+[break] an-instruction-files-name-keeps-its-selectors
+rule: An instruction file's name reaches the model with every variation selector written as its escape.
+file: crates/cineris-agent/src/context/instructions.rs
+in: shown
+find: cineris_base::visible_to_the_model(&relative(root, path))
+replace: cineris_base::visible(&relative(root, path))
+packages: cineris-agent
+caught-by:
+    cineris-agent::it context::a_nested_instruction_files_name_carries_no_selector_to_the_model
