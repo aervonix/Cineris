@@ -1143,7 +1143,7 @@ file: crates/cineris-tui/src/app/state.rs
 in: App::history_read
 find:
     if incomplete {
-        self.mapper.in_progress(&mut self.transcript, &item, now);
+        self.mapper.in_progress(&mut self.transcript, &item, &session, now);
     } else {
 replace:
     if incomplete {
