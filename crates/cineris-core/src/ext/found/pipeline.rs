@@ -570,7 +570,8 @@ impl Held {
             // Its hooks with it: an extension's hooks are on their events
             // only while it is loaded as it was approved.
             self.scripts.withdraw(&gone.1);
-            self.registry.remove_source(&gone.1);
+            self.registry
+                .remove_source(&gone.1, cineris_tools::SourceKind::Extension);
             (self.parts.tell)(format!(
                 "The extension `{}` is withdrawn from this session: its tools are no longer \
                  offered.",

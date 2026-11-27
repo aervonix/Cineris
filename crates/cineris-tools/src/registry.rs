@@ -7,7 +7,21 @@
 //! list therefore never changes during a context epoch, however many tools
 //! there are and whenever they come and go: the specs of the pair are fixed
 //! text, and nothing in them depends on what is registered.
+//!
+//! - **Each source has a kind** ([`SourceKind`]): an extension or an MCP
+//!   server. A name is one source's, of one kind: a source of the other
+//!   kind that asks for it is refused ([`RegistryError::NameTaken`]), so an
+//!   extension and an MCP server of one name never replace or remove each
+//!   other's tools.
+//! - **A tool may be held** ([`Hold`]): its definition is new, or changed
+//!   since the person approved it. A search shows only its full name and
+//!   one line saying so, never its description or its schema, which may be
+//!   the change itself; and `tool_call` does not check its arguments
+//!   against a schema the model was not shown.
+//! - **What a search shows of a schema** has every string in it cut at
+//!   2 KiB, as a description is ([`shown_schema`]).
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard};
 
@@ -25,9 +39,10 @@ use crate::output::count;
 use crate::result::{ToolError, ToolResult};
 use crate::schema;
 
-/// The most of one tool's description a search result shows. Descriptions
-/// are written by third parties, and reach the model only here.
-const MAX_DESCRIPTION_BYTES: usize = 2048;
+/// The most of one tool's description a search result shows, and of each
+/// string in its schema. Descriptions and schemas are written by third
+/// parties, and reach the model only here.
+pub const MAX_DESCRIPTION_BYTES: usize = 2048;
 
 /// How many tools a search returns unless the call says otherwise.
 const DEFAULT_LIMIT: u64 = 8;
@@ -53,6 +68,100 @@ pub enum RegistryError {
         /// The name both tools have.
         tool: String,
     },
+    /// A source's name that a source of the other kind holds. Taking it
+    /// would replace that source's tools, or let its removal take these
+    /// away, so the source that asked is not registered.
+    #[error(
+        "`{source_name}` is the name of {holder} already: {wanted} of the same name is not \
+         registered"
+    )]
+    NameTaken {
+        /// The name.
+        source_name: String,
+        /// The kind of the source that holds it.
+        holder: SourceKind,
+        /// The kind of the source that asked for it.
+        wanted: SourceKind,
+    },
+}
+
+/// What a source of dynamic tools is. Each kind's sources are registered
+/// and removed by their own part of the harness, and a name is one
+/// source's: an MCP server and an extension of one name do not replace or
+/// remove each other's tools ([`RegistryError::NameTaken`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SourceKind {
+    /// An extension's tools (`docs/architecture/12-extensions.md`).
+    Extension,
+    /// An MCP server's tools (`docs/architecture/13-mcp.md`).
+    Mcp,
+}
+
+impl std::fmt::Display for SourceKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Extension => "an extension",
+            Self::Mcp => "an MCP server",
+        })
+    }
+}
+
+/// Why a tool is held: the person has not approved its definition as it
+/// is now (`docs/steps/30/answered.md`, point 3.6). Which tools are held,
+/// and what a call of one does, is the business of the part that
+/// registers them; the registry shows a held tool as [`Hold::line`] says,
+/// and nothing of its definition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Hold {
+    /// A tool the person has not approved: new since its source was.
+    New,
+    /// A tool whose definition changed since the person approved it.
+    Changed,
+}
+
+impl Hold {
+    /// The one line a search shows of a held tool, in place of its
+    /// description and its schema.
+    #[must_use]
+    pub fn line(self) -> &'static str {
+        match self {
+            Self::New => {
+                "New, and not yet approved: it needs the person's approval before it can be \
+                 called. Its description and arguments are shown once they have approved it."
+            }
+            Self::Changed => {
+                "Changed since the person approved it: it needs their approval again before it \
+                 can be called. Its description and arguments are shown once they have approved \
+                 it."
+            }
+        }
+    }
+}
+
+/// One tool as its source registers it: the tool, and whether it is held.
+#[derive(Clone)]
+pub struct DynamicTool {
+    /// The tool.
+    pub tool: Arc<dyn Tool>,
+    /// Why it is held, when it is.
+    pub hold: Option<Hold>,
+}
+
+impl DynamicTool {
+    /// A tool that is not held.
+    #[must_use]
+    pub fn new(tool: Arc<dyn Tool>) -> Self {
+        Self { tool, hold: None }
+    }
+}
+
+impl std::fmt::Debug for DynamicTool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DynamicTool")
+            .field("name", &self.tool.spec().name)
+            .field("hold", &self.hold)
+            .finish()
+    }
 }
 
 /// One source of dynamic tools, as the system prompt lists it: an MCP
@@ -72,15 +181,19 @@ pub struct SourceSummary {
 pub struct FoundTool {
     /// The full name, `source/tool`: what `tool_call` takes.
     pub name: String,
-    /// The tool's description, as its author wrote it.
+    /// The tool's description, as its author wrote it; for a held tool,
+    /// [`Hold::line`].
     pub description: String,
-    /// The JSON Schema of its arguments.
+    /// The JSON Schema of its arguments; for a held tool, `null`.
     pub parameters: Json,
+    /// Why it is held, when it is.
+    pub hold: Option<Hold>,
 }
 
 struct Source {
+    kind: SourceKind,
     description: String,
-    tools: BTreeMap<String, Arc<dyn Tool>>,
+    tools: BTreeMap<String, DynamicTool>,
 }
 
 /// The tools that are not declared to the model: found with `tool_search`,
@@ -106,18 +219,38 @@ impl ToolRegistry {
         self.sources.read().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Registers a source with its tools, replacing whatever the source had
-    /// before. Each tool is known by the name in its spec.
+    /// Registers a source of `kind` with its tools, none of them held,
+    /// replacing whatever the source had before. Each tool is known by the
+    /// name in its spec. A name a source of the other kind holds is
+    /// refused, and nothing changes.
     pub fn set_source(
         &self,
         source: &str,
+        kind: SourceKind,
         description: &str,
         tools: Vec<Arc<dyn Tool>>,
+    ) -> Result<(), RegistryError> {
+        self.set_source_with_holds(
+            source,
+            kind,
+            description,
+            tools.into_iter().map(DynamicTool::new).collect(),
+        )
+    }
+
+    /// [`set_source`](Self::set_source), with each tool's hold: a held
+    /// tool is found by its name and shown as [`Hold::line`] says.
+    pub fn set_source_with_holds(
+        &self,
+        source: &str,
+        kind: SourceKind,
+        description: &str,
+        tools: Vec<DynamicTool>,
     ) -> Result<(), RegistryError> {
         check_name(source)?;
         let mut named = BTreeMap::new();
         for tool in tools {
-            let name = tool.spec().name.clone();
+            let name = tool.tool.spec().name.clone();
             check_name(&name)?;
             if named.insert(name.clone(), tool).is_some() {
                 return Err(RegistryError::DuplicateTool {
@@ -127,40 +260,79 @@ impl ToolRegistry {
             }
         }
         let description = description.lines().next().unwrap_or("").trim().to_owned();
-        self.sources
-            .write()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(
-                source.to_owned(),
-                Source {
-                    description,
-                    tools: named,
-                },
-            );
+        let mut sources = self.sources.write().unwrap_or_else(PoisonError::into_inner);
+        if let Some(holder) = sources.get(source).map(|held| held.kind)
+            && holder != kind
+        {
+            return Err(RegistryError::NameTaken {
+                source_name: source.to_owned(),
+                holder,
+                wanted: kind,
+            });
+        }
+        sources.insert(
+            source.to_owned(),
+            Source {
+                kind,
+                description,
+                tools: named,
+            },
+        );
         Ok(())
     }
 
-    /// Removes a source and its tools. Whether there was one.
-    pub fn remove_source(&self, source: &str) -> bool {
-        self.sources
-            .write()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(source)
-            .is_some()
+    /// Removes a source of `kind` and its tools. Whether there was one: a
+    /// source of that name of the other kind is left as it is.
+    pub fn remove_source(&self, source: &str, kind: SourceKind) -> bool {
+        let mut sources = self.sources.write().unwrap_or_else(PoisonError::into_inner);
+        if sources.get(source).is_some_and(|held| held.kind == kind) {
+            sources.remove(source);
+            true
+        } else {
+            false
+        }
     }
 
     /// The tool with this full name, `source/tool`.
     #[must_use]
     pub fn get(&self, full_name: &str) -> Option<Arc<dyn Tool>> {
         let (source, tool) = full_name.split_once('/')?;
+        self.read()
+            .get(source)?
+            .tools
+            .get(tool)
+            .map(|found| Arc::clone(&found.tool))
+    }
+
+    /// The tool with this full name and its hold, read together.
+    #[must_use]
+    pub fn entry(&self, full_name: &str) -> Option<DynamicTool> {
+        let (source, tool) = full_name.split_once('/')?;
         self.read().get(source)?.tools.get(tool).cloned()
+    }
+
+    /// Why the tool with this full name is held, when it is there and held.
+    #[must_use]
+    pub fn held(&self, full_name: &str) -> Option<Hold> {
+        self.entry(full_name)?.hold
     }
 
     /// The sources, in name order.
     #[must_use]
     pub fn sources(&self) -> Vec<SourceSummary> {
+        self.summaries(|_| true)
+    }
+
+    /// The sources of `kind`, in name order.
+    #[must_use]
+    pub fn sources_of(&self, kind: SourceKind) -> Vec<SourceSummary> {
+        self.summaries(|source| source.kind == kind)
+    }
+
+    fn summaries(&self, wanted: impl Fn(&Source) -> bool) -> Vec<SourceSummary> {
         self.read()
             .iter()
+            .filter(|(_, source)| wanted(source))
             .map(|(name, source)| SourceSummary {
                 name: name.clone(),
                 description: source.description.clone(),
@@ -187,7 +359,9 @@ impl ToolRegistry {
     ///   source's tools.
     /// - Otherwise the query is words, and a tool matches when every word
     ///   is in its name, its source's name or its description. A word in
-    ///   the name counts for more than one in the description.
+    ///   the name counts for more than one in the description. A held
+    ///   tool's description is not looked in: it is not shown, and a
+    ///   search must not tell what it says.
     /// - An empty query lists every tool.
     ///
     /// It is a plain ranked match, done here, with no model call.
@@ -195,7 +369,7 @@ impl ToolRegistry {
     pub fn search(&self, query: &str, limit: usize) -> Vec<FoundTool> {
         let query = query.trim().to_lowercase();
         let sources = self.read();
-        let mut scored: Vec<(usize, String, &Arc<dyn Tool>)> = Vec::new();
+        let mut scored: Vec<(usize, String, &DynamicTool)> = Vec::new();
         let only_source = query
             .strip_suffix('/')
             .filter(|name| !name.contains(char::is_whitespace));
@@ -209,7 +383,11 @@ impl ToolRegistry {
                     None if words.is_empty() => 1,
                     None => {
                         let name = tool_name.to_lowercase();
-                        let description = tool.spec().description.to_lowercase();
+                        let description = if tool.hold.is_some() {
+                            String::new()
+                        } else {
+                            tool.tool.spec().description.to_lowercase()
+                        };
                         let full_lower = full.to_lowercase();
                         let mut total = 0;
                         for word in &words {
@@ -242,10 +420,19 @@ impl ToolRegistry {
         scored
             .into_iter()
             .take(limit)
-            .map(|(_, name, tool)| FoundTool {
-                name,
-                description: tool.spec().description.clone(),
-                parameters: tool.spec().parameters.clone(),
+            .map(|(_, name, found)| match found.hold {
+                Some(hold) => FoundTool {
+                    name,
+                    description: hold.line().to_owned(),
+                    parameters: Json::Null,
+                    hold: Some(hold),
+                },
+                None => FoundTool {
+                    name,
+                    description: found.tool.spec().description.clone(),
+                    parameters: found.tool.spec().parameters.clone(),
+                    hold: None,
+                },
             })
             .collect()
     }
@@ -268,6 +455,50 @@ impl std::fmt::Debug for ToolRegistry {
         f.debug_struct("ToolRegistry")
             .field("sources", &self.sources())
             .finish()
+    }
+}
+
+/// `schema` as a search result or an error shows it: every string in it,
+/// a key or a value, cut at [`MAX_DESCRIPTION_BYTES`] and ended with `…`,
+/// as a description is cut. Borrowed when nothing is that long.
+#[must_use]
+pub fn shown_schema(schema: &Json) -> Cow<'_, Json> {
+    if has_long_string(schema) {
+        Cow::Owned(cut_strings(schema))
+    } else {
+        Cow::Borrowed(schema)
+    }
+}
+
+fn has_long_string(value: &Json) -> bool {
+    match value {
+        Json::String(text) => text.len() > MAX_DESCRIPTION_BYTES,
+        Json::Array(items) => items.iter().any(has_long_string),
+        Json::Object(map) => map
+            .iter()
+            .any(|(key, value)| key.len() > MAX_DESCRIPTION_BYTES || has_long_string(value)),
+        Json::Null | Json::Bool(_) | Json::Number(_) => false,
+    }
+}
+
+fn cut_strings(value: &Json) -> Json {
+    let cut = |text: &str| -> String {
+        let kept = truncate_bytes(text, MAX_DESCRIPTION_BYTES);
+        if kept.len() < text.len() {
+            format!("{kept}…")
+        } else {
+            text.to_owned()
+        }
+    };
+    match value {
+        Json::String(text) => Json::String(cut(text)),
+        Json::Array(items) => Json::Array(items.iter().map(cut_strings).collect()),
+        Json::Object(map) => Json::Object(
+            map.iter()
+                .map(|(key, value)| (cut(key), cut_strings(value)))
+                .collect(),
+        ),
+        other => other.clone(),
     }
 }
 
@@ -387,6 +618,13 @@ impl Tool for ToolSearch {
             for tool in &found {
                 text.push_str("\n\n");
                 text.push_str(&tool.name);
+                if let Some(hold) = tool.hold {
+                    // Its name and why it waits, and nothing of what the
+                    // person has not seen.
+                    text.push_str("\n  ");
+                    text.push_str(hold.line());
+                    continue;
+                }
                 let description = tool.description.trim();
                 let shown = truncate_bytes(description, MAX_DESCRIPTION_BYTES);
                 for line in shown.lines() {
@@ -397,12 +635,13 @@ impl Tool for ToolSearch {
                     text.push_str("\n  [the description goes on]");
                 }
                 text.push_str("\n  arguments: ");
-                let compact = tool.parameters.to_string();
+                let shown = shown_schema(&tool.parameters);
+                let compact = shown.to_string();
                 if compact.chars().count() + 16 <= cx.limits.max_line_chars() {
                     text.push_str(&compact);
                 } else {
                     // Too long for one line: one key to a line.
-                    let pretty = serde_json::to_string_pretty(&tool.parameters).unwrap_or(compact);
+                    let pretty = serde_json::to_string_pretty(shown.as_ref()).unwrap_or(compact);
                     text.push_str(&pretty.replace('\n', "\n  "));
                 }
             }
@@ -516,7 +755,7 @@ impl Tool for ToolCall {
     fn plan(&self, args: &Json, cx: &PlanCx) -> Result<Plan, ToolError> {
         let call: CallArguments = args::parse(&self.spec, args)?;
         let name = call.tool.trim();
-        let Some(tool) = self.registry.get(name) else {
+        let Some(DynamicTool { tool, hold }) = self.registry.entry(name) else {
             let close = self.registry.suggestions(name);
             return Err(ToolError::UnknownTool(if close.is_empty() {
                 format!(
@@ -532,13 +771,20 @@ impl Tool for ToolCall {
             }));
         };
         let arguments = call.arguments.unwrap_or_else(|| json!({}));
-        let schema = &tool.spec().parameters;
-        schema::validate(schema, &arguments).map_err(|mismatch| {
-            ToolError::invalid(format!(
-                "The arguments for `{name}` do not fit its schema:\n{mismatch}\nIts schema \
-                 is:\n{schema}"
-            ))
-        })?;
+        // A held tool's arguments are not held against a schema the model
+        // was not shown, which a mismatch would quote: what a call of one
+        // does is its source's to say, and its tool checks them before it
+        // sends them anywhere.
+        if hold.is_none() {
+            let schema = &tool.spec().parameters;
+            schema::validate(schema, &arguments).map_err(|mismatch| {
+                ToolError::invalid(format!(
+                    "The arguments for `{name}` do not fit its schema:\n{mismatch}\nIts schema \
+                     is:\n{}",
+                    shown_schema(schema)
+                ))
+            })?;
+        }
         let inner = tool.plan(&arguments, cx)?;
         // The call is what the tool it names says it is: the same effects,
         // and besides them the call of the tool itself, which the permission

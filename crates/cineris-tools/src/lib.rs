@@ -83,7 +83,10 @@ pub use outline::OutlineTool;
 pub use output::{Budget, Compression, Keep, OutputLimits, Shaped, Treatment};
 pub use plan::{PlanBoard, PlanChange, PlanEditError, PlanTool};
 pub use read::ReadTool;
-pub use registry::{FoundTool, RegistryError, SourceSummary, ToolCall, ToolRegistry, ToolSearch};
+pub use registry::{
+    DynamicTool, FoundTool, Hold, RegistryError, SourceKind, SourceSummary, ToolCall, ToolRegistry,
+    ToolSearch,
+};
 pub use remember::{
     MemoryProposals, Proposal, ProposalError, ProposalOutcome, Proposals, RememberTool,
 };

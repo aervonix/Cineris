@@ -9,8 +9,8 @@ use cineris_ext::host::Phase;
 use cineris_ext::registration::ToolDef;
 use cineris_protocol::lease::RuleAction;
 use cineris_tools::{
-    BoxFuture, ConcurrencyClass, FileTable, Json, Plan, PlanCx, RunCx, Tool, ToolError, ToolOutput,
-    ToolRegistry, ToolResult, ToolSpec,
+    BoxFuture, ConcurrencyClass, FileTable, Json, Plan, PlanCx, RunCx, SourceKind, Tool, ToolError,
+    ToolOutput, ToolRegistry, ToolResult, ToolSpec,
 };
 
 use super::ApprovedExtension;
@@ -698,7 +698,7 @@ pub(crate) fn register(
                 Arc::new(ExtensionTool::new(definition, Arc::clone(&loaded))) as Arc<dyn Tool>
             })
             .collect();
-        match registry.set_source(&name, &description, tools) {
+        match registry.set_source(&name, SourceKind::Extension, &description, tools) {
             // Its hooks are the extension's: on their events only while it
             // is loaded as it was approved.
             Ok(()) => hooks.add(&loaded),
