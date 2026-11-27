@@ -394,3 +394,52 @@ Tier 3 grows with the runner's speed. On a runner at 5.0 ms (`try --final` 45814
 | Windows, `x86_64-pc-windows-msvc` | 21,224,448 bytes (20.24 MiB) | 20,720,128 bytes | + 504,320 bytes (492.5 KiB) | 25 MiB |
 
 On Linux the crates that grew most are `cineris_policy` (+67.1 KB), `cineris` (+66.5 KB) and `cineris_core` (+43.5 KB), from `cargo xtask size` in `try --final`. Neither binary holds a path under a home folder.
+
+## The close: its examples, the build without the engine, and the report
+
+<!-- written by cargo xtask ci-times, section "The close: its examples, the build without the engine, and the report": it replaces this up to the end mark -->
+Pull request 132, on `main` at `6909091`. "Main" is main's own run at `6909091` (run 45861953054).
+The PR's run is 45918932405, at `c63a0e4`.
+
+| Job | Main, `6909091` | The PR at `c63a0e4` |
+|---|---|---|
+| `lint-linux` | 71 s | 104 s |
+| `test-linux` | 182 s | 146 s |
+| `lint-windows` | 124 s | 119 s |
+| `test-windows` | 347 s | 293 s |
+| `pr-size-linux` (blocks nothing) | — | 237 s |
+| `ts-client` (blocks nothing) | 69 s | 56 s |
+| `pr-size-windows` (blocks nothing) | — | 363 s |
+
+| Time above process start, against the budget | Linux, main (4 ms) | Linux, `c63a0e4` (4 ms) | Windows, main (9 ms) | Windows, `c63a0e4` (8 ms) |
+|---|---|---|---|---|
+| Tier 1, unit (20 s on Linux, 25 s on Windows) | 19.3 s | 12.8 s | 25.4 s | 23.1 s |
+| Tier 2, integration (40 s) | 29.7 s | 30.8 s | 55.6 s | 46.6 s |
+| Tier 3, system (60 s on Linux, 90 s on Windows) | 46.2 s | 37.1 s | 99.3 s | 91.0 s |
+
+<!-- end of what cargo xtask ci-times wrote, section "The close: its examples, the build without the engine, and the report" -->
+
+Every job passed at `c63a0e4`, `test-windows` in 293 s (4 min 53 s), inside the job's five minutes on that runner.
+
+## The close, both trees on one runner
+
+`try --final` at the head (run 45918837708, at `c63a0e4`): Windows, the median of 5 runs each, on one runner at 8.0 ms a process start. Copied from `cargo xtask try-result 45918837708`.
+
+| Tier | The PR | Main | Change | Budget |
+|---|---|---|---|---|
+| 1, unit | 26.5 s (3,571 tests) | 26.7 s (3,560) | −0.1 s | 25 s |
+| 2, integration | 55.0 s (1,844 tests) | 55.2 s (1,839) | −0.1 s | 40 s |
+| 3, system | 98.3 s (266 tests) | 95.3 s (265) | +2.9 s | 90 s |
+
+The close's own tier-3 tests come to about 1.5 s of tier 3's change: the examples' test, new, 1.26 s, and the server's conformance over `serve --stdio`, which runs the close's new scenario, +0.28 s. Most of the rest is a test of the session's that moves from run to run (`base::sys_the_base_state_is_recorded_in_the_log_from_a_real_capture`, +0.72 s). On that runner `main`'s own tiers 2 and 3 are over their budgets too. The same run's tests on Linux 22.04 used 66%, 67% and 66% of the three tiers' budgets.
+
+## The close: the binary's size
+
+The pull request's `pr-size` jobs in run 45918932405, each against `main`'s own size record (run 45861904197). The shipped `dist` build:
+
+| System | The PR | Main | Change | Budget |
+|---|---|---|---|---|
+| Linux, `x86_64-unknown-linux-musl` | 17,513,528 bytes (16.70 MiB) | 17,513,528 bytes | 0 bytes | 20 MiB |
+| Windows, `x86_64-pc-windows-msvc` | 21,227,520 bytes (20.24 MiB) | 21,224,448 bytes | + 3,072 bytes (3.0 KiB) | 25 MiB |
+
+Neither binary holds a path under a home folder.
