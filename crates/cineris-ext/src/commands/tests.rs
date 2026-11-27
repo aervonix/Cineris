@@ -117,6 +117,81 @@ fn a_commands_file_is_read_strictly() {
     );
 }
 
+/// A key written indented is not passed over (the full review of step 28,
+/// its finding 12): an indented mapping, valid YAML, and a key indented by
+/// a tab after a field, which was folded into that field's value, are each
+/// refused, as the same `profile:` at the first column is read and the
+/// command refused for naming one. A value that wraps onto a line of its
+/// own still reads, and a quoted value or a block may hold `key: ` text.
+#[test]
+fn a_key_written_indented_is_not_passed_over() {
+    let scratch = Scratch::outside(
+        "cineris-ext-unit",
+        "commands-a_key_written_indented_is_not_passed_over",
+    );
+    // A mapping indented two spaces: valid YAML.
+    scratch.file(
+        format!("{PROJECT}/deploy.md"),
+        "---\n  description: Deploy to staging\n  profile: careful\n---\nDeploy the app.\n",
+    );
+    // A key indented by a tab after a field: folded into that field.
+    scratch.file(
+        format!("{PROJECT}/ship.md"),
+        "---\ndescription: Ship it\n\tprofile: careful\n---\nShip it.\n",
+    );
+    // At the first column it is read, so the command is judged and not sent.
+    scratch.file(
+        format!("{PROJECT}/plain.md"),
+        "---\nprofile: careful\n---\nDo it.\n",
+    );
+    let found = found(&scratch);
+    assert_eq!(
+        found.get("plain").and_then(|c| c.profile.as_deref()),
+        Some("careful")
+    );
+    for name in ["deploy", "ship"] {
+        assert!(found.get(name).is_none(), "{name}: {found:#?}");
+    }
+    let left = left(&found);
+    for (path, line) in [
+        (
+            ".cineris/commands/deploy.md",
+            "`  description: Deploy to staging`",
+        ),
+        (".cineris/commands/ship.md", "`\\tprofile: careful`"),
+    ] {
+        let (_, why) = left
+            .iter()
+            .find(|(left, _)| left == path)
+            .unwrap_or_else(|| panic!("{path}: {left:?}"));
+        assert!(
+            why.contains("no `key: value` field") && why.contains(line),
+            "{path}: {why}"
+        );
+    }
+    // A value over two lines reads; quotes and a block hold text.
+    let wrapped = parsed(
+        "---\ndescription: Review the\n  staged changes # mine\n\n  # an indented comment\n---\nhi",
+    )
+    .unwrap();
+    assert_eq!(wrapped.description, "Review the staged changes");
+    for text in [
+        "---\ndescription: \"Ship: it\n  profile: careful\"\n---\nhi",
+        "---\ndescription: |\n  profile: careful\n---\nhi",
+        "---\n  # an indented comment first\ndescription: d\n---\nhi",
+    ] {
+        let command = parsed(text).unwrap_or_else(|why| panic!("{text:?}: {why}"));
+        assert!(command.profile.is_none(), "{text:?}");
+    }
+    for text in [
+        "---\ndescription:\n  profile: careful\n---\nhi",
+        "---\ndescription: a\n  - profile: careful\n---\nhi",
+    ] {
+        let error = parsed(text).unwrap_err();
+        assert!(error.contains("no `key: value` field"), "{text:?}: {error}");
+    }
+}
+
 /// A project's body, and its arguments' defaults, hold nothing that acts
 /// unseen, the first such character named as an escape; a line break, a
 /// `\r\n` one too, a tab and an emoji's selector are seen. The user's own

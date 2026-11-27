@@ -741,6 +741,9 @@ fn a_projects_extension_walks_through_its_trust() {
             cineris_ext::event::Event::ToolBefore.sees(),
             "(`tool.before`)",
             "Its version is `1`.",
+            // Its programs get the user's environment (the fixes of the
+            // full review of step 28, its finding 11).
+            cineris_core::ext::ITS_ENVIRONMENT,
             // What acts unseen is shown as an escape, inside the quotes of
             // the author's words, on a line of their own.
             "\nIts author describes it, in their words:\n\"Tracks issues\\nfor you\\u{202e}txt.exe\"",

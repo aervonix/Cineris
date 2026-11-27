@@ -87,6 +87,7 @@ use cineris_base::{
 };
 use cineris_ext::discover::{self, Discovered, Found, LeftOut, Root, Seen};
 use cineris_ext::folder::Snapshot;
+use cineris_ext::hook::command::ITS_ENVIRONMENT;
 use cineris_ext::manifest::{HostPattern, Manifest};
 use cineris_ext::source::Source;
 use cineris_policy::{Definition, ProjectTrust, Standing};
@@ -609,10 +610,13 @@ pub(crate) fn asked(
 }
 
 /// What the trust question, and `cineris permissions trust`, show of one
-/// extension: its name and folder, whether it changed, and what its
-/// manifest lets it do in words.
+/// extension: its name and folder, whether it changed, what its manifest
+/// lets it do in words, and the whole text it adds to the system prompt
+/// ([`prompt_shown`]) after [`PROMPT_SHOWN`], on lines of their own (the
+/// full review of step 28, its finding 16: it was approved unseen, where
+/// `cineris ext add` shows it).
 pub(crate) fn detail(found: &Found, changed: bool, confined: bool) -> String {
-    format!(
+    let mut said = format!(
         "`{}` in `{}`.{} {}",
         in_code(&found.manifest.name),
         found.shown,
@@ -622,7 +626,32 @@ pub(crate) fn detail(found: &Found, changed: bool, confined: bool) -> String {
             ""
         },
         in_words(&found.manifest, confined)
-    )
+    );
+    if let Some(prompt) = prompt_shown(&found.manifest, &found.snapshot) {
+        said.push_str(&format!("\n{PROMPT_SHOWN}\n{prompt}"));
+    }
+    said
+}
+
+/// What comes before the text an extension adds to the system prompt
+/// where an approval shows it: the trust question, `cineris permissions
+/// trust`, `cineris ext inspect` and `cineris ext add`.
+pub const PROMPT_SHOWN: &str = "What it adds to the system prompt, whole, in its author's words:";
+
+/// The whole text of the file `manifest` adds to the system prompt, out of
+/// `snapshot`, quoted and escaped as its author's description is
+/// ([`quoted_shown`]): `None` when it adds none. It is never cut: the
+/// manifest refuses a file of more than 4 KiB
+/// (`cineris_ext::manifest::MAX_PROMPT_BYTES`), so that is the most an
+/// approval shows, and a question too long for its room says so and
+/// offers no yes (the application's trust dialog), as it does of any list
+/// that does not fit.
+pub(crate) fn prompt_shown(manifest: &Manifest, snapshot: &Snapshot) -> Option<String> {
+    manifest
+        .prompt
+        .as_deref()
+        .and_then(|file| snapshot.file(file))
+        .map(|bytes| quoted_shown(&String::from_utf8_lossy(bytes)))
 }
 
 /// The exact words of an approval where the programs an extension runs are
@@ -749,6 +778,12 @@ pub(crate) fn in_words_where(manifest: &Manifest, confined: bool, everywhere: bo
     } else {
         words.push(NOT_CONFINED.to_owned());
         words.push(format!("It may run {}.", listed(&programs)));
+    }
+    if !programs.is_empty() {
+        // A program it runs gets a shell command's environment, as a hook
+        // command's does, tokens included: said in the hook commands' own
+        // words (the full review of step 28, its finding 11).
+        words.push(ITS_ENVIRONMENT.to_owned());
     }
     words.push(if declared.read.is_empty() {
         "It reads no file.".to_owned()
@@ -930,8 +965,9 @@ mod tests {
         let said = in_words(&manifest, false);
         assert!(
             said.starts_with(&format!(
-                "{NOT_CONFINED} It may run `sh`. It may read the workspace's files that match \
-                 `**`. It may write the workspace's files that match `**`. It reaches no host."
+                "{NOT_CONFINED} It may run `sh`. {ITS_ENVIRONMENT} It may read the workspace's \
+                 files that match `**`. It may write the workspace's files that match `**`. It \
+                 reaches no host."
             )),
             "{said}"
         );
@@ -1022,6 +1058,37 @@ mod tests {
             Manifest::parse("api = 1\nname = \"probe\"\nversion = \"1\"\nmain = \"main.js\"\n")
                 .unwrap();
         assert!(in_words(&none, false).starts_with("It runs no program."));
+    }
+
+    /// Wherever an extension runs a program, its approval says that the
+    /// program gets the user's environment, tokens included, in the hook
+    /// commands' own words, as a hook command's approval does, and once:
+    /// confined here or not, the user's own or a project's (the full
+    /// review of step 28, its finding 11). One that runs none says nothing
+    /// of it.
+    #[test]
+    fn an_approval_says_its_programs_run_with_your_environment() {
+        let runs = Manifest::parse(
+            "api = 1\nname = \"probe\"\nversion = \"1\"\nmain = \"main.js\"\n[capabilities]\n\
+             exec = [\"gh\"]\nnet = [\"api.example.com\"]\n",
+        )
+        .unwrap();
+        let none =
+            Manifest::parse("api = 1\nname = \"probe\"\nversion = \"1\"\nmain = \"main.js\"\n")
+                .unwrap();
+        for confined in [false, true] {
+            for everywhere in [false, true] {
+                let said = in_words_where(&runs, confined, everywhere);
+                assert_eq!(said.matches(ITS_ENVIRONMENT).count(), 1, "{said}");
+                // Said with what its programs may do, before its files.
+                assert!(
+                    said.find(ITS_ENVIRONMENT) < said.find("It reads no file."),
+                    "{said}"
+                );
+                let quiet = in_words_where(&none, confined, everywhere);
+                assert!(!quiet.contains(ITS_ENVIRONMENT), "{quiet}");
+            }
+        }
     }
 
     /// The folders an approval names are the ones the launcher grants: made

@@ -600,6 +600,34 @@ fn every_step_can_be_skipped() {
     assert!(run.scrollback.join("\n").contains("· Commands: none kept."));
 }
 
+/// What the configuration in force says otherwise, once the file is
+/// written, is said after it (the full review of step 28, its finding 15):
+/// a managed lock that keeps the user's skill folders read where the first
+/// run wrote them off. Nothing is said where it agrees.
+#[test]
+fn what_the_configuration_in_force_holds_otherwise_is_said_after_the_write() {
+    let otherwise = "But the configuration in force here still reads your own skill folders \
+                     without asking.";
+    let mut run = Run::new(FakeSetup {
+        in_force_otherwise: vec![otherwise.to_owned()],
+        ..fake()
+    });
+    skip_three(&mut run);
+    let said = squash(&run.scrollback.join(" "));
+    let written = said
+        .find("Written to ~/.config/cineris/config.toml.")
+        .unwrap_or_else(|| panic!("{said}"));
+    let told = said.find(otherwise).unwrap_or_else(|| panic!("{said}"));
+    assert!(told > written, "{said}");
+    let mut quiet = Run::new(fake());
+    skip_three(&mut quiet);
+    assert!(
+        !squash(&quiet.scrollback.join(" ")).contains("But the configuration"),
+        "{:?}",
+        quiet.scrollback
+    );
+}
+
 /// `x` skips the whole set-up: the file is written with the defaults, the
 /// session opens, and no command is asked for.
 #[test]

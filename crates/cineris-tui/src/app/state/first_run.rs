@@ -669,7 +669,7 @@ impl App {
                     run.rows_changed();
                 }
             }
-            Answer::Written(written) => {
+            Answer::Written(written, otherwise) => {
                 let mode = run
                     .chosen
                     .mode
@@ -679,6 +679,11 @@ impl App {
                 match written {
                     Ok(path) => {
                         self.say(&format!("Mode: {mode}. Written to {}.", one_line(&path)));
+                        // What the configuration in force holds otherwise
+                        // (the full review of step 28, its finding 15).
+                        for said in &otherwise {
+                            self.say(&one_line(said));
+                        }
                         // The core reads the file again, so that the session
                         // is made with what was chosen; it opens once that is
                         // done.

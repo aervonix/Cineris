@@ -90,8 +90,14 @@ use cineris_ext::registration::Registration;
 
 pub use found::{
     ANY_HOST, BEFORE_AN_EXTENSION_IS_REGISTERED, BEFORE_THE_CACHE_IS_KEPT, CONFINED_WHERE_ON,
-    NOT_CONFINED, THE_QUESTIONS_TRUST_IS_READ, WAIT_SAID_AFTER, WAITING, WAITING_FOR_HOOKS,
+    NOT_CONFINED, PROMPT_SHOWN, THE_QUESTIONS_TRUST_IS_READ, WAIT_SAID_AFTER, WAITING,
+    WAITING_FOR_HOOKS,
 };
+
+/// What an approval says of a program's environment, of a hook command's
+/// and of an extension's that runs one alike: one sentence, the hook
+/// commands' own.
+pub use cineris_ext::hook::command::ITS_ENVIRONMENT;
 
 pub(crate) use exec::{ExecParts, HarnessFiles};
 #[cfg(feature = "scripts")]

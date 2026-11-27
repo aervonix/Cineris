@@ -260,6 +260,18 @@ pub trait Setup: Send + Sync {
     /// [`NotWritten`]: a file is there already, which was left as it is,
     /// or it could not be written.
     fn write_config(&self, chosen: &Chosen) -> Result<String, NotWritten>;
+
+    /// What the configuration in force says otherwise than `chosen`, once
+    /// it is written, each a sentence the first run says after the file is
+    /// written: a managed file's lock, or the profile selected, that keeps
+    /// the user's own skill folders read without asking where the first run
+    /// wrote them off (since the fixes of the full review of step 28, its
+    /// finding 15).
+    /// Nothing by default.
+    fn in_force_otherwise(&self, chosen: &Chosen) -> Vec<String> {
+        let _ = chosen;
+        Vec::new()
+    }
 }
 
 /// Why the configuration file was not written (since the review of the
@@ -292,7 +304,9 @@ pub(crate) enum Answer {
     Stored(String, Result<(), String>),
     Found(Found),
     Servers(String, Result<Vec<McpServer>, String>),
-    Written(Result<String, NotWritten>),
+    /// What was written, and what the configuration in force says
+    /// otherwise ([`Setup::in_force_otherwise`], asked only once it is).
+    Written(Result<String, NotWritten>, Vec<String>),
 }
 
 /// The thread [`Setup`]'s calls run on, one at a time in the order asked.
@@ -368,11 +382,17 @@ impl Worker {
                             let read = guarded(|| setup.read_servers(&path)).and_then(|got| got);
                             Answer::Servers(path, read)
                         }
-                        Job::Write(chosen) => Answer::Written(
-                            guarded(|| setup.write_config(&chosen))
+                        Job::Write(chosen) => {
+                            let written = guarded(|| setup.write_config(&chosen))
                                 .map_err(NotWritten::Failed)
-                                .and_then(|got| got),
-                        ),
+                                .and_then(|got| got);
+                            let otherwise = if written.is_ok() {
+                                guarded(|| setup.in_force_otherwise(&chosen)).unwrap_or_default()
+                            } else {
+                                Vec::new()
+                            };
+                            Answer::Written(written, otherwise)
+                        }
                     };
                     if outbox.send(answer).is_err() {
                         return;

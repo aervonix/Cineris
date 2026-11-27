@@ -499,6 +499,12 @@ fn inspected_text(one: &ExtensionListed) -> String {
             text.push_str(&format!("    {line}\n"));
         }
     }
+    if let Some(prompt) = &one.prompt {
+        text.push_str(&format!("  {}\n", cineris_core::ext::PROMPT_SHOWN));
+        for line in prompt.lines() {
+            text.push_str(&format!("    {line}\n"));
+        }
+    }
     text
 }
 
@@ -531,7 +537,7 @@ fn to_add_text(to_add: &ToAdd) -> String {
         }
     }
     if let Some(prompt) = &to_add.prompt {
-        text.push_str("What it adds to the system prompt, whole, in its author's words:\n");
+        text.push_str(&format!("{}\n", cineris_core::ext::PROMPT_SHOWN));
         for line in prompt.lines() {
             text.push_str(&format!("  {line}\n"));
         }

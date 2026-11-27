@@ -7,15 +7,18 @@
 //! built in step 28's second pull request"), judged from the same stores:
 //! the user's pins in `pins.toml`, a project's in `trust.toml`, and what each
 //! registered as the registration cache keeps it. Nothing here runs an
-//! extension but `add`'s one evaluation, after the person's yes.
+//! extension but `add`'s one evaluation, before the person's question, so
+//! that what it registers is shown with the rest (the early review of step
+//! 28's third pull request, M2).
 //!
 //! **`add` pins what it showed.** The folder is read once, through handles
 //! that follow no link (`Snapshot::read_unfollowed`), within discovery's
-//! caps, and its manifest read strictly; the person is shown that
-//! snapshot's manifest in words and every file; on a yes that snapshot, and
+//! caps, and its manifest read strictly; that snapshot is evaluated, and the
+//! person is shown its manifest in words, what it registers, the text it
+//! adds to the system prompt and every file; on a yes that snapshot, and
 //! never a second read of the source (which may be a folder the model can
-//! write), is evaluated, written into `<config dir>/extensions/<name>`,
-//! pinned, and its registration kept in the cache.
+//! write), is written into `<config dir>/extensions/<name>`, pinned, and the
+//! registration evaluated kept in the cache.
 //!
 //! These block on the file system, and run on the command line's main
 //! thread, outside the core's runtime, as the rest of the core's management
@@ -41,7 +44,7 @@ use cineris_policy::{Definition, PinStore, ProjectTrust, UserPins};
 use cineris_protocol::ErrorKind;
 use cineris_protocol::methods::TrustResourceKind;
 
-use super::found::{UserNames, definition, in_words_where, quoted_shown, shown_path};
+use super::found::{UserNames, definition, in_words_where, prompt_shown, quoted_shown, shown_path};
 use crate::core::{Core, OpError, error};
 use crate::manage::Project;
 
@@ -167,6 +170,10 @@ pub struct ExtensionListed {
     pub registered: Option<Registered>,
     /// What its manifest lets it do, in words, as an approval shows it.
     pub words: Option<String>,
+    /// The whole text it adds to the system prompt, quoted and escaped as
+    /// an approval shows it, when its folder was read and it adds one (the
+    /// full review of step 28, its finding 16).
+    pub prompt: Option<String>,
 }
 
 /// Every extension `cineris ext list` shows: the user's and the current
@@ -297,6 +304,7 @@ pub(crate) fn judged(judging: &Judging<'_>) -> Vec<ExtensionListed> {
                     judging.confined,
                     source == Source::Project,
                 )),
+                prompt: prompt_shown(&found.manifest, &found.snapshot),
                 folder: Some(found.shown.clone()),
                 hash: Some(hash),
                 standing,
@@ -324,6 +332,7 @@ pub(crate) fn judged(judging: &Judging<'_>) -> Vec<ExtensionListed> {
                 pin: None,
                 registered: None,
                 words: None,
+                prompt: None,
                 name: name.clone(),
             });
             seen.push(name);
@@ -363,6 +372,7 @@ pub(crate) fn judged(judging: &Judging<'_>) -> Vec<ExtensionListed> {
                 standing,
                 pin: Some((hash, at)),
                 words: None,
+                prompt: None,
                 name: name.clone(),
             });
             seen.push(name);
@@ -550,8 +560,9 @@ pub struct Removal {
     pub hash: Option<ContentHash>,
     /// Only a project's has the name: it is not removed.
     pub project_only: bool,
+    /// What is deleted: one name directly in the user's folder of
+    /// extensions.
     target: PathBuf,
-    root: PathBuf,
 }
 
 /// What [`Core::remove_extension`] did.
@@ -561,22 +572,6 @@ pub struct Removed {
     pub unpinned: bool,
     /// The folder was deleted (a link, unlinked).
     pub deleted: bool,
-}
-
-/// Whether `target`, resolved, is a name directly in `root`, resolved: the
-/// one place a removal deletes. A path that leads out of the user's folder
-/// of extensions is refused, whatever its text.
-pub(crate) fn within(root: &Path, target: &Path) -> bool {
-    let (Some(parent), Some(name)) = (target.parent(), target.file_name()) else {
-        return false;
-    };
-    if name == ".." || name == "." {
-        return false;
-    }
-    match (std::fs::canonicalize(parent), std::fs::canonicalize(root)) {
-        (Ok(parent), Ok(root)) => same_location(&parent, &root),
-        _ => false,
-    }
 }
 
 /// Removes what is at `target`, never through a link: a link is unlinked
@@ -1069,11 +1064,7 @@ impl Core {
             resolver.root(),
             self.state_dir().as_ref(),
         );
-        let prompt = manifest
-            .prompt
-            .as_deref()
-            .and_then(|file| snapshot.file(file))
-            .map(|bytes| quoted_shown(&String::from_utf8_lossy(bytes)));
+        let prompt = prompt_shown(&manifest, &snapshot);
         Ok(ToAdd {
             // A user's extension is loaded in every workspace: where its
             // programs are confined is said, not only here (M3).
@@ -1384,6 +1375,31 @@ impl Core {
         })
     }
 
+    /// Whether the configuration in force here reads the user's own skill
+    /// folders without asking (`permissions.read_skill_folders`), loaded as
+    /// [`Core::disable_extension`] loads it after its write, and where that
+    /// value comes from, as `cineris config show --origin` says it (`managed:
+    /// /etc/cineris/config.toml:4`, `profile wide (user: ~/…:9)`). For
+    /// `cineris setup skill-folders` and the first run, which write the
+    /// user's file and then say when a managed file or the profile selected
+    /// holds the value otherwise (the full review of step 28, its finding
+    /// 15: reads turned off were said to be off where a managed lock or the
+    /// profile kept them on).
+    ///
+    /// # Errors
+    ///
+    /// When the configuration cannot be loaded.
+    pub fn skill_folders_in_force(&self, project: &Project) -> Result<(bool, String), OpError> {
+        let loaded = self.configuration_here(project)?;
+        let from = loaded
+            .origin(&cineris_config::KeyPath::new([
+                "permissions",
+                "read_skill_folders",
+            ]))
+            .render(&self.inner.options.env);
+        Ok((loaded.settings.permissions.read_skill_folders, from))
+    }
+
     /// What removing the user's extension `name` would take away
     /// (`cineris ext remove`): its pin and its folder. Nothing is changed.
     ///
@@ -1466,20 +1482,24 @@ impl Core {
             hash,
             project_only,
             target,
-            root,
         })
     }
 
     /// Removes the user's extension `removal` names: its pin taken away,
     /// and its folder deleted when `delete` (the person's yes naming it),
-    /// never through a link, and only where it is directly in the user's
-    /// folder of extensions, resolved.
+    /// never through a link. What is deleted is one name directly in the
+    /// user's folder of extensions: [`Core::extension_removal`] builds it
+    /// from a name that is one ([`folder_name_refused`]), as the folder's
+    /// listing or its pin holds it, which is the guard (the full review of
+    /// step 28, its finding 18: a check of the folder above it, resolved,
+    /// compared the folder with itself, and was taken out). The folders
+    /// above it are resolved by name when it is deleted
+    /// (`docs/outstanding/a-folder-is-deleted-by-its-path-after-its-check.md`).
     ///
     /// # Errors
     ///
     /// When it is a project's, the pin store cannot be written (nothing is
-    /// deleted then), or the folder is not where it should be or cannot be
-    /// deleted.
+    /// deleted then), or the folder cannot be deleted.
     pub fn remove_extension(&self, removal: &Removal, delete: bool) -> Result<Removed, OpError> {
         let code = in_code(&removal.name).into_owned();
         if removal.project_only {
@@ -1505,13 +1525,6 @@ impl Core {
             })?;
         let mut deleted = false;
         if delete && std::fs::symlink_metadata(&removal.target).is_ok() {
-            if !within(&removal.root, &removal.target) {
-                return Err(failed(format!(
-                    "`{code}` was unpinned and its folder not deleted: `{}` does not lead to a \
-                     folder directly in your folder of extensions.",
-                    self.shown(&removal.target)
-                )));
-            }
             deleted = delete_unfollowed(&removal.target).map_err(|failure| {
                 failed(format!(
                     "`{code}` was unpinned, and its folder `{}` could not be deleted: {failure}",

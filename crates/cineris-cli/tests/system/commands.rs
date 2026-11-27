@@ -416,6 +416,9 @@ fn sys_permissions_trust_approves_a_projects_extensions_only_with_the_flag_where
         "Its extensions",
         "`probe` in `.cineris/extensions/probe`.",
         "It may run `gh`",
+        // Its programs get the user's environment (the fixes of the full
+        // review of step 28, its finding 11).
+        cineris_core::ext::ITS_ENVIRONMENT,
     ] {
         assert!(
             plain.stdout.contains(shown_too),
@@ -477,6 +480,39 @@ fn sys_permissions_trust_approves_a_projects_extensions_only_with_the_flag_where
         !again.stdout.contains("Its extensions"),
         "{}",
         shown(&again)
+    );
+}
+
+/// `setup skill-folders off` loads the configuration in force after its
+/// write and says when it still reads the user's skill folders without
+/// asking: here the profile the user's file selects sets it on (the full
+/// review of step 28, its finding 15: it said only that reads were asked
+/// about). Turned on, which the profile agrees with, nothing more is said.
+#[test]
+fn sys_setup_skill_folders_off_says_when_the_profile_keeps_them_read() {
+    let machine = Machine::new("sys_setup_skills_in_force");
+    machine.raw_user_config(
+        "profile = \"wide\"\n\n[permissions]\nread_skill_folders = false\n\n\
+         [profiles.wide.permissions]\nread_skill_folders = true\n",
+    );
+    let off = machine.run(&["setup", "skill-folders", "off"]);
+    off.expect_code(0);
+    assert!(
+        off.stdout.contains("is asked about already")
+            && off.stdout.contains(
+                "But the configuration in force here still reads your own skill folders without \
+                 asking"
+            )
+            && off.stdout.contains("comes from profile wide"),
+        "{}",
+        shown(&off)
+    );
+    let on = machine.run(&["setup", "skill-folders", "on"]);
+    on.expect_code(0);
+    assert!(
+        on.stdout.contains("read without asking") && !on.stdout.contains("But the configuration"),
+        "{}",
+        shown(&on)
     );
 }
 

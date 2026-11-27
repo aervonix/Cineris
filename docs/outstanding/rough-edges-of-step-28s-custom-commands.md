@@ -1,0 +1,8 @@
+Small faults of step 28's custom commands that widen nothing: a prompt that begins `/a:b` is always taken as an extension's command, and an early entry for a command's `turn/start` can be kept for the session's life.
+
+- Area: cineris-core
+- Owner: a later step, the maintainers
+
+| Item | Who | When |
+|---|---|---|
+| **What is open.** Found by the full review of step 28 (its prompt area, lower confidence); neither lets anything run or be sent that the person did not ask for. **`/a:b` is always read as a command:** in the application and in a headless run, a prompt whose first word is `/` then a name, a `:` and a name is sent as the command `b` of the extension `a` ([12-extensions.md](../architecture/12-extensions.md), "As built in step 28: custom commands"), so `/12:30 notes` is refused as an unknown command instead of reaching the model; the person has to write it another way. **`Core::early` can keep an entry:** a `turn/start` that names a command is given its run as it is sent (`Core::early`, `commands::sent`), before it waits in the client's lane; where the lane is already gone when it is sent (the client went away between the two), the entry is never taken by a step, and stays until the session closes. Memory only, an entry a command sent. **What would close them:** a rule, for the maintainers to settle, for when `/a:b` is the person's text (for example where `a` is no extension's name the session knows, or does not begin with a letter); and take an early entry back when its operation is never run (the lane refused it, or the client closed). | A later step, the maintainers | When custom commands are next changed |
