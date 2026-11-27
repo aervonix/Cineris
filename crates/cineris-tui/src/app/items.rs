@@ -382,6 +382,20 @@ impl Mapper {
         session: &SessionId,
         now: Instant,
     ) {
+        // A reasoning or an answer's delta with no words draws nothing and
+        // ends nothing: a reasoning part is often only a signature or an
+        // encrypted payload, and `in_progress` replays every part. The
+        // runs the viewer reads again are decided by the same rule
+        // (`edge`, since the fixes of the review of step 25).
+        let shape = match delta {
+            Delta::Reasoning(text) => Shape::Reasoning(&text.text),
+            Delta::Text(text) => Shape::Text(&text.text),
+            Delta::ToolCall(_) => Shape::Call,
+            _ => Shape::Other,
+        };
+        if matches!(shape, Shape::Reasoning(_) | Shape::Text(_)) && edge(shape) == Edge::Nothing {
+            return;
+        }
         match delta {
             Delta::ToolOutput(output) => {
                 let Some(call) = self.results.get(item).cloned() else {
@@ -845,24 +859,67 @@ fn trim_in_place(text: &mut String) {
     text.shrink_to_fit();
 }
 
+/// A part of a response, or its delta, as far as its reasoning blocks are
+/// concerned.
+#[derive(Debug, Clone, Copy)]
+enum Shape<'a> {
+    /// Reasoning, with this text.
+    Reasoning(&'a str),
+    /// An answer's text.
+    Text(&'a str),
+    /// A tool call.
+    Call,
+    /// Anything else.
+    Other,
+}
+
+/// What a part does to the reasoning run it comes after.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Edge {
+    /// It adds words to the run, which it begins if none is open.
+    Words,
+    /// It ends the run open.
+    Ends,
+    /// Nothing.
+    Nothing,
+}
+
+/// The one rule of reasoning runs (since the fixes of the review of step
+/// 25, which found the mapper and `reasoning_runs` counting them apart, so
+/// that the viewer read another run than the block's): reasoning with words
+/// adds to the run, an answer's text with words or a tool call ends it, and
+/// a part with no words does nothing. `Mapper::delta` follows it for each
+/// delta, and [`reasoning_runs`] for each part.
+fn edge(shape: Shape<'_>) -> Edge {
+    match shape {
+        Shape::Reasoning(text) if !text.is_empty() => Edge::Words,
+        Shape::Text(text) if !text.is_empty() => Edge::Ends,
+        Shape::Call => Edge::Ends,
+        Shape::Reasoning(_) | Shape::Text(_) | Shape::Other => Edge::Nothing,
+    }
+}
+
 /// An assistant item's reasoning as the transcript drew it (since the fixes
 /// of the review of step 25): one text for each reasoning block its deltas
-/// made, in order, each trimmed as [`finish_reasoning`] trims it. A run is
-/// the reasoning parts that follow one another, with words; an answer's
-/// text or a tool call between two ends the first, as its delta ends the
-/// block (`Mapper::delta`). The viewer reads a reasoning kept only in part
-/// from its item and takes the run its [`Origin`] names.
+/// made, in order, each trimmed as [`finish_reasoning`] trims it, the runs
+/// decided by [`edge`], as `Mapper::delta` decides its blocks. The viewer
+/// reads a reasoning kept only in part from its item and takes the run its
+/// [`Origin`] names.
 pub(crate) fn reasoning_runs(parts: &[Part]) -> Vec<String> {
     let mut runs = Vec::new();
     let mut open: Option<String> = None;
     for part in parts {
-        match part {
-            Part::Reasoning(reasoning) if !reasoning.text.is_empty() => {
-                open.get_or_insert_with(String::new)
-                    .push_str(&reasoning.text);
+        let shape = match part {
+            Part::Reasoning(reasoning) => Shape::Reasoning(&reasoning.text),
+            Part::Text(text) => Shape::Text(&text.text),
+            Part::ToolCall(_) => Shape::Call,
+            _ => Shape::Other,
+        };
+        match (edge(shape), shape) {
+            (Edge::Words, Shape::Reasoning(text)) => {
+                open.get_or_insert_with(String::new).push_str(text);
             }
-            Part::Text(text) if !text.text.is_empty() => runs.extend(open.take()),
-            Part::ToolCall(_) => runs.extend(open.take()),
+            (Edge::Ends, _) => runs.extend(open.take()),
             _ => {}
         }
     }

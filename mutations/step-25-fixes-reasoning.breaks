@@ -35,9 +35,9 @@ caught-by:
 [break] reasoning-runs-not-ended-by-a-call
 rule: A tool call between two reasoning parts ends the first run, as its delta ends the block.
 file: crates/cineris-tui/src/app/items.rs
-in: reasoning_runs
-find: Part::ToolCall(_) => runs.extend(open.take()),
-replace: Part::ToolCall(_) => {}
+in: edge
+find: Shape::Call => Edge::Ends,
+replace: Shape::Call => Edge::Nothing,
 caught-by:
     cineris-tui app::items::tests::each_reasoning_knows_its_run_of_its_item_and_holds_its_words_once
 
@@ -77,3 +77,12 @@ find: self.cut_reasonings += 1;
 replace: self.cut_reasonings += 0;
 caught-by:
     cineris-tui app::tests::screen::a_search_says_how_many_reasonings_it_looked_in_only_as_far_as_kept
+
+[break] a-delta-with-no-words-begins-a-reasoning-block
+rule: A reasoning or an answer's delta with no words neither begins nor ends a reasoning block, as it neither begins nor ends a run the viewer reads again.
+file: crates/cineris-tui/src/app/items.rs
+in: Mapper::delta
+find: if matches!(shape, Shape::Reasoning(_) | Shape::Text(_)) && edge(shape) == Edge::Nothing {
+replace: if false && edge(shape) == Edge::Nothing {
+caught-by:
+    cineris-tui app::items::tests::a_part_with_no_words_neither_begins_nor_ends_a_reasoning_run
