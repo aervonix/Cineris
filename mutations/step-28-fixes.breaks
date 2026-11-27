@@ -110,8 +110,9 @@ file: crates/cineris-sandbox/src/session.rs
 in: harnesses_on_the_line
 find: if at == 0 {
 replace: if at <= 1 {
-packages: cineris-cli
+packages: cineris-sandbox, cineris-cli
 caught-by:
+    cineris-sandbox session::tests::the_harnesses_of_a_line_are_every_one_to_process_0
     cineris-cli::system guards::sys_a_harness_that_is_process_1_is_seen
 
 [break] stores-not-compared-without-a-harness
@@ -229,3 +230,30 @@ replace: let older = false;
 packages: cineris-sandbox
 caught-by:
     cineris-sandbox session::tests::a_services_start_through_more_interpreters_than_the_bound_is_not_known
+
+# From mutations/step-28-fixes-guards.breaks (part `guards`).
+# The fixes to step 28's guards, from the second review of those fixes:
+# a nested run's stores compared as Cineris reads its own environment (a
+# variable given twice refusing first, the last entry of a name read, in
+# ASCII upper case on Windows). The guards' first breaks are in
+# mutations/step-28-fixes.breaks.
+
+[break] the-duplicate-check-is-skipped
+rule: A variable that moves the stores, given more than once in a nested run's environment, refuses it before any value is compared.
+file: crates/cineris-sandbox/src/session.rs
+in: moved_from
+find: if twice.is_some() {
+replace: if false {
+packages: cineris-sandbox
+caught-by:
+    cineris-sandbox session::tests::a_nested_runs_stores_are_compared_as_cineris_reads_them
+
+[break] a-name-is-read-for-its-first-entry
+rule: A store variable's value is read as Cineris reads its environment: the last entry of its name, the nested run's and the session's alike.
+file: crates/cineris-sandbox/src/session.rs
+in: value_in
+find: .rev()
+replace: .skip(0)
+packages: cineris-sandbox
+caught-by:
+    cineris-sandbox session::tests::a_nested_runs_stores_are_compared_as_cineris_reads_them
