@@ -496,8 +496,8 @@ fn sys_a_users_hook_is_handed_a_secret_file_only_after_the_yes() {
         assert!(!report.exists(), "a no runs it no more");
         let (_, outcome, _) = front.results().last().cloned().expect("the read");
         assert_eq!(outcome, "denied");
-        // The close waits for every run the session started: an observer
-        // started for either read would have written by now.
+        // An observer started for the first read, before its question, has
+        // had both turns to write by now.
         front.close().await;
     });
     assert!(
@@ -520,9 +520,11 @@ fn sys_a_users_hook_is_handed_a_secret_file_only_after_the_yes() {
         front.close().await;
     });
 
-    // A file asked about for nothing: handed to it at once, unasked, and
-    // to the observer.
-    world.user_config(&format!("{allow}{}{watcher}", hook("report")));
+    // A file asked about for nothing: handed to it at once, unasked. (An
+    // observer is let go when its session closes, so whether this one has
+    // written by then is a race, and not asked here; the break that starts
+    // it for the secret file shows that it writes when it runs.)
+    world.user_config(&format!("{allow}{}", hook("report")));
     let core = world.core();
     world.run(async {
         let front = crate::extensions_found::start(&world, &core).await;
@@ -531,8 +533,6 @@ fn sys_a_users_hook_is_handed_a_secret_file_only_after_the_yes() {
         assert!(reported.contains("a.txt"), "{reported}");
         front.close().await;
     });
-    let observed = std::fs::read_to_string(&watched).expect("the observer ran");
-    assert!(observed.contains("a.txt"), "{observed}");
 }
 
 /// A trust store that cannot be read says nothing of the project, and may
