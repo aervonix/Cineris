@@ -1,6 +1,6 @@
 # Answered in the signed approvals step, on 2026-11-27
 
-This work is not a numbered step of the build plan. It makes the harness's approvals the person's own where nothing confines the model's commands: [approvals-signed-with-a-key-that-needs-a-person](../../outstanding/approvals-signed-with-a-key-that-needs-a-person.md), and the part of [what-the-guards-of-the-harnesss-own-approvals-do-not-reach](../../outstanding/what-the-guards-of-the-harnesss-own-approvals-do-not-reach.md) that only a signature closes. It merges before step 29, whose `propose_extension` has the model write extensions for the person to approve.
+This work is not a numbered step of the build plan. It makes the harness's approvals the person's own where nothing confines the model's commands: [approvals-signed-with-a-key-that-needs-a-person](../../outstanding/approvals-signed-with-a-key-that-needs-a-person.md), and the part of [what-the-guards-of-the-harnesss-own-approvals-do-not-reach](../../outstanding/what-the-guards-of-the-harnesss-own-approvals-do-not-reach.md) that only a signature closes. It merges before step 29, whose `propose_extension` has the model write extensions for the person to approve. The work was done in parts, each with a record of its own: [parts/](parts/).
 
 ## The design, before building
 
