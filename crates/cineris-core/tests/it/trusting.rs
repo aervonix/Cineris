@@ -338,6 +338,58 @@ fn never_is_kept_across_starts_until_the_project_is_trusted() {
     assert_eq!(model(&state.expect("the session opens")), OTHER_MODEL);
 }
 
+/// `cineris permissions trust` pins the project's rules as they were read
+/// to be shown before the password (`Core::trust_reading`): when the
+/// project's files hold other rules or settings by the yes, the trust is
+/// refused and nothing is written; a reading taken again, as shown, is
+/// pinned (the full review of the signed approvals).
+#[test]
+fn a_trust_is_refused_when_the_rules_changed_after_they_were_shown() {
+    let world = world("trusting_reading_moved");
+    let core = world.core();
+    let project = core.project(&world.workspace).unwrap();
+    let shown = core.trust_reading(&project).unwrap();
+    let patterns = |reading: &cineris_core::TrustReading| -> Vec<String> {
+        reading
+            .rules
+            .iter()
+            .map(|(_, rule)| rule.pattern.clone())
+            .collect()
+    };
+    assert_eq!(patterns(&shown), [".github/**", "make deploy"]);
+    // The rule widened after it was shown, before the password's yes.
+    world.project_config(&PROJECT.replace(".github/**", "**"));
+    let refused = core
+        .trust_project_with(&project, &shown, &[], &[], &crate::person_key())
+        .unwrap_err();
+    assert_eq!(refused.code, "rules_moved", "{refused:?}");
+    let (store, key) = store(&world);
+    assert!(
+        !store.project(&key, None).unwrap().has_entry(),
+        "something was written"
+    );
+    // A setting changed alike.
+    world.project_config(&PROJECT.replace("10m", "20m"));
+    let shown = core.trust_reading(&project).unwrap();
+    world.project_config(PROJECT);
+    let refused = core
+        .trust_project_with(&project, &shown, &[], &[], &crate::person_key())
+        .unwrap_err();
+    assert_eq!(refused.code, "rules_moved", "{refused:?}");
+    assert!(!store.project(&key, None).unwrap().has_entry());
+    // Read again and shown, it is pinned as shown.
+    let shown = core.trust_reading(&project).unwrap();
+    let trusted = core
+        .trust_project_with(&project, &shown, &[], &[], &crate::person_key())
+        .unwrap();
+    assert_eq!(trusted.rules.len(), 2);
+    assert!(read_stored(&store, &key).is_trusted());
+    assert_eq!(
+        core.project_trust(&project).unwrap(),
+        cineris_core::TrustState::Trusted
+    );
+}
+
 /// A project trusted with its rules changed since is asked about again,
 /// its rules marked changed, and a yes approves them.
 #[test]

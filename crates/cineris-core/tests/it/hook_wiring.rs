@@ -809,8 +809,9 @@ fn a_projects_hooks_reach_a_session_only_through_trust() {
         "{}",
         listed.detail
     );
+    let reading = core.trust_reading(&key).unwrap();
     let trusted = core
-        .trust_project_with(&key, &[], &hooks, &crate::person_key())
+        .trust_project_with(&key, &reading, &[], &hooks, &crate::person_key())
         .unwrap();
     assert_eq!(trusted.hooks, ["lint"]);
     assert!(core.project_hook_commands(&key).unwrap().is_empty());

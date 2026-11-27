@@ -552,7 +552,11 @@ pub fn read_password(
 /// away ([`read_password_on`]). It can ask more than once
 /// ([`read`](Self::read)): again, with a warning, after a password that was
 /// not the one chosen.
-pub struct PasswordTerminal(Terminal);
+pub struct PasswordTerminal {
+    terminal: Terminal,
+    /// Whether the last [`read`](Self::read) was answered with `Ctrl+C`.
+    interrupted: bool,
+}
 
 impl std::fmt::Debug for PasswordTerminal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -570,7 +574,10 @@ impl PasswordTerminal {
     pub fn enter(overrides: cineris_term::Overrides) -> io::Result<Self> {
         let mut terminal = Terminal::enter(overrides)?;
         terminal.hand_signals_over();
-        Ok(Self(terminal))
+        Ok(Self {
+            terminal,
+            interrupted: false,
+        })
     }
 
     /// As [`enter`](Self::enter), with the signals that end the program
@@ -585,25 +592,61 @@ impl PasswordTerminal {
     ///
     /// When the terminal cannot be entered.
     pub fn enter_leaving_signals(overrides: cineris_term::Overrides) -> io::Result<Self> {
-        Ok(Self(Terminal::enter(overrides)?))
+        Ok(Self {
+            terminal: Terminal::enter(overrides)?,
+            interrupted: false,
+        })
     }
 
     /// Asks `ask` ([`read_password_on`]). The rows are gone once it ends;
     /// the terminal stays taken. `None` when the person pressed `Esc` or
-    /// `Ctrl+C`, or a signal came: [`ending`](Self::ending) says which.
+    /// `Ctrl+C`, or a signal came: [`ending`](Self::ending) says whether a
+    /// signal came, and [`interrupted`](Self::interrupted) whether it was
+    /// `Ctrl+C`.
     ///
     /// # Errors
     ///
     /// When the terminal cannot be read or written.
     pub fn read(&mut self, ask: &PasswordAsk) -> io::Result<Option<Password>> {
-        read_password_on(&mut self.0, ask)
+        let (read, interrupted) = read_password_answered(&mut self.terminal, ask)?;
+        self.interrupted = interrupted;
+        Ok(read)
+    }
+
+    /// Whether the last [`read`](Self::read) was answered with `Ctrl+C`,
+    /// and not `Esc`: a program that tells the two apart (a headless run,
+    /// which `Ctrl+C` ends as an interrupt where `Esc` goes on without the
+    /// approvals) asks this.
+    #[must_use]
+    pub fn interrupted(&self) -> bool {
+        self.interrupted
+    }
+
+    /// Reads, and throws away, every key and paste that has arrived and
+    /// not been read, a paste written over: for a program that leaves the
+    /// terminal to ask a question in its own line mode, so that nothing
+    /// typed before the question is taken as its answer. At most
+    /// [`DROP_MOST`].
+    ///
+    /// # Errors
+    ///
+    /// When the terminal cannot be read.
+    pub fn drain(&mut self) -> io::Result<()> {
+        let began = self.terminal.now();
+        while self.terminal.now().saturating_duration_since(began) < DROP_MOST {
+            let Some(event) = self.terminal.next(Some(Duration::ZERO))? else {
+                break;
+            };
+            forget(event);
+        }
+        Ok(())
     }
 
     /// The exit code a signal handed over asks the program to end with,
     /// once one has come.
     #[must_use]
     pub fn ending(&self) -> Option<u8> {
-        self.0.ending()
+        self.terminal.ending()
     }
 
     /// Puts the terminal back.
@@ -613,7 +656,7 @@ impl PasswordTerminal {
     /// When the end sequences cannot be written. The modes are put back
     /// whatever happens.
     pub fn leave(self) -> io::Result<()> {
-        self.0.leave()
+        self.terminal.leave()
     }
 }
 
@@ -645,6 +688,20 @@ pub fn read_password_on<D: Device>(
     terminal: &mut Terminal<D>,
     ask: &PasswordAsk,
 ) -> io::Result<Option<Password>> {
+    read_password_answered(terminal, ask).map(|(read, _)| read)
+}
+
+/// [`read_password_on`], and whether it was answered with `Ctrl+C` (and not
+/// `Esc` or a signal): for tests, on a device of their own, and for
+/// [`PasswordTerminal::read`].
+///
+/// # Errors
+///
+/// When the terminal cannot be read or written.
+pub fn read_password_answered<D: Device>(
+    terminal: &mut Terminal<D>,
+    ask: &PasswordAsk,
+) -> io::Result<(Option<Password>, bool)> {
     // Refused, it is asked all the same; the terminal's end tries again to
     // turn it off.
     let _ = terminal.set_exclusive(true);
@@ -653,11 +710,12 @@ pub fn read_password_on<D: Device>(
     read
 }
 
-/// [`read_password_on`] once the terminal is closed to others.
+/// [`read_password_answered`] once the terminal is closed to others.
 fn ask_on<D: Device>(
     terminal: &mut Terminal<D>,
     ask: &PasswordAsk,
-) -> io::Result<Option<Password>> {
+) -> io::Result<(Option<Password>, bool)> {
+    let mut interrupted = false;
     let (cols, rows) = terminal.size()?;
     let mut presenter = Inline::new(cols, rows);
     let mut height = usize::from(rows);
@@ -738,7 +796,10 @@ fn ask_on<D: Device>(
             // Typed or pasted before the prompt was there to read, `Ctrl+C`
             // included: nothing of it counts.
             Event::Key(_) | Event::Repeat(_) | Event::Paste(_) if typed_ahead => Prompted::Nothing,
-            Event::Key(key) if is_ctrl_c(*key) => prompt.cancel(),
+            Event::Key(key) if is_ctrl_c(*key) => {
+                interrupted = true;
+                prompt.cancel()
+            }
             Event::Key(key) if takes => prompt.key(*key),
             Event::Repeat(key) if takes => prompt.repeat(*key),
             Event::Paste(text) if takes => prompt.paste(text),
@@ -768,7 +829,7 @@ fn ask_on<D: Device>(
     let _ = prompt.cancel();
     let caps = *terminal.caps();
     presenter.finish(&caps, terminal)?;
-    Ok(result)
+    Ok((result, interrupted))
 }
 
 /// An event read and done with: a paste's text, taken into the field or

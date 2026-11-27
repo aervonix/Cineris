@@ -34,7 +34,8 @@ fn trust_line(machine: &Machine) -> String {
 /// signature).
 #[test]
 fn sys_a_project_trusted_with_permissions_trust_is_trusted_on_the_next_start() {
-    use crate::approvals::{PASSWORD, header_with_the_password};
+    use crate::approvals::{PASSWORD, ended, header_with_the_password, type_password};
+    use crate::tui::{LIMIT, shows_ever};
     let mut machine = Machine::new("sys_trust");
     machine.quick_dialogs();
     machine.person();
@@ -69,23 +70,56 @@ fn sys_a_project_trusted_with_permissions_trust_is_trusted_on_the_next_start() {
         shown(&piped)
     );
     assert!(trust_line(&machine).ends_with(": not trusted"));
-    let trusted = machine.signing(&["permissions", "trust"], &[], PASSWORD);
-    trusted.expect_code(0);
+    // Its rules and settings are shown before the password, which signs
+    // them as shown: changed while the password is asked, the project is
+    // not trusted (the full review of the signed approvals).
+    let mut session = machine.tui(&["permissions", "trust"]);
+    session.wait_for(LIMIT, "the password's prompt", |t| {
+        shows_ever(t, "Type your approvals password to approve:")
+    });
+    // As written, before any of it is wrapped to the terminal's width.
+    let before: Vec<u8> = session
+        .recording()
+        .iter()
+        .flat_map(|chunk| chunk.bytes.iter().copied())
+        .collect();
+    let before = String::from_utf8_lossy(&before).into_owned();
     for expected in [
         "allow exec make test",
         "deny exec make deploy",
         "ask read secret/**",
         "model.main",
+        "as shown above",
     ] {
-        assert!(
-            trusted.screen.contains(expected),
-            "{expected}: {}",
-            trusted.screen
-        );
+        assert!(before.contains(expected), "{expected}: {before}");
     }
-    // What a command with no password reads: a signature, not checked.
+    machine.project_config(&format!(
+        "[model]\nmain = \"{OTHER_MODEL}\"\n\n{rules}\n[[permissions.rules]]\neffect = \
+         \"exec\"\nmatch = \"rm *\"\naction = \"allow\"\n"
+    ));
+    type_password(&mut session, PASSWORD);
+    let moved = ended(&mut session);
+    moved.expect_code(2);
     assert!(
-        trust_line(&machine).contains("carries your signature, not checked here"),
+        moved.raw.contains("changed after they were shown"),
+        "{}",
+        moved.screen
+    );
+    assert!(trust_line(&machine).ends_with(": not trusted"));
+    machine.project_config(&format!("[model]\nmain = \"{OTHER_MODEL}\"\n\n{rules}"));
+    let trusted = machine.signing(&["permissions", "trust"], &[], PASSWORD);
+    trusted.expect_code(0);
+    assert!(
+        trusted
+            .raw
+            .contains("with its permission rules and settings as shown above"),
+        "{}",
+        trusted.screen
+    );
+    // What a command with no password reads: a signature, whose it is not
+    // known, not checked.
+    assert!(
+        trust_line(&machine).contains("carries a signature, not checked here"),
         "{}",
         trust_line(&machine)
     );
@@ -519,17 +553,21 @@ fn sys_permissions_trust_approves_a_projects_extensions_on_a_signed_yes() {
     );
     // Asked again, it is shown again: a subcommand's core checks no
     // signature before the password is typed, so what the entry approves is
-    // not seen as approved until then. A no keeps its pin.
+    // not seen as approved until then, and what the store names is said to
+    // be unchecked (the full review of the signed approvals). A no keeps
+    // its pin.
     let again = machine.signing(&["permissions", "trust"], &["n"], PASSWORD);
     again.expect_code(0);
     assert!(again.screen.contains("Its extensions"), "{}", again.screen);
     assert!(
-        again
-            .raw
-            .contains("Approved before at this hash; your password confirms it again."),
+        again.raw.contains(
+            "The trust store names it at this hash; this is not checked here: if you do not \
+             remember approving it, answer no."
+        ),
         "{}",
         again.screen
     );
+    assert!(!again.raw.contains("Approved before"), "{}", again.screen);
     let file = pinned();
     assert!(
         file.contains("kind = \"extension\"") && file.contains("name = \"probe\""),

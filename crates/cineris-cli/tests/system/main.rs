@@ -93,7 +93,7 @@ mod commands;
 mod examples;
 mod first_run;
 mod guards;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", windows))]
 mod hardened;
 mod live;
 mod names;
@@ -266,6 +266,17 @@ impl Machine {
         self.vars.push((
             cineris_base::hook::HOLD_CORE.to_owned(),
             folder.as_os_str().to_owned(),
+        ));
+    }
+
+    /// The binary told a debugger is attached while `file` exists
+    /// (`cineris_sandbox::harden::TEST_TRACED`): for the tests of each
+    /// prompt for the approvals' password, which a runner cannot otherwise
+    /// attach a debugger to at the moment wanted.
+    pub fn traced_while(&mut self, file: &std::path::Path) {
+        self.vars.push((
+            cineris_sandbox::harden::TEST_TRACED.to_owned(),
+            file.as_os_str().to_owned(),
         ));
     }
 

@@ -15,6 +15,11 @@ doctest = false
 # them. cineris-core's `sandbox` feature turns it on
 # (docs/architecture/01-workspace.md, rule 8).
 backends = ["dep:landlock", "dep:seccompiler"]
+# Code for tests only: `harden::traced` also says yes while the file
+# `CINERIS_TEST_TRACED` names exists, for the binary's system tests of the
+# password's prompts. Only dev-dependencies turn it on (`cargo xtask rules`),
+# and `cargo xtask size` fails a shipped binary that holds the name.
+test-hooks = []
 
 [dependencies]
 cineris-base.workspace = true
@@ -60,6 +65,11 @@ windows-sys = { workspace = true, features = [
 
 [dev-dependencies]
 cineris-testkit.workspace = true
+
+# The test that a process with a real debugger is told it is traced
+# (`harden::traced`): the test is the debugger, and services its events.
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { workspace = true, features = ["Win32_System_Diagnostics_Debug"] }
 
 [lints]
 workspace = true

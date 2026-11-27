@@ -43,6 +43,20 @@ scripts = ["cineris-core/scripts"]
 
 [dev-dependencies]
 cineris-testkit.workspace = true
+# `harden::traced` made to say yes while a test's file exists, for the
+# system tests of each prompt for the approvals' password.
+cineris-sandbox = { workspace = true, features = ["test-hooks"] }
+
+# The system test that the shipped binary closes its own process: a probe,
+# as an ordinary process of the user, opening it and its threads with each
+# right (since the full review of the signed approvals).
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_Threading",
+] }
 
 [lints]
 workspace = true

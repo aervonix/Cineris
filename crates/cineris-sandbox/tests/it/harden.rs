@@ -48,6 +48,12 @@ pub(crate) const HARNESS: &str = "cin-harden-harness";
 /// to run.
 pub(crate) const STANDING: &str = "cin-harden-standing";
 
+/// A process that says whether `harden::traced` tells it is traced, before
+/// and after it is: on Linux it asks its parent to trace it
+/// (`PTRACE_TRACEME`); on Windows it is started under the test as its
+/// debugger (`DEBUG_ONLY_THIS_PROCESS`).
+const TRACED_ROLE: &str = "cin-harden-traced";
+
 /// The test that runs a role.
 const ENTRY: &str = "harden::the_roles_this_binary_is_run_again_in";
 
@@ -87,6 +93,14 @@ fn the_roles_this_binary_is_run_again_in() {
         let _ = std::io::stdin().read_to_end(&mut Vec::new());
     } else if has(PROBE) {
         probe(&after);
+    } else if has(TRACED_ROLE) {
+        let before = cineris_sandbox::harden::traced();
+        let asked = sys::be_traced();
+        println!(
+            "traced: {before} {} {asked}",
+            cineris_sandbox::harden::traced()
+        );
+        std::io::stdout().flush().unwrap();
     } else if cfg!(windows) && sys::console_role(&arguments) {
         // The role has said what it found.
     } else if has(HARNESS) {
@@ -395,6 +409,35 @@ fn sys_a_closed_process_keeps_out_another_process_of_its_user() {
     );
 }
 
+/// A process with a real tracer is told it is traced
+/// (`harden::traced`, which the password's prompts refuse at; the full
+/// review of the signed approvals): on Linux a process that asked its
+/// parent to trace it, and was not traced before; on Windows one started
+/// under the test as its debugger, which services its events until it
+/// ends.
+#[test]
+fn sys_a_process_with_a_tracer_is_told_it_is_traced() {
+    let said = sys::run_traced(in_role(TRACED_ROLE, &[]));
+    let line = said
+        .lines()
+        .find_map(|line| line.strip_prefix("traced: "))
+        .unwrap_or_else(|| panic!("the traced process said nothing: {said}"));
+    let [before, after, asked] = <[&str; 3]>::try_from(line.split(' ').collect::<Vec<_>>())
+        .unwrap_or_else(|_| panic!("{line}"));
+    if asked != "ok" {
+        assert!(
+            sys::tracing_refused_here(),
+            "it could not be traced: {asked}"
+        );
+        println!("this system lets no process be traced by its parent: {asked}");
+        return;
+    }
+    assert_eq!(after, "true", "a traced process was not told: {line}");
+    if cfg!(target_os = "linux") {
+        assert_eq!(before, "false", "an untraced process was told: {line}");
+    }
+}
+
 /// What closing a process costs, in a process that closes itself again and
 /// again: the whole call each time (on Windows the lists made, set on the
 /// process and on each of its threads, which a list of the system's threads
@@ -468,6 +511,86 @@ mod sys {
 
     pub(super) fn try_thread(_id: u32) -> String {
         "none".to_owned()
+    }
+
+    /// Asks this process's parent to trace the calling thread
+    /// (`PTRACE_TRACEME`): `ok`, or why not. A tracer attaches to a thread,
+    /// and the test harness may run the role on a thread of its own: the
+    /// process is traced through it all the same. It is not stopped by it:
+    /// only a signal or an `execve` would stop it now.
+    pub(super) fn be_traced() -> String {
+        let none = std::ptr::null_mut::<libc::c_void>();
+        // SAFETY: `PTRACE_TRACEME` reads none of its other arguments.
+        if unsafe { libc::ptrace(libc::PTRACE_TRACEME, 0, none, none) } == 0 {
+            "ok".to_owned()
+        } else {
+            told::<()>(Err(std::io::Error::last_os_error()))
+        }
+    }
+
+    /// Runs `command`, whose thread asks this thread to trace it, to its
+    /// end: its standard output, read on a thread of its own. Its tracer
+    /// waits for each of its traced thread's events itself (`__WALL`): a
+    /// stop at a signal is let go on with the signal, and the traced
+    /// thread's end is reaped, without which a process whose traced thread
+    /// is not its first never ends.
+    pub(super) fn run_traced(mut command: std::process::Command) -> String {
+        use std::io::Read as _;
+        let mut child = command
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::inherit())
+            .spawn()
+            .unwrap();
+        let mut out = child.stdout.take().unwrap();
+        let reader = std::thread::spawn(move || {
+            let mut said = String::new();
+            let _ = out.read_to_string(&mut said);
+            said
+        });
+        let pid = libc::pid_t::try_from(child.id()).unwrap();
+        let mut stops = Vec::new();
+        loop {
+            let mut status = 0;
+            // SAFETY: any child or traced thread of this one, and a live
+            // status's place.
+            let waited = unsafe { libc::waitpid(-1, &raw mut status, libc::__WALL) };
+            if waited == -1 {
+                let error = std::io::Error::last_os_error();
+                assert_eq!(error.kind(), std::io::ErrorKind::Interrupted, "{error}");
+                continue;
+            }
+            if libc::WIFSTOPPED(status) {
+                let signal = libc::WSTOPSIG(status);
+                stops.push(signal);
+                let none = std::ptr::null_mut::<libc::c_void>();
+                // SAFETY: the stopped thread's id; the signal to give it, as
+                // the data argument, which the call reads as a number.
+                unsafe {
+                    libc::ptrace(
+                        libc::PTRACE_CONT,
+                        waited,
+                        none,
+                        std::ptr::without_provenance_mut::<libc::c_void>(
+                            usize::try_from(signal).unwrap_or(0),
+                        ),
+                    );
+                }
+            } else if waited == pid && (libc::WIFEXITED(status) || libc::WIFSIGNALED(status)) {
+                break;
+            }
+            // The traced thread's own end, reaped: the process's comes next.
+        }
+        println!("the traced process stopped at the signals {stops:?}");
+        // Waited for here already: the child is not waited for again.
+        drop(child);
+        reader.join().unwrap()
+    }
+
+    /// Whether Yama keeps every process from being traced by its parent
+    /// (its scope 2 or more: only a process with `CAP_SYS_PTRACE` may).
+    pub(super) fn tracing_refused_here() -> bool {
+        yama_scope() >= 2
     }
 
     /// Yama's scope, where it is built in: from 2 up, no process of the
@@ -723,6 +846,93 @@ mod sys {
             unsafe { OpenThread(right, FALSE, id) }
         };
         as_ordinary(|| line(&THREAD_RIGHTS, open))
+    }
+
+    /// The role was started under its debugger already ([`run_traced`]).
+    pub(super) fn be_traced() -> String {
+        "ok".to_owned()
+    }
+
+    /// Windows lets a process of the user debug one it starts.
+    pub(super) fn tracing_refused_here() -> bool {
+        false
+    }
+
+    /// Runs `command` with this thread as its debugger
+    /// (`DEBUG_ONLY_THIS_PROCESS`), servicing each of its debug events
+    /// until it ends: its standard output, read on a thread of its own. The
+    /// loader's first breakpoint is passed over; any other exception is
+    /// left to the process's own handlers; the file handles the events give
+    /// are closed.
+    pub(super) fn run_traced(mut command: std::process::Command) -> String {
+        use std::io::Read as _;
+        use std::os::windows::process::CommandExt as _;
+        use windows_sys::Win32::Foundation::{
+            CloseHandle, DBG_CONTINUE, DBG_EXCEPTION_NOT_HANDLED, EXCEPTION_BREAKPOINT,
+        };
+        use windows_sys::Win32::System::Diagnostics::Debug::{
+            CREATE_PROCESS_DEBUG_EVENT, ContinueDebugEvent, DEBUG_EVENT, EXCEPTION_DEBUG_EVENT,
+            EXIT_PROCESS_DEBUG_EVENT, LOAD_DLL_DEBUG_EVENT, WaitForDebugEvent,
+        };
+        use windows_sys::Win32::System::Threading::DEBUG_ONLY_THIS_PROCESS;
+        /// A bound on each wait for an event, which only a broken test
+        /// reaches.
+        const WAIT_MS: u32 = 30_000;
+        // Made on this thread, which is then its debugger.
+        let mut child = command
+            .creation_flags(DEBUG_ONLY_THIS_PROCESS)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .unwrap();
+        let mut out = child.stdout.take().unwrap();
+        let reader = std::thread::spawn(move || {
+            let mut said = String::new();
+            let _ = out.read_to_string(&mut said);
+            said
+        });
+        loop {
+            let mut event = DEBUG_EVENT::default();
+            // SAFETY: `event` is a live, writable event's place.
+            let waited = unsafe { WaitForDebugEvent(&raw mut event, WAIT_MS) };
+            assert_ne!(
+                waited,
+                0,
+                "no debug event came: {}",
+                std::io::Error::last_os_error()
+            );
+            let mut status = DBG_CONTINUE;
+            // SAFETY: each arm reads the member of the union its event's
+            // code says is there; a file handle the system gave is closed
+            // once.
+            unsafe {
+                match event.dwDebugEventCode {
+                    CREATE_PROCESS_DEBUG_EVENT if !event.u.CreateProcessInfo.hFile.is_null() => {
+                        CloseHandle(event.u.CreateProcessInfo.hFile);
+                    }
+                    LOAD_DLL_DEBUG_EVENT if !event.u.LoadDll.hFile.is_null() => {
+                        CloseHandle(event.u.LoadDll.hFile);
+                    }
+                    EXCEPTION_DEBUG_EVENT
+                        if event.u.Exception.ExceptionRecord.ExceptionCode
+                            != EXCEPTION_BREAKPOINT =>
+                    {
+                        status = DBG_EXCEPTION_NOT_HANDLED;
+                    }
+                    _ => {}
+                }
+            }
+            // SAFETY: the ids of the event just taken.
+            let continued =
+                unsafe { ContinueDebugEvent(event.dwProcessId, event.dwThreadId, status) };
+            assert_ne!(continued, 0, "{}", std::io::Error::last_os_error());
+            if event.dwDebugEventCode == EXIT_PROCESS_DEBUG_EVENT {
+                break;
+            }
+        }
+        child.wait().unwrap();
+        reader.join().unwrap()
     }
 
     /// The marker a console target writes: a key with a scan code no

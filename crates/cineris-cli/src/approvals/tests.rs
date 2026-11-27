@@ -66,13 +66,60 @@ fn the_status_says_what_carries_a_signature_and_that_nothing_is_checked() {
     );
 }
 
-/// A password is never asked while a debugger is attached: the seam the
-/// process hardening's check goes in refuses with words that say why.
+/// A password is never asked while a debugger is attached, nor in a
+/// process whose threads are open to the user's other programs (Windows,
+/// when the process could not close itself): the seam the process
+/// hardening's checks go in refuses with words that say why.
 #[test]
 fn no_password_is_asked_while_a_debugger_is_attached() {
-    assert_eq!(untraced(|| false), Ok(()));
-    let refused = untraced(|| true).unwrap_err();
+    assert_eq!(may_ask_with(false, false), Ok(()));
+    let refused = may_ask_with(true, false).unwrap_err();
     assert!(refused.contains("debugger"), "{refused}");
+    let refused = may_ask_with(true, true).unwrap_err();
+    assert!(refused.contains("debugger"), "{refused}");
+    let refused = may_ask_with(false, true).unwrap_err();
+    assert!(
+        refused.contains("could not close its own process")
+            && refused.contains("default access list"),
+        "{refused}"
+    );
+    // This test's process is not traced, and on Windows not closed: it is
+    // asked of the real checks only where they can say yes.
+    if !cfg!(windows) {
+        assert_eq!(may_ask(), Ok(()));
+    }
+}
+
+/// A yes or no read at the terminal is judged in place and written over
+/// once judged (`yes_of`): a password typed at the wrong prompt is in it.
+#[test]
+fn a_yes_or_no_line_is_judged_and_written_over() {
+    let before = LINES_WIPED.with(std::cell::Cell::get);
+    for (line, yes) in [
+        ("y\n", true),
+        (" YES \r\n", true),
+        ("Yes\n", true),
+        ("\n", false),
+        ("n\n", false),
+        ("Vq7 tidemork 91 Plover\n", false),
+        ("yess\n", false),
+    ] {
+        assert_eq!(yes_of(line.to_owned()), yes, "{line:?}");
+    }
+    assert_eq!(LINES_WIPED.with(std::cell::Cell::get) - before, 7);
+}
+
+/// The reset's warning says what each approval held back, and that what
+/// each pinned keeps its gates, until it is approved again: what
+/// `docs/architecture/06-permissions-and-sandbox.md` says it warns of.
+#[test]
+fn the_resets_warning_says_what_keeps_its_gates() {
+    assert!(RESET_WARNING.contains("asks again"), "{RESET_WARNING}");
+    assert!(
+        RESET_WARNING.contains("stays held back")
+            && RESET_WARNING.contains("keeps its gates, until you approve it again"),
+        "{RESET_WARNING}"
+    );
 }
 
 /// With no terminal the refusal names the command to run at one, and says

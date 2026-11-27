@@ -377,6 +377,102 @@ fn sys_a_password_typed_before_a_subcommand_or_a_run_asks_is_never_echoed() {
     ran.expect_code(0);
     assert!(ran.screen.contains("Ran."), "{}", ran.screen);
     assert_eq!(holds_any_of(&ran.raw, PASSWORD), None);
+
+    // The application takes the terminal before its core starts too (the
+    // full review of the signed approvals: it took it only after).
+    let sent = machine.server.requests().len();
+    let mut session = typed_while_held(&mut machine, &[]);
+    assert_eq!(
+        holds_any_of(&raw_so_far(&session), PASSWORD),
+        None,
+        "echoed while the application's core started"
+    );
+    session.wait_for(LIMIT, "the field", field_ready);
+    assert!(
+        session.screen().shows("0 characters, hidden"),
+        "{}",
+        session.screen().dump()
+    );
+    type_password(&mut session, PASSWORD);
+    session.wait_for(LIMIT, "the session's model", |t| {
+        shows_ever(t, crate::MODEL)
+    });
+    super::tui::quit(
+        &mut session,
+        &cineris_testkit::Phases::new("the application typed early"),
+    );
+    assert_eq!(
+        machine.server.requests().len(),
+        sent,
+        "what was typed early was sent"
+    );
+}
+
+/// What is typed while `permissions trust` holds the terminal, before its
+/// question of the project's extensions, does not answer the question: a
+/// `y` and `Enter` typed early, then `Enter` at the question, is no (the
+/// full review of the signed approvals: the terminal's own line mode took
+/// what was typed in raw mode as the start of the answer). Unix only, as
+/// the tests of typing early above.
+#[cfg(unix)]
+#[test]
+fn sys_a_yes_typed_before_the_question_does_not_answer_it() {
+    let mut machine = Machine::new("approvals_yes_typed_early");
+    machine.quick_dialogs();
+    machine.person();
+    probe_extension(&machine);
+    let mut session = held_while_typing(&mut machine, &["permissions", "trust"], b"y\r");
+    session.wait_for(LIMIT, "the question", |t| shows_ever(t, "[y/N]"));
+    session.send(b"\r");
+    type_password(&mut session, PASSWORD);
+    let trusted = ended(&mut session);
+    trusted.expect_code(0);
+    assert!(
+        trusted.screen.contains("left unapproved"),
+        "{}",
+        trusted.screen
+    );
+    let pinned = std::fs::read_to_string(machine.dirs().state.unwrap().join("trust.toml"))
+        .unwrap_or_default();
+    assert!(!pinned.contains("kind = \"extension\""), "{pinned}");
+}
+
+/// A project's extension, `probe`, which `permissions trust` asks about.
+fn probe_extension(machine: &Machine) {
+    let folder = machine.workspace.join(".cineris/extensions/probe");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(
+        folder.join("extension.toml"),
+        "api = 1\nname = \"probe\"\nversion = \"1\"\ndescription = \"A test extension\"\nmain = \
+         \"main.js\"\n",
+    )
+    .unwrap();
+    std::fs::write(folder.join("main.js"), "// nothing yet\n").unwrap();
+}
+
+/// Starts the binary with `arguments` at a terminal, held just before its
+/// core starts, types `typed` then, and lets the core go.
+#[cfg(unix)]
+fn held_while_typing(machine: &mut Machine, arguments: &[&str], typed: &[u8]) -> Session {
+    let hold = machine.home.join("hold");
+    std::fs::create_dir_all(&hold).unwrap();
+    for left in ["held", "go"] {
+        let _ = std::fs::remove_file(hold.join(left));
+    }
+    machine.hold_the_core(&hold);
+    let mut session = machine.tui(arguments);
+    let deadline = std::time::Instant::now() + LIMIT;
+    while !hold.join("held").exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "not held before its core"
+        );
+        session.step(Duration::from_millis(20));
+    }
+    session.send(typed);
+    while session.step(Duration::from_millis(200)).is_some() {}
+    std::fs::write(hold.join("go"), b"").unwrap();
+    session
 }
 
 /// An extension folder, `tracker`, under the machine's home: what `ext add`
@@ -603,6 +699,208 @@ fn sys_a_headless_run_with_no_terminal_asks_nothing_and_says_why() {
         ended.screen
     );
     assert!(!ended.screen.contains(said), "{}", ended.screen);
+
+    // `Esc` at the password goes on without the approvals, and says so;
+    // `Ctrl+C` ends the run as interrupted, its session never opened, and
+    // nothing sent (the full review of the signed approvals: it went on
+    // without them, as `Esc` does).
+    let sent = machine.server.requests().len();
+    machine.reply_text("Without.");
+    let mut session = machine.tui(&["-p", "hi", "--output", "jsonl"]);
+    session.wait_for(LIMIT, "the field", field_ready);
+    session.send_key("escape");
+    let without = crate::approvals::ended(&mut session);
+    without.expect_code(0);
+    assert!(
+        without
+            .raw
+            .contains("this run goes on without your approvals"),
+        "{}",
+        without.screen
+    );
+    assert!(
+        without
+            .raw
+            .contains(&format!("\"model\":\"{}\"", crate::MODEL)),
+        "{}",
+        without.screen
+    );
+    let sent = sent + 1;
+    assert_eq!(machine.server.requests().len(), sent);
+    let mut session = machine.tui(&["-p", "hi", "--output", "jsonl"]);
+    session.wait_for(LIMIT, "the field", field_ready);
+    session.send(b"\x03");
+    let interrupted = crate::approvals::ended(&mut session);
+    interrupted.expect_code(130);
+    assert!(
+        interrupted.raw.contains("\"outcome\":\"interrupted\""),
+        "{}",
+        interrupted.screen
+    );
+    assert!(
+        !interrupted.raw.contains("\"type\":\"session\""),
+        "a session opened: {}",
+        interrupted.screen
+    );
+    assert_eq!(machine.server.requests().len(), sent, "a turn was sent");
+}
+
+/// No password is asked while a debugger is attached, at any prompt of a
+/// subcommand or a headless run: `approvals setup` refuses before anything
+/// is asked, `permissions trust` refuses at its password and trusts
+/// nothing, and a headless run at a terminal goes on without the approvals,
+/// saying why (the full review of the signed approvals). The debugger is
+/// the test's file (`Machine::traced_while`), which the binary's
+/// `harden::traced` takes for one in a build for tests.
+#[test]
+fn sys_no_password_is_asked_at_a_subcommand_or_a_run_while_a_debugger_is_attached() {
+    let mut machine = Machine::new("approvals_traced");
+    machine.quick_dialogs();
+    let debugger = machine.home.join("debugger");
+    machine.traced_while(&debugger);
+    let said = "a debugger is attached to Cineris";
+    std::fs::write(&debugger, b"").unwrap();
+
+    // `approvals setup`, before anything else: it would otherwise say that
+    // standard input is not a terminal.
+    let setup = machine.run(&["approvals", "setup"]);
+    setup.expect_code(2);
+    assert!(setup.stderr.contains(said), "{}", shown(&setup));
+    assert!(!machine.key_file().exists());
+
+    // `permissions trust` at a terminal: no password asked, nothing trusted.
+    machine.person();
+    machine.project_config("[model]\nmain = \"claude-opus-5-5\"\n");
+    let mut session = machine.tui(&["permissions", "trust"]);
+    let refused = ended(&mut session);
+    refused.expect_code(2);
+    assert!(
+        refused.raw.contains(said) && refused.raw.contains("the project was not trusted"),
+        "{}",
+        refused.screen
+    );
+    assert!(
+        !refused.raw.contains("Type your approvals password"),
+        "{}",
+        refused.screen
+    );
+    let trust = std::fs::read_to_string(machine.dirs().state.unwrap().join("trust.toml"))
+        .unwrap_or_default();
+    assert!(!trust.contains("signature"), "{trust}");
+
+    // A headless run at a terminal, with approvals to use: it goes on
+    // without them, says why once, and asks nothing.
+    std::fs::remove_file(&debugger).unwrap();
+    machine
+        .signing(&["permissions", "trust"], &[], PASSWORD)
+        .expect_code(0);
+    std::fs::write(&debugger, b"").unwrap();
+    machine.reply_text("Ran.");
+    let mut session = machine.tui(&["-p", "hi", "--output", "jsonl"]);
+    let ran = ended(&mut session);
+    ran.expect_code(0);
+    assert_eq!(ran.raw.matches(said).count(), 1, "{}", ran.screen);
+    assert!(
+        !ran.raw.contains("to use this session's approvals"),
+        "{}",
+        ran.screen
+    );
+    assert!(
+        ran.raw.contains(&format!("\"model\":\"{}\"", crate::MODEL)),
+        "{}",
+        ran.screen
+    );
+}
+
+/// No password is asked in the application while a debugger is attached:
+/// one attached before the session opens keeps the password's dialog from
+/// opening, and the session opens without the approvals, saying why; one
+/// attached while the dialog is open is refused by the call made with what
+/// it read, at the open (`unlock`), at the trust question's yes (`sign`),
+/// and at a yes that sets the password up (`set_up`, which then writes no
+/// key file). The full review of the signed approvals: the application
+/// checked only after its dialog had read the password.
+#[test]
+fn sys_the_application_asks_no_password_while_a_debugger_is_attached() {
+    use super::tui::{TRUST_ANSWERS, quit, trust_asked};
+    let mut machine = Machine::new("approvals_traced_app");
+    machine.quick_dialogs();
+    machine.person();
+    machine.project_config("[model]\nmain = \"claude-opus-5-5\"\n");
+    machine
+        .signing(&["permissions", "trust"], &[], PASSWORD)
+        .expect_code(0);
+    let debugger = machine.home.join("debugger");
+    machine.traced_while(&debugger);
+    let phases = cineris_testkit::Phases::new("the application while a debugger is attached");
+
+    // Attached before the session opens: no dialog.
+    std::fs::write(&debugger, b"").unwrap();
+    let mut session = machine.tui(&[]);
+    session.wait_for(LIMIT, "opened without", |t| {
+        shows_ever(t, "opened without your approvals")
+    });
+    assert!(
+        shows_ever(session.screen(), "a debugger is attached"),
+        "{}",
+        session.screen().dump()
+    );
+    assert!(!shows_ever(
+        session.screen(),
+        "to use this session's approvals"
+    ));
+    quit(&mut session, &phases);
+
+    // Attached while the dialog at the open is up: `unlock` refuses.
+    std::fs::remove_file(&debugger).unwrap();
+    let mut session = machine.tui(&[]);
+    session.wait_for(LIMIT, "the field", field_ready);
+    std::fs::write(&debugger, b"").unwrap();
+    type_password(&mut session, PASSWORD);
+    session.wait_for(LIMIT, "the open refused", |t| {
+        shows_ever(t, "Your approvals were not opened: a debugger")
+    });
+    session.wait_for(LIMIT, "the default model", |t| shows_ever(t, crate::MODEL));
+    quit(&mut session, &phases);
+
+    // Attached while the trust question's password is asked: `sign`
+    // refuses, and nothing is trusted.
+    std::fs::remove_file(&debugger).unwrap();
+    machine.run(&["permissions", "forget"]).expect_code(0);
+    let mut session = machine.tui(&[]);
+    trust_asked(&mut session);
+    session.answer_dialog(LIMIT, TRUST_ANSWERS, b"y", |t| {
+        t.shows("Type your approvals password to approve:")
+    });
+    session.wait_for(LIMIT, "the field", field_ready);
+    std::fs::write(&debugger, b"").unwrap();
+    type_password(&mut session, PASSWORD);
+    session.wait_for(LIMIT, "the yes refused", |t| {
+        shows_ever(t, "The project was not trusted: a debugger")
+    });
+    quit(&mut session, &phases);
+    let trust = std::fs::read_to_string(machine.dirs().state.unwrap().join("trust.toml"))
+        .unwrap_or_default();
+    assert!(!trust.contains("signature"), "{trust}");
+
+    // With no key set up, attached while the password is chosen: `set_up`
+    // refuses, and no key file is written.
+    std::fs::remove_file(&debugger).unwrap();
+    std::fs::remove_file(machine.key_file()).unwrap();
+    let mut session = machine.tui(&[]);
+    trust_asked(&mut session);
+    session.answer_dialog(LIMIT, TRUST_ANSWERS, b"y", |t| t.shows("Choose a password"));
+    type_password(&mut session, PASSWORD);
+    session.wait_for(LIMIT, "the second typing", |t| {
+        t.shows("Type the same password again")
+    });
+    std::fs::write(&debugger, b"").unwrap();
+    type_password(&mut session, PASSWORD);
+    session.wait_for(LIMIT, "the yes refused", |t| {
+        shows_ever(t, "The project was not trusted: a debugger")
+    });
+    quit(&mut session, &phases);
+    assert!(!machine.key_file().exists(), "a key file was written");
 }
 
 /// Guard A over a session's commands: `cin approvals reset` (and setup) is

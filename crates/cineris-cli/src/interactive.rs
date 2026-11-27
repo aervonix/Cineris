@@ -21,11 +21,14 @@
 //!
 //! **Start-up,** in the order 15-efficiency's "Start-up" asks: the
 //! configuration of the user's own layers (for `[terminal]`, `[tui]`,
-//! `[keys]` and `log.level`); the log; the core, given that configuration,
-//! started on its thread and waited for, so that an invalid catalog stops
-//! the program before the terminal is touched; the terminal; the first
-//! frame; and only then the session, which the application opens itself:
-//! after the approvals' password when the session has approvals to use
+//! `[keys]` and `log.level`); the log; the terminal, taken (raw, no echo)
+//! so that a password typed while the core starts is not echoed by the
+//! terminal's own line mode (since the full review of the signed
+//! approvals); the core, given that configuration, started on its thread
+//! and waited for, so that an invalid catalog stops the program, the
+//! terminal put back first, before anything is drawn; the first frame; and
+//! only then the session, which the application opens itself: after the
+//! approvals' password when the session has approvals to use
 //! (`CoreApprovals`, the signed approvals step).
 
 use std::collections::VecDeque;
@@ -151,10 +154,24 @@ pub(crate) fn run(run: Run, name: &'static str, _started: Instant) -> u8 {
         options.level_at_most = Some(crate::UNMARKED_LEVEL);
         options.level_at_most_why = Some(crate::UNMARKED_WHY.to_owned());
     }
+    let overrides = overrides(&loaded.settings.terminal);
+    // The terminal, taken before the core starts, as the subcommands that
+    // ask for the approvals' password take theirs: from here a password
+    // typed early is not echoed by the terminal's own line mode (the full
+    // review of the signed approvals). Where it cannot be taken, the
+    // application says why when it tries.
+    let taken = if cineris_tui_terminal() {
+        app::TakenTerminal::enter(overrides).ok()
+    } else {
+        None
+    };
     // The core, on its thread, waited for.
+    cineris_base::hook::hold_core();
     let core = match CoreThread::start(options) {
         Ok(core) => core,
         Err(error) => {
+            // Put back first, so that what is said is said as usual.
+            drop(taken);
             eprintln!("{name}: {}", crate::visible(&error.message));
             return exit::for_outcome(
                 &exit::outcome_for_kind(&error.kind),
@@ -170,7 +187,6 @@ pub(crate) fn run(run: Run, name: &'static str, _started: Instant) -> u8 {
     notices.extend(errors);
     notices.extend(here.passed_over_said());
     notices.extend(unmarked);
-    let overrides = overrides(&loaded.settings.terminal);
     let folder = shown_folder(&workspace, env.home().as_deref());
     let open = open(&run, &workspace);
     let root = workspace.to_string_lossy().into_owned();
@@ -201,7 +217,7 @@ pub(crate) fn run(run: Run, name: &'static str, _started: Instant) -> u8 {
     // put back by then (the terminal layer's hook, and its drop), and the
     // core is still ended in order and the report's pointer printed.
     let ended = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-        app::interactive(overrides, move |waker, _caps| {
+        app::interactive_taken(taken, overrides, move |waker, _caps| {
             link.slot.set(waker.clone());
             let wake = waker.clone();
             let start = Start {
@@ -286,8 +302,14 @@ impl app::Approvals for CoreApprovals {
         }
     }
 
+    // Asked before the dialog opens; `unlock`, `set_up` and `sign` ask
+    // again, for a debugger attached while the dialog was open.
+    fn why_not_asked(&self) -> Option<String> {
+        crate::approvals::may_ask().err()
+    }
+
     fn unlock(&self, password: &cineris_base::Password) -> Result<(), Refused> {
-        crate::approvals::untraced(crate::approvals::traced).map_err(Refused::Failed)?;
+        crate::approvals::may_ask().map_err(Refused::Failed)?;
         let key = self
             .core
             .person_key(password.expose_bytes())
@@ -296,7 +318,7 @@ impl app::Approvals for CoreApprovals {
     }
 
     fn set_up(&self, password: &cineris_base::Password) -> Result<(), Refused> {
-        crate::approvals::untraced(crate::approvals::traced).map_err(Refused::Failed)?;
+        crate::approvals::may_ask().map_err(Refused::Failed)?;
         self.core
             .set_up_approvals(password.expose_bytes())
             .map(drop)
@@ -308,7 +330,7 @@ impl app::Approvals for CoreApprovals {
         password: &cineris_base::Password,
         proposal: &cineris_protocol::methods::ApprovalProposal,
     ) -> Result<String, Refused> {
-        crate::approvals::untraced(crate::approvals::traced).map_err(Refused::Failed)?;
+        crate::approvals::may_ask().map_err(Refused::Failed)?;
         // Rebuilt here, as the store makes it: what is signed is what the
         // question proposes, whatever else it says.
         let statement = cineris_core::signed::statement_of(proposal).map_err(|why| {

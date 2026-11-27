@@ -273,7 +273,8 @@ fn trust_with_its_hooks(world: &World) {
     let project = core.project(&world.workspace).unwrap();
     let hooks = core.project_hook_commands(&project).unwrap();
     assert_eq!(hooks.len(), 1, "{hooks:?}");
-    core.trust_project_with(&project, &[], &hooks, &crate::person_key())
+    let reading = core.trust_reading(&project).unwrap();
+    core.trust_project_with(&project, &reading, &[], &hooks, &crate::person_key())
         .unwrap();
 }
 

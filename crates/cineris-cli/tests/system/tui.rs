@@ -610,10 +610,10 @@ fn sys_a_steer_reaches_the_running_turn_and_a_queued_prompt_runs_after_it() {
 }
 
 /// The trust question's row of answers, which it draws once it takes keys.
-const TRUST_ANSWERS: &str = "x Never for this project";
+pub(crate) const TRUST_ANSWERS: &str = "x Never for this project";
 
 /// Waits for the trust question's answers, so that a key answers it.
-fn trust_asked(session: &mut Session) {
+pub(crate) fn trust_asked(session: &mut Session) {
     wait_shows(session, "Trust this project?");
     wait_shows(session, TRUST_ANSWERS);
 }

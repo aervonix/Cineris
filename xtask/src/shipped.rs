@@ -414,10 +414,17 @@ fn find_all(bytes: &[u8], needle: &[u8]) -> Vec<usize> {
 /// while `auth login`'s core starts (the step 25 fixes).
 /// A test holds them to the hook's own constants, which `xtask` reaches
 /// only in its tests.
-const TEST_HOOK_MARKS: [&str; 3] = [
+/// And the name of the variable that makes `cineris_sandbox::harden::traced`
+/// say a debugger is attached, with `cineris-sandbox`'s `test-hooks`
+/// feature (the full review of the signed approvals): a shipped binary that
+/// holds it is one a variable could keep from asking for the approvals'
+/// password. `xtask` does not reach that crate: `cineris-sandbox`'s own
+/// test holds its constant to this name.
+const TEST_HOOK_MARKS: [&str; 4] = [
     "CINERIS_TEST_READY_DIVISOR",
     "CINERIS_TEST_MARK_FAILS",
     "CINERIS_TEST_HOLD_CORE",
+    "CINERIS_TEST_TRACED",
 ];
 
 /// The marks of [`TEST_HOOK_MARKS`] that `bytes` holds.
@@ -611,13 +618,21 @@ mod tests {
         assert_eq!(super::test_hooks_in(&bytes), [] as [&str; 0]);
         bytes.extend_from_slice(b"\0CINERIS_TEST_READY_DIVISOR\0");
         assert_eq!(super::test_hooks_in(&bytes), ["CINERIS_TEST_READY_DIVISOR"]);
-        // The hook's own name, which a test of the binary sets.
+        bytes.extend_from_slice(b"CINERIS_TEST_TRACED\0");
+        assert_eq!(
+            super::test_hooks_in(&bytes),
+            ["CINERIS_TEST_READY_DIVISOR", "CINERIS_TEST_TRACED"]
+        );
+        // The hook's own name, which a test of the binary sets
+        // (`CINERIS_TEST_TRACED` is held to `cineris-sandbox`'s constant by
+        // that crate's own test).
         assert_eq!(
             super::TEST_HOOK_MARKS,
             [
                 cineris_testkit::READY_DIVISOR,
                 cineris_testkit::MARK_FAILS,
                 cineris_testkit::HOLD_CORE,
+                "CINERIS_TEST_TRACED",
             ]
         );
     }

@@ -735,9 +735,7 @@ pub(crate) fn permissions(command: PermissionsCommand, name: &'static str) -> Do
                     "{}: {}\n",
                     project.shown,
                     match trust {
-                        TrustState::Untrusted if carries =>
-                            "its trust carries your signature, not checked here: it counts in a \
-                             session opened with your approvals password",
+                        TrustState::Untrusted if carries => CARRIES,
                         TrustState::Untrusted => "not trusted",
                         TrustState::Trusted => "trusted",
                         TrustState::RulesChanged =>
@@ -795,6 +793,13 @@ pub(crate) fn permissions(command: PermissionsCommand, name: &'static str) -> Do
                 for warning in core.project_sandbox_warnings(&project).map_err(fail)? {
                     out!("{warning}\n");
                 }
+                // Its rules and settings, read once and shown before the
+                // password: what the password signs is this reading, which
+                // the core pins as it is, and refuses when the project's
+                // files hold other rules by the yes (the full review of
+                // the signed approvals).
+                let reading = core.trust_reading(&project).map_err(fail)?;
+                out!("{}", reading_text(&reading));
                 let extensions = core.project_extensions(&project).map_err(fail)?;
                 // Its hook commands, shown and approved with its
                 // extensions, as the trust question lists them (step 28).
@@ -802,9 +807,12 @@ pub(crate) fn permissions(command: PermissionsCommand, name: &'static str) -> Do
                 let at_terminal = crate::approvals::at_terminal();
                 let mut approved = (Vec::new(), Vec::new());
                 if !extensions.is_empty() || !hooks.is_empty() {
-                    // What the project's entry pins already, signed or not:
-                    // no signature is checked before the password, so each
-                    // is shown again, and says so (the signed approvals step).
+                    // What the project's entry names already, signed or
+                    // not: no signature is checked before the password, so
+                    // each is shown again, and the line says that what the
+                    // store names is not checked (the full review of the
+                    // signed approvals: an entry the model wrote reads the
+                    // same).
                     let held = core
                         .approvals_held(Some(&project))
                         .map(|held| held.project_pins)
@@ -814,7 +822,7 @@ pub(crate) fn permissions(command: PermissionsCommand, name: &'static str) -> Do
                             .iter()
                             .any(|(k, n, h)| k == kind && n == name && *h == hash)
                         {
-                            "    Approved before at this hash; your password confirms it again.\n"
+                            NAMED_BEFORE
                         } else {
                             ""
                         }
@@ -881,7 +889,7 @@ pub(crate) fn permissions(command: PermissionsCommand, name: &'static str) -> Do
                             out!("Approve these {what} too? [y/N] ");
                             let mut line = String::new();
                             io::stdin().read_line(&mut line).is_ok()
-                                && matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+                                && crate::approvals::yes_of(line)
                         }
                     };
                     if yes {
@@ -912,7 +920,10 @@ pub(crate) fn permissions(command: PermissionsCommand, name: &'static str) -> Do
                 ) {
                     Ok(key) => key,
                     Err(crate::approvals::NotSigned::Signal(code)) => return Err(code),
-                    Err(crate::approvals::NotSigned::Declined) => {
+                    Err(
+                        crate::approvals::NotSigned::Declined
+                        | crate::approvals::NotSigned::Interrupted,
+                    ) => {
                         context.say("the project was not trusted, and nothing was changed");
                         return Err(exit::USAGE);
                     }
@@ -923,80 +934,12 @@ pub(crate) fn permissions(command: PermissionsCommand, name: &'static str) -> Do
                         return Err(exit::USAGE);
                     }
                 };
-                // The key goes when this arm ends, once it has signed.
+                // The key goes when this arm ends, once it has signed. The
+                // rules and settings pinned are the reading shown above.
                 let trusted = core
-                    .trust_project_with(&project, &approved.0, &approved.1, &key)
+                    .trust_project_with(&project, &reading, &approved.0, &approved.1, &key)
                     .map_err(fail)?;
-                let mut out = format!(
-                    "{} {}{}.\n",
-                    if trusted.was_trusted && trusted.git {
-                        "Approved the permission rules and git of"
-                    } else if trusted.was_trusted {
-                        "Approved the permission rules of"
-                    } else {
-                        "Trusted"
-                    },
-                    project.shown,
-                    if trusted.was_refused {
-                        ", which you had said never to trust"
-                    } else {
-                        ""
-                    }
-                );
-                if trusted.git {
-                    out.push_str(
-                        "Git may read this repository's own configuration, which can name \
-                         programs for git to run.\n",
-                    );
-                }
-                if !trusted.rules.is_empty() {
-                    out.push_str("Its permission rules, as they are now:\n");
-                    for (profile, rule) in &trusted.rules {
-                        let place = profile
-                            .as_deref()
-                            .map(|profile| format!("  (profile {profile})"))
-                            .unwrap_or_default();
-                        out.push_str(&format!(
-                            "  {} {} {}{place}\n",
-                            rule.action.as_str(),
-                            rule.effect.as_str(),
-                            rule.pattern
-                        ));
-                    }
-                }
-                if !trusted.extensions.is_empty() {
-                    out.push_str(&format!(
-                        "Approved its extensions: {}.\n",
-                        trusted
-                            .extensions
-                            .iter()
-                            .map(|name| format!("`{name}`"))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ));
-                }
-                if !trusted.hooks.is_empty() {
-                    out.push_str(&format!(
-                        "Approved its hooks: {}.\n",
-                        trusted
-                            .hooks
-                            .iter()
-                            .map(|name| format!("`{name}`"))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ));
-                }
-                if !trusted.settings.is_empty() {
-                    out.push_str("Its settings that now apply:\n");
-                    for (profile, setting) in &trusted.settings {
-                        let place = profile
-                            .as_deref()
-                            .map(|profile| format!("  (profile {profile})"))
-                            .unwrap_or_default();
-                        out.push_str(&format!("  {} = {}{place}\n", setting.key, setting.value));
-                    }
-                }
-                out!("{out}");
+                out!("{}", trusted_text(&project.shown, &trusted));
                 Ok(exit::COMPLETED)
             }
             PermissionsCommand::Forget => {
@@ -1124,9 +1067,102 @@ pub(crate) fn auth(command: AuthCommand, name: &'static str) -> Done {
     })())
 }
 
+/// What `permissions trust` says under an extension or a hook the trust
+/// store names already at the hash shown. Nothing is checked before the
+/// password, so an entry the model wrote reads the same as the person's own
+/// (the full review of the signed approvals).
+const NAMED_BEFORE: &str = "    The trust store names it at this hash; this is not checked here: \
+                            if you do not remember approving it, answer no.\n";
+
+/// What `permissions list` says of an untrusted project whose entry carries
+/// a signature, which no password checked here.
+const CARRIES: &str = "its trust carries a signature, not checked here: it counts in a session \
+                       opened with your approvals password";
+
+/// What trusting a project pins of its rules and turns on of its settings,
+/// as `reading` holds them: shown before the password, which signs this.
+fn reading_text(reading: &cineris_core::TrustReading) -> String {
+    let place = |profile: &Option<String>| {
+        profile
+            .as_deref()
+            .map(|profile| format!("  (profile {profile})"))
+            .unwrap_or_default()
+    };
+    let mut out = String::new();
+    if reading.rules.is_empty() {
+        out.push_str("It has no permission rules of its own.\n");
+    } else {
+        out.push_str("Its permission rules, which trusting it pins, as they are now:\n");
+        for (profile, rule) in &reading.rules {
+            out.push_str(&format!(
+                "  {} {} {}{}\n",
+                rule.action.as_str(),
+                rule.effect.as_str(),
+                rule.pattern,
+                place(profile)
+            ));
+        }
+    }
+    if !reading.settings.is_empty() {
+        out.push_str("Its settings, which trusting it turns on, as they are now:\n");
+        for (profile, setting) in &reading.settings {
+            out.push_str(&format!(
+                "  {} = {}{}\n",
+                setting.key,
+                setting.value,
+                place(profile)
+            ));
+        }
+    }
+    out
+}
+
+/// What `permissions trust` says once the trust is signed and written: the
+/// rules and settings it pinned were shown before the password.
+fn trusted_text(shown: &str, trusted: &cineris_core::Trusted) -> String {
+    let mut out = format!(
+        "{} {shown}{}, with its permission rules and settings as shown above.\n",
+        if trusted.was_trusted && trusted.git {
+            "Approved the permission rules and git of"
+        } else if trusted.was_trusted {
+            "Approved the permission rules of"
+        } else {
+            "Trusted"
+        },
+        if trusted.was_refused {
+            ", which you had said never to trust"
+        } else {
+            ""
+        }
+    );
+    if trusted.git {
+        out.push_str(
+            "Git may read this repository's own configuration, which can name programs for git \
+             to run.\n",
+        );
+    }
+    let names = |names: &[String]| {
+        names
+            .iter()
+            .map(|name| format!("`{name}`"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    if !trusted.extensions.is_empty() {
+        out.push_str(&format!(
+            "Approved its extensions: {}.\n",
+            names(&trusted.extensions)
+        ));
+    }
+    if !trusted.hooks.is_empty() {
+        out.push_str(&format!("Approved its hooks: {}.\n", names(&trusted.hooks)));
+    }
+    out
+}
+
 /// What the password approves at `permissions trust`, under the prompt's
-/// sentence: the project, as it is now, and the extensions and hooks
-/// approved with it.
+/// sentence: the project, with the rules and settings shown before it, and
+/// the extensions and hooks approved with it.
 fn trust_signed(
     shown: &str,
     extensions: &[cineris_core::ProjectExtension],
@@ -1140,7 +1176,7 @@ fn trust_signed(
             .join(", ")
     };
     let mut lines = vec![format!(
-        "trusting {shown}, with its permission rules and settings as they are now"
+        "trusting {shown}, with its permission rules and settings as shown above"
     )];
     if !extensions.is_empty() {
         lines.push(format!(

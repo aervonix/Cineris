@@ -27,6 +27,9 @@ const PASSWORD: &str = "correct horse battery";
 /// What the fake signs with: a signature it can be told by.
 const SIGNATURE: &str = "5ab1";
 
+/// Why the fake says no password may be asked once it is traced.
+const DEBUGGER: &str = "a debugger is attached";
+
 /// What the fake was asked, each password as its text.
 #[derive(Debug, Default)]
 struct Log {
@@ -42,6 +45,9 @@ struct Fake {
     password: Mutex<Option<String>>,
     open: Mutex<bool>,
     log: Mutex<Log>,
+    /// Why no password may be asked, while one may not (a debugger
+    /// attached).
+    refused: Mutex<Option<String>>,
 }
 
 impl Fake {
@@ -51,7 +57,14 @@ impl Fake {
             password: Mutex::new(set_up.then(|| PASSWORD.to_owned())),
             open: Mutex::new(false),
             log: Mutex::new(Log::default()),
+            refused: Mutex::new(None),
         })
+    }
+
+    /// From now on, no password may be asked, for the reason a debugger
+    /// attached gives.
+    fn traced(&self) {
+        *self.refused.lock().unwrap() = Some(DEBUGGER.to_owned());
     }
 
     fn is(&self, typed: &str) -> Result<(), Refused> {
@@ -73,6 +86,10 @@ fn text_of(password: &Password) -> String {
 impl Approvals for Fake {
     fn to_use(&self) -> bool {
         self.to_use
+    }
+
+    fn why_not_asked(&self) -> Option<String> {
+        self.refused.lock().unwrap().clone()
     }
 
     fn state(&self) -> ApprovalsState {
@@ -422,4 +439,77 @@ fn with_nothing_to_sign_with_a_yes_that_must_be_signed_is_not_now() {
         rows.iter().any(|row| row.contains("cannot ask for")),
         "{rows:#?}"
     );
+}
+
+/// With a debugger attached before the session opens, no password is
+/// asked: the dialog never opens, the session opens without the approvals,
+/// and why is said (the full review of the signed approvals: the program
+/// checked only once the dialog had read the password).
+#[test]
+fn a_debugger_attached_before_the_open_asks_nothing_and_opens_without() {
+    let now = Instant::now();
+    let fake = Fake::new(true, true);
+    fake.traced();
+    let (mut app, link) = app_with_approvals(now, fake.clone());
+    let mut frames = Frames::default();
+    frames.draw(&mut app, now);
+    frames.draw(&mut app, ms(now, 1));
+    assert!(!app.asking_password(), "a password was asked");
+    assert_eq!(opens(&link), 1, "the session opens without them");
+    assert!(frames.held("a debugger is attached"));
+    assert!(frames.held("opened without your approvals"));
+    assert!(fake.log.lock().unwrap().unlocked.is_empty());
+}
+
+/// With a debugger attached before the trust question's yes, no password
+/// is asked, set up or signed: the yes is not now, and why is said.
+#[test]
+fn a_debugger_attached_before_the_yes_asks_nothing_and_is_not_now() {
+    for set_up in [true, false] {
+        let now = Instant::now();
+        let fake = Fake::new(false, set_up);
+        let (mut app, link, at) = asked(&fake, proposing(&["Trust ~/src/app"]), now);
+        fake.traced();
+        let mut frames = Frames::default();
+        press(&mut app, KeyCode::Char('y'), at);
+        frames.draw(&mut app, at);
+        assert!(!app.asking_password(), "a password was asked ({set_up})");
+        assert_eq!(
+            link.take_answers(),
+            [(
+                RequestId::Number(40),
+                ServerResponse::Trust(TrustResponse::default())
+            )]
+        );
+        assert!(frames.held("a debugger is attached"), "{set_up}");
+        let log = fake.log.lock().unwrap();
+        assert!(log.signed.is_empty() && log.set_up.is_empty());
+    }
+}
+
+/// The trust question's yes shows every line of the request's summary
+/// under the password's sentence, the lines that say what a yes keeps of
+/// what the entry held (a pin carried as held, not signed by the person's
+/// key) among them, each drawn whole (the full review of the signed
+/// approvals: a change signed shows all of what it does).
+#[test]
+fn the_yes_shows_every_line_of_the_summary_held_carries_among_them() {
+    let now = Instant::now();
+    let fake = Fake::new(false, true);
+    let summary = [
+        "trust the project at ~/src/app",
+        "approve the rules `permissions.rules` (1a2b3c4d)",
+        "keep the extension `tracker` (5e6f7a8b) as held: not signed by your key, it holds its \
+         gates and is asked about again",
+        "keep the hook `lint` (9c0d1e2f) as held: not signed by your key, it holds its gates and \
+         is asked about again",
+    ];
+    let (mut app, _link, at) = asked(&fake, proposing(&summary), now);
+    let mut frames = Frames::default();
+    press(&mut app, KeyCode::Char('y'), at);
+    let (_, shown) = frames.field(&mut app, at);
+    let flat = shown.split_whitespace().collect::<Vec<_>>().join(" ");
+    for line in summary {
+        assert!(flat.contains(line), "{line}: {shown}");
+    }
 }

@@ -78,6 +78,15 @@ pub trait Approvals: Send + Sync {
     /// How the approvals stand now.
     fn state(&self) -> ApprovalsState;
 
+    /// Why no password may be asked in this program now, if none may: a
+    /// debugger attached, which could read it as it is typed, or, on
+    /// Windows, the program not closed to the user's other programs. Asked
+    /// before the password's dialog opens (the full review of the signed
+    /// approvals: the program's check came only after the dialog had read
+    /// the password); each call below asks again, for what changed while
+    /// the dialog was open. One cheap check.
+    fn why_not_asked(&self) -> Option<String>;
+
     /// Opens the approvals with the key `password` makes, for every session
     /// opened from now on.
     ///

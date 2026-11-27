@@ -80,14 +80,61 @@ pub fn hardened() -> bool {
 }
 
 /// Whether a debugger or a tracer is attached to this process now: on
-/// Linux a `TracerPid` in `/proc/self/status` other than 0 (or a status
-/// that cannot be read, which fails closed); on Windows a debug port, as
+/// Linux a `TracerPid` other than 0 in the status of any of its threads
+/// (`/proc/self/task/<tid>/status`: a tracer attaches to a thread, and one
+/// attached to any thread reads the whole process; a status that cannot be
+/// read fails closed); on Windows a debug port, as
 /// the system keeps it (what `CheckRemoteDebuggerPresent` asks). A tracer
 /// that attached before [`harden`] ran stays attached, and could read what
 /// a prompt is given: the password prompt refuses where this is `true`.
+///
+/// With this crate's `test-hooks` feature, which only dev-dependencies turn
+/// on (`cargo xtask rules`) and no shipped build has (`cargo xtask size`
+/// fails a shipped binary that holds [`TEST_TRACED`]'s name), it is also
+/// `true` while the file [`TEST_TRACED`] names exists: for the binary's
+/// system tests of every prompt that asks it, which a runner cannot
+/// otherwise attach a debugger to at the moment wanted. It can only say
+/// `true`: it never hides a real tracer.
 #[must_use]
 pub fn traced() -> bool {
-    sys::traced()
+    test_traced() || sys::traced()
+}
+
+/// The variable a test sets on the binary it starts to name a file that
+/// makes [`traced`] say `true` while it exists. Read only with the
+/// `test-hooks` feature, so that only a build with it holds the name: a
+/// constant reaches a binary only where code reads it.
+pub const TEST_TRACED: &str = "CINERIS_TEST_TRACED";
+
+/// Whether the file [`TEST_TRACED`] names exists: never without the
+/// `test-hooks` feature.
+#[cfg(not(feature = "test-hooks"))]
+#[inline(always)]
+const fn test_traced() -> bool {
+    false
+}
+
+/// [`test_traced`] with the `test-hooks` feature.
+#[cfg(feature = "test-hooks")]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "a test's file looked for, before a password is asked, in a build for tests only"
+)]
+fn test_traced() -> bool {
+    std::env::var_os(TEST_TRACED)
+        .filter(|file| !file.is_empty())
+        .is_some_and(|file| std::path::Path::new(&file).exists())
+}
+
+#[cfg(test)]
+mod tests {
+    /// The test variable's name is the one `cargo xtask size` refuses in a
+    /// shipped binary (`xtask/src/shipped.rs`, `TEST_HOOK_MARKS`), which
+    /// cannot reach this crate's constant.
+    #[test]
+    fn the_test_variables_name_is_the_one_a_shipped_binary_may_not_hold() {
+        assert_eq!(super::TEST_TRACED, "CINERIS_TEST_TRACED");
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -117,15 +164,38 @@ mod sys {
         unsafe { libc::prctl(libc::PR_GET_DUMPABLE, NONE, NONE, NONE, NONE) == 0 }
     }
 
+    /// Whether any thread of this process is traced: a tracer attaches to
+    /// one thread, not the process, and one attached to any thread reads
+    /// and writes the whole process's memory through it; the process's own
+    /// `status` names only its first thread's (the full review of the signed
+    /// approvals: a thread made by the test harness, traced alone, was not
+    /// seen). A thread that ended while the list was read is passed over;
+    /// any other list or status that cannot be read fails closed.
     #[allow(
         clippy::disallowed_methods,
-        reason = "one small read of this process's own status, before a password is asked"
+        reason = "small reads of this process's own threads' status, before a password is asked"
     )]
     pub(super) fn traced() -> bool {
-        let Ok(status) = std::fs::read_to_string("/proc/self/status") else {
+        let Ok(tasks) = std::fs::read_dir("/proc/self/task") else {
             return true;
         };
-        tracer_in(&status) != Some(0)
+        let mut seen = false;
+        for task in tasks {
+            let Ok(task) = task else {
+                return true;
+            };
+            match std::fs::read_to_string(task.path().join("status")) {
+                Ok(status) => {
+                    seen = true;
+                    if tracer_in(&status) != Some(0) {
+                        return true;
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => return true,
+            }
+        }
+        !seen
     }
 
     /// The `TracerPid` a process's status names: `None` where it names

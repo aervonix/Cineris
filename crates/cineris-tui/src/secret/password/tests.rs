@@ -495,6 +495,8 @@ impl Device for Typed {
 /// What the prompt read, and what the terminal saw.
 struct Read {
     read: io::Result<Option<Password>>,
+    /// Whether it was answered with `Ctrl+C`.
+    interrupted: bool,
     seen: Seen,
     size: (u16, u16),
     /// Whether the terminal was still closed to others once it was put
@@ -543,13 +545,17 @@ fn asked_on(size: (u16, u16), ask: &PasswordAsk, ahead: &[&[u8]], later: &[Step]
         elapsed: Duration::ZERO,
     };
     let mut terminal = Terminal::with_device(device, crate::testkit::caps()).expect("a terminal");
-    let read = read_password_on(&mut terminal, ask);
+    let (read, interrupted) = match read_password_answered(&mut terminal, ask) {
+        Ok((read, interrupted)) => (Ok(read), interrupted),
+        Err(error) => (Err(error), false),
+    };
     let exclusive_after = terminal.is_exclusive();
     // Taken before the terminal is dropped, which writes its end.
     let seen = std::mem::take(&mut *seen.borrow_mut());
     drop(terminal);
     Read {
         read,
+        interrupted,
         seen,
         size,
         exclusive_after,
@@ -702,17 +708,25 @@ fn at_a_terminal_a_paste_is_taken_and_one_with_a_line_break_inside_is_refused() 
 }
 
 /// `Esc` and `Ctrl+C` give nothing, and the rows are gone once the prompt
-/// ends. `Ctrl+C` does before the field is shown too.
+/// ends. `Ctrl+C` does before the field is shown too. Which of the two it
+/// was is told (`PasswordTerminal::interrupted`: a headless run ends as
+/// interrupted on `Ctrl+C`, where `Esc` goes on without the approvals; the
+/// full review of the signed approvals).
 #[test]
 fn at_a_terminal_esc_and_ctrl_c_give_nothing() {
-    let ways: [(&str, &[Step]); 3] = [
-        ("esc", &[Step::Typed(b"zq7w"), Step::Typed(b"\x1b")]),
-        ("ctrl+c", &[Step::Typed(b"zq7w"), Step::Typed(b"\x03")]),
-        ("early ctrl+c", &[Step::Hasty(b"\x03")]),
+    let ways: [(&str, &[Step], bool); 3] = [
+        ("esc", &[Step::Typed(b"zq7w"), Step::Typed(b"\x1b")], false),
+        (
+            "ctrl+c",
+            &[Step::Typed(b"zq7w"), Step::Typed(b"\x03")],
+            true,
+        ),
+        ("early ctrl+c", &[Step::Hasty(b"\x03")], true),
     ];
-    for (way, steps) in ways {
+    for (way, steps, interrupted) in ways {
         let read = asked(&sign(), &[], steps);
         assert!(matches!(read.read, Ok(None)), "{way}");
+        assert_eq!(read.interrupted, interrupted, "{way}");
         let after = read.after();
         assert!(!after.shows("hidden"), "{way}: {}", after.dump());
         assert!(!after.shows("to approve"), "{way}: {}", after.dump());

@@ -325,7 +325,52 @@ pub fn interactive(
     overrides: Overrides,
     make: impl FnOnce(&Waker, &Capabilities) -> (Box<dyn Link>, Start),
 ) -> io::Result<Exit> {
-    let mut terminal = Some(Terminal::enter(overrides)?);
+    interactive_taken(None, overrides, make)
+}
+
+/// The terminal taken for the application before anything slow is done
+/// (the program's core's start): from [`enter`](Self::enter) on, the
+/// terminal echoes nothing, so a password typed early, before the
+/// application asks for it, is not echoed by the terminal's own line mode
+/// (the full review of the signed approvals). What is typed meanwhile
+/// waits for the application, whose dialogs drop what was typed before
+/// they were shown. Dropped, the terminal is put back, and a signal while
+/// it is held puts it back and ends the program as the signal's own end
+/// does; [`interactive_taken`] hands the signals over to the application.
+pub struct TakenTerminal(Terminal);
+
+impl std::fmt::Debug for TakenTerminal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TakenTerminal").finish_non_exhaustive()
+    }
+}
+
+impl TakenTerminal {
+    /// Takes the terminal on standard input and output, with `overrides`.
+    ///
+    /// # Errors
+    ///
+    /// As [`interactive`]'s, when the terminal cannot be entered.
+    pub fn enter(overrides: Overrides) -> io::Result<Self> {
+        Terminal::enter(overrides).map(Self)
+    }
+}
+
+/// [`interactive`], on the terminal `taken` before anything slow, when it
+/// was; otherwise the terminal is entered here.
+///
+/// # Errors
+///
+/// As [`interactive`].
+pub fn interactive_taken(
+    taken: Option<TakenTerminal>,
+    overrides: Overrides,
+    make: impl FnOnce(&Waker, &Capabilities) -> (Box<dyn Link>, Start),
+) -> io::Result<Exit> {
+    let mut terminal = Some(match taken {
+        Some(TakenTerminal(terminal)) => terminal,
+        None => Terminal::enter(overrides)?,
+    });
     // A signal that ends the program is the application's to end: the
     // terminal is put back at once, then the loop is woken.
     if let Some(entered) = terminal.as_mut() {

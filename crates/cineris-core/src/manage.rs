@@ -175,6 +175,26 @@ impl ProjectHookCommand {
     }
 }
 
+/// What trusting a project would pin of its permission rules, and turn on
+/// of its settings, as its files hold them at one reading
+/// ([`Core::trust_reading`]): what `cineris permissions trust` shows before
+/// the person types their password, and what
+/// [`trust_project_with`](Core::trust_project_with) then pins, as shown
+/// (the full review of the signed approvals: the rules were read, pinned
+/// and signed only after the password, and shown after the commit). The
+/// trust is refused, and nothing written, when the project's files hold
+/// other rules or settings by the yes.
+#[derive(Debug, Clone)]
+pub struct TrustReading {
+    /// The project's permission rules, as [`Trusted::rules`] says them.
+    pub rules: Vec<(Option<String>, Rule)>,
+    /// The project's settings that wait for trust, as
+    /// [`Trusted::settings`] says them.
+    pub settings: Vec<(Option<String>, Withheld)>,
+    /// The pin of the rules as read: what trust pins.
+    rules_pin: Definition,
+}
+
 impl Core {
     /// Every provider the core knows (the built-in ones, then the user's
     /// own), with where its key would come from. Nothing is sent anywhere.
@@ -448,7 +468,34 @@ impl Core {
     /// trust store cannot be read or written (the entry changed while the
     /// person was asked among the reasons: ask again).
     pub fn trust_project(&self, project: &Project, key: &PersonKey) -> Result<Trusted, OpError> {
-        self.trust_project_with(project, &[], &[], key)
+        let reading = self.trust_reading(project)?;
+        self.trust_project_with(project, &reading, &[], &[], key)
+    }
+
+    /// The project's permission rules and its settings that wait for
+    /// trust, as its files hold them now: what trusting it would pin and
+    /// turn on, to show the person before they are asked, and to give
+    /// [`trust_project_with`](Self::trust_project_with), which pins them as
+    /// shown. Nothing is read of the stores, and nothing is written.
+    ///
+    /// # Errors
+    ///
+    /// When the project's configuration is invalid.
+    pub fn trust_reading(&self, project: &Project) -> Result<TrustReading, OpError> {
+        let rules = self.pinned(project)?;
+        // What an untrusted load holds back is what trust now turns on.
+        let settings =
+            held_back_settings(&self.load(project, ConfigTrust::Untrusted)?, &|profile| {
+                self.load_profile(project, profile, ConfigTrust::Untrusted)
+            })?;
+        Ok(TrustReading {
+            rules: rules
+                .each()
+                .map(|(profile, rule)| (profile.map(str::to_owned), rule.clone()))
+                .collect(),
+            settings,
+            rules_pin: Definition::of_project_rules(&rules),
+        })
     }
 
     /// Why `key` may not sign the person's approvals in this core, if it may
@@ -609,17 +656,23 @@ impl Core {
             .collect())
     }
 
-    /// [`trust_project`](Self::trust_project), approving `extensions` and
-    /// `hooks` with it (from [`project_extensions`](Self::project_extensions)
-    /// and [`project_hook_commands`](Self::project_hook_commands), which the
+    /// [`trust_project`](Self::trust_project), pinning the project's rules
+    /// as `reading` holds them ([`trust_reading`](Self::trust_reading),
+    /// which the person was shown), and approving `extensions` and `hooks`
+    /// with it (from [`project_extensions`](Self::project_extensions) and
+    /// [`project_hook_commands`](Self::project_hook_commands), which the
     /// person was shown): each pinned as it was read to be shown.
     ///
     /// # Errors
     ///
-    /// As [`trust_project`](Self::trust_project).
+    /// As [`trust_project`](Self::trust_project); and, of kind `usage` and
+    /// code `rules_moved`, with nothing written, when the project's files
+    /// hold other permission rules or settings than `reading` does: the
+    /// person was shown what is no longer there (ask again).
     pub fn trust_project_with(
         &self,
         project: &Project,
+        reading: &TrustReading,
         extensions: &[ProjectExtension],
         hooks: &[ProjectHookCommand],
         key: &PersonKey,
@@ -631,12 +684,17 @@ impl Core {
                 format!("The project's trust was not changed, and nothing was written: {refusal}."),
             ));
         }
-        let rules = self.pinned(project)?;
-        // What an untrusted load holds back is what trust now turns on.
-        let settings =
-            held_back_settings(&self.load(project, ConfigTrust::Untrusted)?, &|profile| {
-                self.load_profile(project, profile, ConfigTrust::Untrusted)
-            })?;
+        // Read again: what is pinned is what was shown, and nothing else.
+        let now = self.trust_reading(project)?;
+        if now.rules_pin.hash != reading.rules_pin.hash || now.settings != reading.settings {
+            return Err(error(
+                ErrorKind::Usage,
+                "rules_moved",
+                "The project's permission rules or settings changed after they were shown, so its \
+                 trust was not changed, and nothing was written: run it again to see them as they \
+                 are now.",
+            ));
+        }
         let store = self.trust_store()?;
         let failed =
             |failure: TrustError| error(ErrorKind::Internal, "store_failed", failure.to_string());
@@ -647,7 +705,7 @@ impl Core {
             .project(&project.key, Some(&verifier))
             .map_err(failed)?;
         let (was_trusted, was_refused) = (stored.is_trusted(), stored.is_refused());
-        let mut pin = vec![Definition::of_project_rules(&rules)];
+        let mut pin = vec![reading.rules_pin.clone()];
         pin.extend(
             extensions
                 .iter()
@@ -688,11 +746,8 @@ impl Core {
             )
         })?;
         Ok(Trusted {
-            rules: rules
-                .each()
-                .map(|(profile, rule)| (profile.map(str::to_owned), rule.clone()))
-                .collect(),
-            settings,
+            rules: reading.rules.clone(),
+            settings: reading.settings.clone(),
             was_trusted,
             was_refused,
             git,

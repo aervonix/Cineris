@@ -274,7 +274,7 @@ fn signed(
         }
         Signing::Ask => match crate::approvals::key_at_terminal(core, taken, change.lines) {
             Ok(key) => Ok(key),
-            Err(NotSigned::Declined) => {
+            Err(NotSigned::Declined | NotSigned::Interrupted) => {
                 say(name, what);
                 Err(exit::USAGE)
             }

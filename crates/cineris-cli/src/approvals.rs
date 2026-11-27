@@ -43,23 +43,47 @@ type Done = u8;
 /// How many passwords a subcommand that signs takes before it gives up.
 pub(crate) const TRIES: usize = 3;
 
-/// Whether a debugger or a tracer is attached to this process, which could
-/// read the password as it is typed: the process hardening's check
-/// (`cineris_sandbox::harden::traced`, which on Linux also fails closed
-/// when the process's status cannot be read). Every prompt for the
-/// password asks it here first, so that the check is wired in one place.
-pub(crate) fn traced() -> bool {
-    cineris_sandbox::harden::traced()
+/// Whether the password may be asked in this process now: refused while a
+/// debugger or a tracer is attached, which could read it as it is typed
+/// (the process hardening's check, `cineris_sandbox::harden::traced`, which
+/// on Linux also fails closed when the process's status cannot be read);
+/// and on Windows while the process is not closed to the user's other
+/// programs (`cineris_sandbox::harden::hardened`): its threads then keep
+/// the user's default access list, so any program of the user's could read
+/// the password, or the key it makes, out of the memory of the thread that
+/// holds it. Every prompt for the password asks it first, before anything
+/// is asked or drawn: the subcommands ([`key_at_terminal`], `approvals
+/// setup` and `reset`), the headless run ([`open_at_start`]), and the
+/// application, before its dialog opens and again in each call made with
+/// what it read (`interactive::CoreApprovals`).
+///
+/// # Errors
+///
+/// Why it may not, as a sentence: [`TRACED`] or [`NOT_CLOSED`].
+pub(crate) fn may_ask() -> Result<(), String> {
+    may_ask_with(
+        cineris_sandbox::harden::traced(),
+        cfg!(windows) && !cineris_sandbox::harden::hardened(),
+    )
 }
 
 /// Why no password is asked while a debugger is attached.
 pub(crate) const TRACED: &str = "a debugger is attached to Cineris, and could read the password \
                                  as it is typed: no password is asked while one is";
 
-/// Refused with [`TRACED`] when `traced` says a debugger is attached.
-pub(crate) fn untraced(traced: impl FnOnce() -> bool) -> Result<(), String> {
-    if traced() {
+/// Why no password is asked on Windows when the process could not close
+/// itself.
+pub(crate) const NOT_CLOSED: &str = "Cineris could not close its own process to your other \
+     programs, so its threads keep your default access list and any program of yours could read \
+     the password from its memory: no password is asked in this process";
+
+/// [`may_ask`], of a process that is `traced`, and whose threads are
+/// `open` to the user's other programs.
+pub(crate) fn may_ask_with(traced: bool, open: bool) -> Result<(), String> {
+    if traced {
         Err(TRACED.to_owned())
+    } else if open {
+        Err(NOT_CLOSED.to_owned())
     } else {
         Ok(())
     }
@@ -85,8 +109,11 @@ pub(crate) fn no_terminal(name: &str, command: &str) -> String {
 /// Why the person's key was not made at the terminal.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum NotSigned {
-    /// `Esc` or `Ctrl+C`: no.
+    /// `Esc`, or at a subcommand `Ctrl+C`: no.
     Declined,
+    /// `Ctrl+C` at the prompt: no, and for a headless run an interrupt,
+    /// which ends it.
+    Interrupted,
     /// It could not be asked or made: why, after a colon.
     Refused(String),
     /// A signal came while it was asked: the code to end with.
@@ -110,7 +137,7 @@ pub(crate) fn key_at_terminal(
     taken: Option<&mut Taken>,
     lines: &[String],
 ) -> Result<PersonKey, NotSigned> {
-    untraced(traced).map_err(NotSigned::Refused)?;
+    may_ask().map_err(NotSigned::Refused)?;
     let Some(taken) = taken else {
         return Err(NotSigned::Refused(
             "the terminal could not be taken to ask for your approvals' password".to_owned(),
@@ -157,7 +184,11 @@ pub(crate) fn key_at_terminal(
         cineris_tui::app::signal_ended();
         return Err(NotSigned::Signal(code));
     }
-    key
+    // A subcommand's `Ctrl+C` is its no.
+    key.map_err(|not| match not {
+        NotSigned::Interrupted => NotSigned::Declined,
+        other => other,
+    })
 }
 
 /// Whether the terminal is taken for the approvals' password, in raw mode:
@@ -201,19 +232,51 @@ impl Taken {
     /// answer echoed, since it is no secret, and the terminal taken again
     /// before anything else is read (the key file, the password). A yes is
     /// `y` or `yes`; anything else, an empty line included, is no.
+    ///
+    /// What was typed while the terminal was taken (a password typed early,
+    /// a `y` and `Enter` typed before the question) is read and thrown away
+    /// before it is asked, so that it is never taken as the answer; and the
+    /// line read is written over once it is judged, since a password typed
+    /// at the wrong prompt is in it (the full review of the signed
+    /// approvals).
     pub(crate) fn confirm(&mut self, question: &str) -> bool {
-        if let Some(terminal) = self.terminal.take() {
+        if let Some(mut terminal) = self.terminal.take() {
+            let _ = terminal.drain();
             let _ = terminal.leave();
         }
         RAW.store(false, std::sync::atomic::Ordering::SeqCst);
         crate::print_out(&format!("{question} [y/N] "));
         let mut line = String::new();
-        let yes = io::stdin().read_line(&mut line).is_ok()
-            && matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes");
+        let yes = io::stdin().read_line(&mut line).is_ok() && yes_of(line);
         self.terminal = PasswordTerminal::enter(self.overrides).ok();
         RAW.store(self.terminal.is_some(), std::sync::atomic::Ordering::SeqCst);
         yes
     }
+}
+
+/// Whether `line` is a yes (`y` or `yes`, in any case, with spaces around
+/// it): the line is written over before it is freed (`forget_line`).
+pub(crate) fn yes_of(line: String) -> bool {
+    // Compared in place: a lowercase copy would be a copy left unwiped.
+    let answer = line.trim();
+    let yes = answer.eq_ignore_ascii_case("y") || answer.eq_ignore_ascii_case("yes");
+    forget_line(line);
+    yes
+}
+
+/// A line read at the terminal and done with, written over before it is
+/// freed: every line `yes_of` judges goes through here, which a test counts
+/// ([`LINES_WIPED`]).
+fn forget_line(line: String) {
+    #[cfg(test)]
+    LINES_WIPED.with(|wiped| wiped.set(wiped.get() + 1));
+    cineris_base::secret_buf::wipe_string(line);
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many lines [`forget_line`] wrote over on this thread.
+    pub(crate) static LINES_WIPED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 impl Drop for Taken {
@@ -235,6 +298,19 @@ pub(crate) const NO_TERMINAL: &str = "no terminal to ask your approvals' passwor
 pub(crate) const WITHOUT: &str = "this run goes on without your approvals: your extensions and \
      this project's trust are not used in it";
 
+/// How a headless run's asking for the approvals' password ended
+/// ([`open_at_start`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum AtStart {
+    /// The run goes on: with the approvals open, or, with what to say on
+    /// standard error once, without them.
+    GoesOn(Option<String>),
+    /// `Ctrl+C` at the prompt: the run ends as interrupted, before its
+    /// session opens (the full review of the signed approvals: it went on
+    /// without the approvals, as `Esc` does).
+    Interrupted,
+}
+
 /// A headless run's approvals, once its core has started and before its
 /// session opens (the signed approvals step): when something carries a
 /// signature to use ([`ApprovalsHeld::to_use`]) and the run took the
@@ -242,20 +318,22 @@ pub(crate) const WITHOUT: &str = "this run goes on without your approvals: your 
 /// is asked for with `Unlock` and the approvals opened with the key it
 /// makes. The terminal is put back before this returns. What to say on
 /// standard error once, when the run goes on without them: no terminal,
-/// `Esc`, a debugger, or the passwords typed were not the person's.
+/// `Esc`, a debugger, or the passwords typed were not the person's; or
+/// that `Ctrl+C` ends the run.
 pub(crate) fn open_at_start(
     core: &Core,
     project: Option<&cineris_core::Project>,
     terminal: Option<PasswordTerminal>,
-) -> Option<String> {
+) -> AtStart {
     let to_use = core.approvals_held(project).is_ok_and(|held| held.to_use());
     let mut terminal = match terminal {
-        _ if !to_use => return None,
-        None => return Some(NO_TERMINAL.to_owned()),
+        _ if !to_use => return AtStart::GoesOn(None),
+        None => return AtStart::GoesOn(Some(NO_TERMINAL.to_owned())),
         Some(terminal) => terminal,
     };
+    let mut interrupted = false;
     let said = (|| {
-        untraced(traced).map_err(|why| {
+        may_ask().map_err(|why| {
             format!("{why}: your extensions and this project's trust are not used in this run")
         })?;
         let mut warning: Option<String> = None;
@@ -269,6 +347,10 @@ pub(crate) fn open_at_start(
             }
             let password = match read(&mut terminal, &ask) {
                 Ok(password) => password,
+                Err(NotSigned::Interrupted) => {
+                    interrupted = true;
+                    return Err(WITHOUT.to_owned());
+                }
                 Err(NotSigned::Declined | NotSigned::Signal(_)) => return Err(WITHOUT.to_owned()),
                 Err(NotSigned::Refused(why)) => return Err(format!("{why}; {WITHOUT}")),
             };
@@ -291,15 +373,21 @@ pub(crate) fn open_at_start(
     })()
     .err();
     let _ = terminal.leave();
-    said
+    if interrupted {
+        AtStart::Interrupted
+    } else {
+        AtStart::GoesOn(said)
+    }
 }
 
-/// One password read on `terminal`: `Esc` or `Ctrl+C` is no.
+/// One password read on `terminal`: `Esc` is no, and `Ctrl+C` is no that
+/// interrupts.
 fn read(terminal: &mut PasswordTerminal, ask: &PasswordAsk) -> Result<Password, NotSigned> {
     match terminal.read(ask) {
         Ok(Some(password)) => Ok(password),
         Ok(None) => match terminal.ending() {
             Some(code) => Err(NotSigned::Signal(code)),
+            None if terminal.interrupted() => Err(NotSigned::Interrupted),
             None => Err(NotSigned::Declined),
         },
         Err(error) => Err(NotSigned::Refused(format!(
@@ -362,7 +450,7 @@ fn choose(name: &str, reset: bool) -> Result<Done, Done> {
         );
         exit::USAGE
     };
-    untraced(traced).map_err(|why| refused(&why))?;
+    may_ask().map_err(|why| refused(&why))?;
     if !at_terminal() {
         return Err(refused(&format!(
             "the password is typed at a terminal, never read from standard input or an \
@@ -429,7 +517,7 @@ fn choose(name: &str, reset: bool) -> Result<Done, Done> {
     let password = match read {
         Ok(password) => password,
         Err(NotSigned::Signal(code)) => return Err(code),
-        Err(NotSigned::Declined) => return Err(refused("you went back")),
+        Err(NotSigned::Declined | NotSigned::Interrupted) => return Err(refused("you went back")),
         Err(NotSigned::Refused(why)) => return Err(refused(&why)),
     };
     if reset {
@@ -454,8 +542,8 @@ fn choose(name: &str, reset: bool) -> Result<Done, Done> {
 
 /// What `approvals reset` warns of before the new password is chosen.
 pub(crate) const RESET_WARNING: &str = "Every approval you gave asks again: each project's trust \
-     and each extension you approved. What they let run stays held back until you approve it \
-     again.";
+     and each extension you approved. What they let run stays held back, and each extension or \
+     hook they pinned keeps its gates, until you approve it again.";
 
 /// The key the file is of, as `key 0123abcd…, made …`.
 fn key_said(core: &Core) -> String {
@@ -472,7 +560,8 @@ fn reset_text(key: &str, report: &cineris_core::ResetReport) -> String {
     let mut text = format!(
         "A new password is set for your approvals ({key}). The signature was taken off {} of \
          your own pins and {} projects' trust: each asks again when it is next used, and what \
-         it let run stays held back until you approve it again.\n",
+         it let run stays held back, and what it pinned keeps its gates, until you approve it \
+         again.\n",
         report.pins, report.projects
     );
     for left in &report.left {

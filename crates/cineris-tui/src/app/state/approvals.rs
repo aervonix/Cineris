@@ -111,8 +111,16 @@ impl App {
     }
 
     /// Asks for the password to open the approvals, with `warning` above
-    /// the field: the open waits for the answer.
+    /// the field: the open waits for the answer. Where no password may be
+    /// asked ([`Approvals::why_not_asked`]), nothing is: the session opens
+    /// without the approvals, and says why.
     pub(super) fn ask_unlock(&mut self, warning: Option<String>) {
+        if let Some(why) = self.approvals_refused_here() {
+            self.say(&format!("Your approvals were not opened: {why}"));
+            self.say(WITHOUT);
+            self.approvals_release();
+            return;
+        }
         let mut ask = PasswordAsk::new(Purpose::Unlock, vec![UNLOCKS.to_owned()]);
         if let Some(warning) = warning {
             ask = ask.warning(warning);
@@ -124,6 +132,13 @@ impl App {
                 app.approvals_release();
             }
         });
+    }
+
+    /// Why no password may be asked now, if none may: the program's word.
+    fn approvals_refused_here(&self) -> Option<String> {
+        self.approvals
+            .as_ref()
+            .and_then(|here| here.approvals.why_not_asked())
     }
 
     /// The open waits no more: it is sent, if it waited.
@@ -156,6 +171,12 @@ impl App {
         set_up: bool,
         warning: Option<String>,
     ) {
+        // Where no password may be asked, nothing is: not now, said.
+        if let Some(why) = self.approvals_refused_here() {
+            self.say(&format!("The project was not trusted: {why}"));
+            self.trust_not_now(id);
+            return;
+        }
         let mut lines = request.summary.clone();
         if lines.is_empty() {
             lines.push("This project's trust, as the question showed it.".to_owned());

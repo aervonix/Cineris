@@ -510,8 +510,22 @@ async fn drive(
         }
     };
     // The person's approvals, before the session opens: what a session
-    // checks its stores with is the key it had when it opened.
-    approvals(&core, &front, asking);
+    // checks its stores with is the key it had when it opened. `Ctrl+C` at
+    // their password ends the run as interrupted, before its session opens.
+    if !approvals(&core, &front, asking) {
+        front.signal.get_or_insert(Signal::Interrupt);
+        let code = failed(
+            &mut front,
+            ErrorData::new(
+                ErrorKind::Interrupted,
+                "interrupted",
+                "the run was interrupted at the approvals' password, before its session opened",
+            ),
+        )
+        .await;
+        core.shutdown().await;
+        return code;
+    }
     let code = in_core(&core, &mut front).await;
     core.shutdown().await;
     code
@@ -543,23 +557,30 @@ fn taken_for_the_password(env: &Env) -> Option<cineris_tui::secret::PasswordTerm
 /// took the terminal to ask for them; says on standard error, once, when it
 /// goes on without them. A run under a session's command has no person,
 /// and asks nothing. The terminal is put back, and the main thread told,
-/// before this returns.
-fn approvals(core: &Core, front: &Front<'_>, asking: Option<Asking>) {
+/// before this returns. `false` when the person pressed `Ctrl+C` at the
+/// password: the run ends as interrupted.
+fn approvals(core: &Core, front: &Front<'_>, asking: Option<Asking>) -> bool {
     if front.plan.capped {
         drop(asking);
-        return;
+        return true;
     }
     let (terminal, left) = match asking {
         Some(Asking { terminal, left }) => (Some(terminal), Some(left)),
         None => (None, None),
     };
     let project = core.project(&front.plan.workspace).ok();
-    let said = crate::approvals::open_at_start(core, project.as_ref(), terminal);
+    let at_start = crate::approvals::open_at_start(core, project.as_ref(), terminal);
     if let Some(left) = left {
         let _ = left.send(());
     }
-    if let Some(said) = said {
-        front.say(&said);
+    match at_start {
+        crate::approvals::AtStart::GoesOn(said) => {
+            if let Some(said) = said {
+                front.say(&said);
+            }
+            true
+        }
+        crate::approvals::AtStart::Interrupted => false,
     }
 }
 
