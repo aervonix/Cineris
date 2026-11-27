@@ -153,6 +153,16 @@ fn plain(path: PathBuf) -> PathBuf {
     path
 }
 
+/// Where a Unix system shows its processes, each reading `self` as itself.
+const PROC: &str = "/proc";
+
+/// Whether `path` reaches through `/proc` on Unix: as it is written, a link
+/// on its way, or where one leads. What the harness checks there is its own
+/// process's, and what the server starts is the server's.
+fn through_proc(path: &Path) -> bool {
+    cfg!(unix) && cineris_base::program::passes_through(path, &[PathBuf::from(PROC)])
+}
+
 /// Starts a session's local servers, as the [module](self) says.
 #[derive(Debug)]
 pub struct ServerSpawner {
@@ -181,10 +191,17 @@ impl ServerSpawner {
         }
     }
 
-    /// Where no program is taken from: the workspace and the write roots.
+    /// Where no program is taken from, and which `PATH` leaves out: the
+    /// workspace and the write roots, and on Unix `/proc`, whose links a
+    /// process reads as its own (`/proc/self/cwd/bin` is the server's
+    /// folder where it starts, not the harness's where it was checked: the
+    /// full review of step 30's first part).
     fn avoid(&self) -> Vec<PathBuf> {
         let mut avoid = vec![self.options.workspace.clone()];
         avoid.extend(self.options.write_roots.iter().cloned());
+        if cfg!(unix) {
+            avoid.push(PathBuf::from(PROC));
+        }
         avoid
     }
 
@@ -279,6 +296,12 @@ impl ServerSpawner {
                 }
             }
         };
+        if through_proc(&path) {
+            return Err(SpawnError::Refused(format!(
+                "its folder `{}` is under `/proc`, which the server would read as its own",
+                path.display()
+            )));
+        }
         let real = std::fs::canonicalize(&path).ok();
         let workspace_real = std::fs::canonicalize(workspace).unwrap_or_else(|_| workspace.clone());
         let inside = cineris_base::location_within(&path, workspace)
@@ -333,6 +356,14 @@ impl ServerSpawner {
         // 1. The program, and on Windows the `cmd.exe` a script needs.
         let named = Program::parse(program.clone())
             .map_err(|(shown, why)| SpawnError::Refused(format!("the command {shown}{why}")))?;
+        if let Program::Path(path) = &named
+            && through_proc(Path::new(path))
+        {
+            return Err(SpawnError::Refused(format!(
+                "the command `{shown}` is under `/proc`, which the server would read as its own, \
+                 so it is not started"
+            )));
+        }
         if let Program::Path(path) = &named
             && cineris_base::program::passes_through(Path::new(path), &resolved_avoid)
         {

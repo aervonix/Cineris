@@ -31,6 +31,23 @@ A reviewer read commit A (`6028faf8`) alone, against the maintainers' rule that 
 
 **And one found while writing the tests:** a resolved path on Windows is the extended-length `\\?\C:\…` form, which `cmd.exe` cannot run in (it falls back to the Windows folder): a server's own folders and its working folder are given in the plain form.
 
+## The full review
+
+A reviewer read the whole part: one high finding, four medium, four low, and seven breaks no test caught. The reviewer's failing tests are folded into the crates' own (`cineris-core::it mcp_servers`, `cineris-config::it mcp`, `cineris-config mcp::tests`), and each fix has a test that failed without it and a break.
+
+| Finding | The fix |
+|---|---|
+| **High: a `*` in a `{ env = "…" }` source read any variable.** `ANTHROPIC_API_KE*`, `*`, `CINERIS*` and `GATEWAY*` were tested as names and looked up as patterns (`child_env::is_named` takes a trailing `*` as a prefix): a server was given the Anthropic key. | A source that is not a variable's name, or holds `*`, `?`, `[`, `]` or `{`, is refused at load (`cineris_config::mcp::bad_source_name`, for an `env` entry's name and source and a user's header's source), at the start (`server_env`), and by the first run's import (`givable`). The start looks a variable up by its exact name (Windows's case rule on Windows) and judges the name it found against the withheld list as well as the text written. The workspace was searched for the same mechanism (`child_env::is_named` and `matches` callers, `Env::get`, hook commands' and extensions' programs' environments, `shell.env_remove`, the first run's import): every other caller looks up a constant name or removes by a pattern, and none reads a value through a name from configuration; nothing outside step 30's crates needed the fix. |
+| **Medium: a project's derived header variable could be the user's token** (`github` and `token` made `GITHUB_TOKEN`; `my_tracker` the user's `MY_TRACKER_AUTHORIZATION`). | A project's header is taken only from `CINERIS_MCP_<SERVER>_<HEADER>` (`project_header_variable`), the one `CINERIS_` variable a project's header may take, and never from one the user's own servers take (refused at load, naming the user's server). `ProjectMcpServer::header_variables` gives the trust question each header's variable to name beside the host. The residual (two projects with a server of one name share a variable: set it per project, in that project's shell) is in 13-mcp and `docs/security.md` §3. |
+| **Medium: built-in providers' keys were not withheld at load or in `definitions()`** (`OPENROUTER_API_KEY`, `DEEPSEEK_API_KEY`, `VENICE_API_KEY`). | One list: `cineris_base::child_env::KNOWN_KEYS` now holds every built-in provider's key variable, which the configuration checks against, and a core test holds the provider layer's table to it. `definitions()` uses the core's `provider::key_variables` (built-in, configured, and each provider header's variable); the configuration's `provider_keys` gives the configured ones as it loads. A remote server's headers are held to it as a local one's variables are. |
+| **Medium: the trust question hid a project's `env` literals** (`NODE_OPTIONS = "--require ./.hidden/evil.js"` showed `[redacted]`). | `redact_for_consent` shows a server's `env` and `headers` whole, only the secret filter's formats masked, as the rest of a project's entry. |
+| **Medium: `ProjectMcpServer`'s derived `Debug` printed its table**, literals included, into `Loaded`'s. | `Debug` written by hand without the table; `printing::no_debug_or_display_form_holds_a_key` has a project's server holding the canary. |
+| **Low: a start that failed before its waiter left its folder.** | The folder is an owned value (`OwnFolder`) removed when dropped, on every path, before the end is told. |
+| **Low: the output queue held up to 256 MiB.** | `OUTPUT_QUEUED = QUEUED_BYTES / MAX_LINE`: 4 lines, at most 16 MiB; past it the reader waits, and the server's writes wait on the pipe. |
+| **Low: one stray key in `[mcp.servers.<name>]` failed the whole configuration.** | An unknown key, a wrong type or a value out of range inside a server's entry is a warning naming the server (`SERVER_NOT_STARTED`), which is not started; `Settings` reads the servers through `McpServers`, which keeps an entry that does not read in `refused`, and the loader (and a reload's `taking`) refuses a user's server the check warned of. A project's server keeps its `problem`. **A bad key directly under `[mcp]` still refuses the file.** |
+| **Low: a `command` or `cwd` under `/proc`** was checked in the harness's process and resolved in the server's. | Refused at load (lexically) and at the start (through any link, `passes_through` with `/proc`); `/proc` is among the places no program is found and `PATH` leaves out. |
+| **Breaks no test caught** | Tests now catch each: a `cwd` that is a link into the workspace (a case form and a trailing dot on Windows); the servers' folders inside the workspace; a dropped server killed; a server that ends by itself leaving a child, its tree ended and its folder gone before its end is told; a confined write to the system's temporary folder refused; a reload taking a project's servers from the newer load. |
+
 ## The interfaces added
 
 ```rust
@@ -45,14 +62,22 @@ pub mod mcp {
     pub fn bad_variable_name(name: &str) -> Option<&'static str>;
     pub fn withheld_source(variable: &str, keys: &[String], env_remove: &[String]) -> bool;
     pub fn loads_code(variable: &str) -> bool; // LD_…, GLIBC_TUNABLES, DYLD_…
+    pub fn bad_source_name(name: &str) -> Option<&'static str>; // a name, never a pattern
+    pub fn project_header_variable(server: &str, header: &str) -> String; // CINERIS_MCP_…
+    pub fn provider_keys(settings: &Settings) -> Vec<String>;
+    pub fn sources(entry: &McpServerSettings) -> Vec<String>;
+    pub fn server_of(key: &KeyPath) -> Option<&str>;
+    pub const SERVER_NOT_STARTED: &str;
     pub fn server_problem(name: &str, entry: &McpServerSettings, project: bool,
                           keys: &[String], env_remove: &[String]) -> Option<String>;
     pub struct ProjectMcpServer { pub name: String, pub settings: McpServerSettings,
                                   pub origin: Origin, pub problem: Option<String>, /* table */ }
-    impl ProjectMcpServer { pub fn for_consent(&self) -> toml::Value; }
+    impl ProjectMcpServer { pub fn for_consent(&self) -> toml::Value;
+                            pub fn header_variables(&self) -> Vec<(String, String)>; }
 }
 // schema: McpSettings { start_timeout_ms: u64, direct_share: u64,
-//   servers: BTreeMap<String, McpServerSettings> }; McpServerSettings { command:
+//   servers: McpServers { entries: BTreeMap<String, McpServerSettings>,
+//   refused: BTreeMap<String, String> } }; McpServerSettings { command:
 //   Option<ServerProgram>, args: ServerArgs, cwd: Option<String>, env: Variables, url:
 //   Option<ServerAddress>, headers: Headers, network: bool, description: Option<String>,
 //   enabled: bool, expose: ExposeChoice, tools: Option<Vec<String>>, deny_tools: Vec<String>,
@@ -80,6 +105,7 @@ pub mod mcp {
     impl Refused { pub fn notice(&self) -> String; }
     pub const MAX_LINE: usize; pub const STDERR_KEPT: usize;
     pub const LINES_QUEUED: usize; pub const STAGE_GRACE: Duration;
+    pub const OUTPUT_QUEUED: usize; pub const QUEUED_BYTES: usize;
 }
 ```
 

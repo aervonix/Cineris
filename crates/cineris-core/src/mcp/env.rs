@@ -123,12 +123,27 @@ impl std::fmt::Debug for ServerEnv {
     }
 }
 
-/// Why `name` cannot be a variable's name: empty, holding `=` or a NUL, or
-/// beginning with a digit (`cineris_config::mcp::bad_variable_name`, which
-/// refuses such an entry as the configuration loads). `None` when it can.
+/// Why `name` cannot be a variable's name: empty, holding `=` or a NUL,
+/// beginning with a digit, or a pattern (`*`, `?`, `[`, `]`, `{`)
+/// (`cineris_config::mcp::bad_source_name`, which refuses such an entry as
+/// the configuration loads). `None` when it can.
 #[must_use]
 pub fn bad_name(name: &str) -> Option<&'static str> {
-    cineris_config::mcp::bad_variable_name(name)
+    cineris_config::mcp::bad_source_name(name)
+}
+
+/// Whether `name`, a variable of the environment, is `wanted` exactly: the
+/// same text, in any case on Windows. Never a pattern: a source written
+/// `ANTHROPIC_API_KE*` matched the key as a prefix (the full review of step
+/// 30's first part).
+fn exactly(name: &OsStr, wanted: &str, windows: bool) -> bool {
+    name.to_str().is_some_and(|name| {
+        if windows {
+            name.eq_ignore_ascii_case(wanted)
+        } else {
+            name == wanted
+        }
+    })
 }
 
 /// Whether `name` is one of the harness's own: it begins `CINERIS_`, in
@@ -214,23 +229,36 @@ pub fn server_env(entries: &[EnvEntry], parts: &EnvParts<'_>) -> Result<ServerEn
         let value = match &entry.value {
             ValueSource::Env(source) => {
                 let from = cineris_base::in_code(source);
-                if withheld(OsStr::new(source)) {
+                if let Some(why) = bad_name(source) {
                     return Err(SpawnError::Refused(format!(
+                        "`{shown}` would take its value from `{from}`, which {why}"
+                    )));
+                }
+                let refused = || {
+                    SpawnError::Refused(format!(
                         "`{shown}` would take its value from `{from}`, a provider's key, one of \
                          the harness's own or one `shell.env_remove` keeps from commands, and no \
                          server is given one"
-                    )));
+                    ))
+                };
+                // The name as written, then the one found by its exact name:
+                // each is judged.
+                if withheld(OsStr::new(source)) {
+                    return Err(refused());
                 }
                 let found = parts
                     .inherited
                     .iter()
-                    .find(|(name, _)| child_env::is_named(name, source, windows))
-                    .map(|(_, value)| value.clone());
-                let Some(value) = found else {
+                    .find(|(name, _)| exactly(name, source, windows));
+                let Some((found, value)) = found else {
                     return Err(SpawnError::Refused(format!(
                         "`{shown}` takes its value from `{from}`, which is not set"
                     )));
                 };
+                if withheld(found) {
+                    return Err(refused());
+                }
+                let value = value.clone();
                 if let Some(text) = value.to_str() {
                     secrets.push(Secret::new(text));
                 }
@@ -245,7 +273,7 @@ pub fn server_env(entries: &[EnvEntry], parts: &EnvParts<'_>) -> Result<ServerEn
                 OsString::from(text.expose())
             }
         };
-        vars.retain(|(known, _)| !child_env::is_named(known, name, windows));
+        vars.retain(|(known, _)| !exactly(known, name, windows));
         vars.push((OsString::from(name), value));
     }
 

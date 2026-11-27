@@ -486,6 +486,57 @@ impl Setting for ServerAddress {
     }
 }
 
+/// The user's MCP servers by name, merged (since step 30): those whose
+/// entry reads, and those whose entry does not, each with why. A key of
+/// another client's form (`type = "stdio"`, `args` as one text) refuses that
+/// server alone, never the whole configuration (the full review of step
+/// 30's first part).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct McpServers {
+    /// The servers whose entry reads.
+    pub entries: BTreeMap<String, super::McpServerSettings>,
+    /// The servers that are not started, each with why: an entry that does
+    /// not read as one, or one with a key the configuration's check could
+    /// not read (`load` adds those).
+    pub refused: BTreeMap<String, String>,
+}
+
+impl Setting for McpServers {
+    fn node() -> Node {
+        Node::Map(Box::new(<super::McpServerSettings as Setting>::node()))
+    }
+
+    fn read(value: &Value) -> Result<Self, String> {
+        let Value::Table(table) = value else {
+            return Err("expected a table of named entries".to_owned());
+        };
+        let mut servers = Self::default();
+        for (name, entry) in table {
+            match <super::McpServerSettings as Setting>::read(entry) {
+                Ok(settings) => {
+                    servers.entries.insert(name.clone(), settings);
+                }
+                Err(error) => {
+                    servers.refused.insert(name.clone(), error);
+                }
+            }
+        }
+        Ok(servers)
+    }
+
+    fn write(&self) -> Option<Value> {
+        if self.entries.is_empty() {
+            return None;
+        }
+        let table = table_of(
+            self.entries
+                .iter()
+                .filter_map(|(name, entry)| Some((name.clone(), entry.write()?))),
+        );
+        Some(Value::Table(table))
+    }
+}
+
 choice! {
     /// How the model reaches an MCP server's tools (since step 30).
     pub enum ExposeChoice {

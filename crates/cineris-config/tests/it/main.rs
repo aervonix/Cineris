@@ -27,6 +27,7 @@ mod hooks;
 mod imports;
 mod layers;
 mod loading;
+mod mcp;
 mod measure;
 mod printing;
 mod provenance;

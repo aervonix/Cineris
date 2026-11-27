@@ -397,7 +397,262 @@ caught-by:
 rule: A project's server whose name the user's configuration has is refused.
 file: crates/cineris-core/src/mcp/definitions.rs
 in: definitions
-find: settings.mcp.servers.contains_key(&server.name)
-replace: settings.mcp.servers.contains_key(&server.name) && server.name.is_empty()
+find: servers.entries.contains_key(&server.name)
+replace: servers.entries.contains_key(&server.name) && server.name.is_empty()
 caught-by:
     cineris-core mcp::definitions::tests::the_users_and_a_projects_servers_become_definitions
+
+# The full review of the first part: each finding's rule.
+
+[break] source-written-as-a-pattern-taken-at-load
+rule: A variable a value is read from is a variable's exact name, never a pattern.
+file: crates/cineris-config/src/mcp.rs
+in: bad_source_name
+find: name.contains(PATTERN)
+replace: name.is_empty()
+packages: cineris-config, cineris-core
+caught-by:
+    cineris-config mcp::tests::a_source_written_as_a_pattern_is_refused
+    cineris-config mcp::tests::the_first_run_imports_no_server_the_loader_would_refuse
+    cineris-core::it mcp_servers::a_source_written_as_a_pattern_is_never_read
+
+[break] source-written-as-a-pattern-looked-up-at-start
+rule: A server's start refuses a variable written as a pattern, before any lookup.
+file: crates/cineris-core/src/mcp/env.rs
+in: server_env
+find: if let Some(why) = bad_name(source) {
+replace: if let Some(why) = bad_name(source).filter(|_| source.is_empty()) {
+caught-by:
+    cineris-core::it mcp_servers::a_source_written_as_a_pattern_is_never_read
+
+[break] source-looked-up-as-a-pattern
+rule: A server's variable is looked up by its exact name. Guarded first by the refusal of a pattern, which no lookup reaches: kept so that nobody tries it again.
+file: crates/cineris-core/src/mcp/env.rs
+in: server_env
+find: .find(|(name, _)| exactly(name, source, windows))
+replace: .find(|(name, _)| child_env::is_named(name, source, windows))
+expect: survives
+
+[break] first-run-imports-a-pattern
+rule: The first run imports no server that takes a variable written as a pattern.
+file: crates/cineris-config/src/import.rs
+in: givable
+find: .all(|name| crate::mcp::bad_source_name(name).is_none())
+replace: .all(|name| crate::mcp::bad_variable_name(name).is_none())
+caught-by:
+    cineris-config mcp::tests::the_first_run_imports_no_server_the_loader_would_refuse
+
+[break] project-header-variable-is-a-users-name
+rule: A project's header variable is in the projects' own namespace, `CINERIS_MCP_<SERVER>_<HEADER>`.
+file: crates/cineris-config/src/mcp.rs
+in: project_header_variable
+find: format!("CINERIS_MCP_{}", derived_variable(server, header))
+replace: derived_variable(server, header)
+packages: cineris-config, cineris-core
+caught-by:
+    cineris-config mcp::tests::a_projects_header_is_taken_only_from_its_derived_variable
+    cineris-config::it mcp::a_projects_header_never_takes_a_variable_of_the_users
+
+[break] project-header-takes-a-variable-of-the-users-server
+rule: A project's header never takes a variable one of the user's own servers takes.
+file: crates/cineris-config/src/load.rs
+in: mcp_servers
+find: taken.iter().find(|(own, _)| *own == upper)
+replace: taken.iter().find(|(own, _)| *own == upper && own.is_empty())
+caught-by:
+    cineris-config::it mcp::a_projects_header_never_takes_a_variable_of_the_users
+
+[break] built-in-providers-key-not-known
+rule: Every built-in provider's key variable is a known key, withheld from a server as the configuration loads.
+file: crates/cineris-base/src/child_env.rs
+find: "VENICE_API_KEY"
+replace: "VENICE_API_KEY_NOT"
+packages: cineris-base, cineris-config, cineris-core
+caught-by:
+    cineris-config mcp::tests::a_built_in_providers_key_is_refused_as_a_source
+    cineris-core mcp::definitions::tests::every_built_in_providers_key_is_a_known_key
+
+[break] definitions-withhold-no-provider-key
+rule: The definitions withhold every provider's key, each configured provider's header's variable included.
+file: crates/cineris-core/src/mcp/definitions.rs
+in: definitions
+find: let keys = crate::provider::key_variables(settings);
+replace: let keys: Vec<String> = Vec::new();
+caught-by:
+    cineris-core mcp::definitions::tests::the_users_and_a_projects_servers_become_definitions
+
+[break] trust-question-hides-a-projects-env
+rule: The trust question shows a project's server's `env` and `headers` whole, but for what the secret filter's formats know.
+file: crates/cineris-config/src/schema/redact.rs
+in: redact_for_consent
+find: if a_servers_values(key).is_some() =>
+replace: if a_servers_values(key).is_some() && key.is_root() =>
+caught-by:
+    cineris-config::it mcp::the_trust_question_shows_a_projects_env_literal
+
+[break] project-server-debug-prints-its-table
+rule: A project's server's `Debug` form leaves out its table as written, which can hold a literal.
+file: crates/cineris-config/src/mcp.rs
+find: .field("problem", &self.problem)
+replace: .field("problem", &self.problem).field("table", &self.table)
+caught-by:
+    cineris-config::it mcp::a_projects_literal_never_reaches_a_debug_form
+    cineris-config::it printing::no_debug_or_display_form_holds_a_key
+
+[break] stray-key-in-a-server-refuses-the-file
+rule: A key of an MCP server's entry the check cannot read refuses that server alone, never the file.
+file: crates/cineris-config/src/validate.rs
+in: Checked::report_at
+find: Some(_) if severity == Severity::Error =>
+replace: Some(_) if severity == Severity::Error && severity == Severity::Warning =>
+caught-by:
+    cineris-config::it mcp::a_stray_key_in_a_servers_entry_refuses_that_server_alone
+
+[break] stray-key-in-a-server-leaves-it-started
+rule: A user's server whose entry holds a key the check could not read is not started.
+file: crates/cineris-config/src/load.rs
+in: refuse_unread
+find: servers.entries.remove(server);
+replace: let _ = &servers.entries;
+caught-by:
+    cineris-config::it mcp::a_stray_key_in_a_servers_entry_refuses_that_server_alone
+
+[break] ill-typed-server-refuses-the-file
+rule: A server whose merged entry does not read is refused alone; the settings still read.
+file: crates/cineris-config/src/schema/types.rs
+find: servers.refused.insert(name.clone(), error);
+replace: return Err(error);
+caught-by:
+    cineris-config::it mcp::a_stray_key_in_a_servers_entry_refuses_that_server_alone
+
+[break] reload-forgets-a-stray-key
+rule: A reload keeps refusing a user's server whose entry holds a key the check could not read.
+file: crates/cineris-config/src/load.rs
+in: Loaded::taking
+find: refuse_unread(&mut settings, &newer.diagnostics, newer.profile.as_deref());
+replace:
+caught-by:
+    cineris-config::it mcp::a_reload_keeps_a_stray_key_refusing_its_server
+
+[break] reload-keeps-the-older-project-servers
+rule: A reload takes a project's servers from the newer load: they are read live.
+file: crates/cineris-config/src/load.rs
+in: Loaded::taking
+find: project_mcp_servers: newer.project_mcp_servers.clone()
+replace: project_mcp_servers: self.project_mcp_servers.clone()
+caught-by:
+    cineris-config::it mcp::a_reload_takes_a_projects_servers_from_the_newer_load
+
+[break] proc-command-taken-at-load
+rule: A server's `command` or `cwd` under `/proc` is refused as the configuration loads.
+file: crates/cineris-config/src/mcp.rs
+in: under_proc
+find: names.first() == Some(&"proc")
+replace: names.first() == Some(&"nowhere")
+caught-by:
+    cineris-config mcp::tests::a_command_or_folder_under_proc_is_refused
+
+[break] proc-command-started
+rule: A server's program or folder reached through `/proc` is refused at its start.
+file: crates/cineris-core/src/mcp/spawn.rs
+in: through_proc
+find: cfg!(unix) && cineris_base::program::passes_through(path, &[PathBuf::from(PROC)])
+replace: cfg!(unix) && path.as_os_str().is_empty()
+os: linux
+caught-by:
+    cineris-core::it mcp_servers::sys_a_command_or_folder_through_proc_is_refused
+
+[break] path-through-proc-given
+rule: A server's `PATH` has no folder reached through `/proc`.
+file: crates/cineris-core/src/mcp/spawn.rs
+in: ServerSpawner::avoid
+find: avoid.push(PathBuf::from(PROC));
+replace: let _ = PROC;
+os: linux
+caught-by:
+    cineris-core::it mcp_servers::sys_a_command_or_folder_through_proc_is_refused
+
+[break] output-queue-not-bounded-by-bytes
+rule: What waits for the client of a server's output is at most 16 MiB.
+file: crates/cineris-core/src/mcp/process.rs
+in: start
+find: mpsc::channel(OUTPUT_QUEUED)
+replace: mpsc::channel(LINES_QUEUED)
+caught-by:
+    cineris-core::it mcp_servers::sys_a_server_answers_each_line_and_ends_with_its_input
+
+[break] own-folder-not-removed
+rule: A server's own folder goes when its owner is dropped.
+file: crates/cineris-core/src/mcp/process.rs
+in: OwnFolder::drop
+find: std::fs::remove_dir_all(&self.0)
+replace: std::fs::remove_dir_all(self.0.join("nothing-there"))
+caught-by:
+    cineris-core mcp::process::tests::a_servers_folder_goes_with_its_owner
+    cineris-core::it mcp_servers::sys_a_server_that_ends_by_itself_leaves_nothing_running_and_no_folder
+
+[break] own-folder-kept-after-a-normal-end
+rule: A server's folder goes when it has ended by itself, before its end is told.
+file: crates/cineris-core/src/mcp/process.rs
+in: start
+find: drop(folder);
+occurrence: 2
+replace: std::mem::forget(folder);
+caught-by:
+    cineris-core::it mcp_servers::sys_a_server_that_ends_by_itself_leaves_nothing_running_and_no_folder
+
+[break] tree-not-ended-after-a-normal-end
+rule: What a server left running is killed with its tree when it ends by itself.
+file: crates/cineris-core/src/mcp/process.rs
+in: start
+find: tree.end();
+replace:
+os: linux
+caught-by:
+    cineris-core::it mcp_servers::sys_a_server_that_ends_by_itself_leaves_nothing_running_and_no_folder
+
+[break] dropped-server-not-killed
+rule: A server whose handle is dropped while it runs is killed, its tree with it.
+file: crates/cineris-core/src/mcp/process.rs
+find: let _ = self.tree.kill();
+occurrence: 2
+replace: let _ = &self.tree;
+os: linux
+caught-by:
+    cineris-core::it mcp_servers::sys_a_server_dropped_while_it_runs_is_killed
+
+[break] folder-through-a-link-into-the-workspace-taken
+rule: A `cwd` that resolves inside the workspace counts as the workspace, by its real place as well as its text.
+file: crates/cineris-core/src/mcp/spawn.rs
+in: ServerSpawner::working_folder
+find: .is_some_and(|real| cineris_base::location_within(real, &workspace_real))
+replace: .is_some_and(|real| real.as_os_str().is_empty() && workspace_real.as_os_str().is_empty())
+caught-by:
+    cineris-core::it mcp_servers::sys_a_folder_that_leads_into_the_workspace_counts_as_the_workspace
+
+[break] servers-folders-inside-the-workspace-taken
+rule: The servers' own folders are never made inside the workspace or a write root.
+file: crates/cineris-core/src/mcp/spawn.rs
+in: ServerSpawner::own_folders
+find: if cineris_base::program::passes_through(&base, &avoid) {
+replace: if cineris_base::program::passes_through(&base, &[]) {
+caught-by:
+    cineris-core::it mcp_servers::a_servers_folders_inside_the_workspace_are_refused
+
+[break] confined-server-writes-the-systems-temporary-folder
+rule: A confined server writes nothing outside its own temporary folder, the system's temporary folder included.
+file: crates/cineris-core/src/mcp/spawn.rs
+in: ServerSpawner::prepare
+find: write: vec![own.temp.clone()]
+replace: write: vec![own.temp.clone(), std::env::temp_dir()]
+os: linux
+caught-by:
+    cineris-core::it mcp_servers::sys_a_confined_server_writes_only_its_own_folder_and_reaches_the_network_only_when_told
+
+[break] found-name-not-judged
+rule: The variable found by its exact name is judged against the withheld list, as the name written is. Guarded by the judgment of the name written, which the exact lookup makes the same name (in any case on Windows, where the list's match folds case too): kept so that nobody takes it out.
+file: crates/cineris-core/src/mcp/env.rs
+in: server_env
+find: if withheld(found) {
+replace: if withheld(found) && found.is_empty() {
+expect: survives

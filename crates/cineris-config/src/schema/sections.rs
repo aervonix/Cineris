@@ -14,9 +14,9 @@ use cineris_protocol::{Level, ModelRole, Speed};
 
 use super::types::{
     BackspaceChoice, Bindings, ColorChoice, DensityChoice, ExposeChoice, GlyphChoice, Headers,
-    HookEventName, PresenterChoice, Profiles, ReasoningShown, ReasoningVisibility, Reserved,
-    ServerAddress, ServerArgs, ServerProgram, SessionDurability, StoreChoice, ToolOutputChoice,
-    UsageRanges, Variables, VerifyMode, Weekday,
+    HookEventName, McpServers, PresenterChoice, Profiles, ReasoningShown, ReasoningVisibility,
+    Reserved, ServerAddress, ServerArgs, ServerProgram, SessionDurability, StoreChoice,
+    ToolOutputChoice, UsageRanges, Variables, VerifyMode, Weekday,
 };
 use super::{CONFIG_VERSION, settings};
 
@@ -167,7 +167,9 @@ settings! {
         /// proposed and started only once the project is trusted and the
         /// entry, as it is now, approved, and one with the name of one of
         /// the user's is refused. Enforced: a key this build does not know
-        /// refuses the file.
+        /// directly in `[mcp]` refuses the file; one in a server's entry
+        /// (another client's `type`, a value of the wrong type or out of
+        /// range) refuses that server alone, with a warning.
         [enforced]
         pub mcp: McpSettings,
     }
@@ -195,7 +197,7 @@ settings! {
         /// that has neither, or a key of the other kind, is refused with a
         /// warning, and the server is not started.
         [nested]
-        pub servers: BTreeMap<String, McpServerSettings>,
+        pub servers: McpServers,
     }
 }
 
@@ -243,11 +245,12 @@ settings! {
         /// from a header's name to `{ env = "NAME" }`, read when it
         /// connects, or text, held as a secret. **A project's server takes
         /// a header only from the variable named for its server and the
-        /// header,** both in capitals, joined by `_`, each other character
-        /// `_` (`Authorization` of the server `tracker` from
-        /// `TRACKER_AUTHORIZATION`), never from a variable the project
-        /// chose or as text: a repository cannot send a token of yours to
-        /// a host it picked.
+        /// header, in a namespace only projects use:** `CINERIS_MCP_`, then
+        /// both names in capitals, joined by `_`, each other character `_`
+        /// (`Authorization` of the server `tracker` from
+        /// `CINERIS_MCP_TRACKER_AUTHORIZATION`), never from a variable the
+        /// project chose, one you have for other tools, or as text: a
+        /// repository cannot send a token of yours to a host it picked.
         [KeptApart, NextSession]
         pub headers: Headers,
         /// Whether a local server may reach the network where the sandbox

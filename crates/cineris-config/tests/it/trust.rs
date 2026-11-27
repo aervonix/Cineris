@@ -407,7 +407,7 @@ fn trust_turns_on_what_needs_trust_and_never_what_is_the_users_alone() {
     );
     // Nor its MCP server (since step 30): kept apart, as its hooks are.
     assert_eq!(value(&loaded, "mcp.servers.helper.command"), "(not set)");
-    assert!(loaded.settings.mcp.servers.is_empty());
+    assert!(loaded.settings.mcp.servers.entries.is_empty());
     assert_eq!(
         loaded.project_mcp_servers[0]
             .settings

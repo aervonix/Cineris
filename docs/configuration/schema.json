@@ -624,7 +624,7 @@
     },
     "mcp": {
       "additionalProperties": false,
-      "description": "MCP servers by name, and the client's own settings (since step 30, `docs/architecture/13-mcp.md`, \"Configuration\"). The user's layers merge as any setting's do; **a project's servers are kept apart**, as its hooks are: never merged with the user's, each proposed and started only once the project is trusted and the entry, as it is now, approved, and one with the name of one of the user's is refused. Enforced: a key this build does not know refuses the file.",
+      "description": "MCP servers by name, and the client's own settings (since step 30, `docs/architecture/13-mcp.md`, \"Configuration\"). The user's layers merge as any setting's do; **a project's servers are kept apart**, as its hooks are: never merged with the user's, each proposed and started only once the project is trusted and the entry, as it is now, approved, and one with the name of one of the user's is refused. Enforced: a key this build does not know directly in `[mcp]` refuses the file; one in a server's entry (another client's `type`, a value of the wrong type or out of range) refuses that server alone, with a warning.",
       "properties": {
         "direct_share": {
           "default": 5,
@@ -740,7 +740,7 @@
                     }
                   ]
                 },
-                "description": "The headers sent with every request to a remote server: a table from a header's name to `{ env = \"NAME\" }`, read when it connects, or text, held as a secret. **A project's server takes a header only from the variable named for its server and the header,** both in capitals, joined by `_`, each other character `_` (`Authorization` of the server `tracker` from `TRACKER_AUTHORIZATION`), never from a variable the project chose or as text: a repository cannot send a token of yours to a host it picked.",
+                "description": "The headers sent with every request to a remote server: a table from a header's name to `{ env = \"NAME\" }`, read when it connects, or text, held as a secret. **A project's server takes a header only from the variable named for its server and the header, in a namespace only projects use:** `CINERIS_MCP_`, then both names in capitals, joined by `_`, each other character `_` (`Authorization` of the server `tracker` from `CINERIS_MCP_TRACKER_AUTHORIZATION`), never from a variable the project chose, one you have for other tools, or as text: a repository cannot send a token of yours to a host it picked.",
                 "type": "object",
                 "x-cineris-effect": "next session",
                 "x-cineris-trust": "kept apart: a project's own are read on their own, never merged with yours, each waiting for trust and its approval"

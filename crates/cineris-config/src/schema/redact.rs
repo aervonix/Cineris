@@ -115,6 +115,15 @@ pub(crate) fn redact(key: &KeyPath, value: &Value) -> Value {
 pub(crate) fn redact_for_consent(key: &KeyPath, value: &Value) -> Value {
     let declared =
         match lookup(key) {
+            // A project's MCP server's `env` and `headers` are shown whole,
+            // as the rest of its entry is (13-mcp; the full review of step
+            // 30's first part: `NODE_OPTIONS = "--require ./.hidden/evil.js"`
+            // was approved unseen as `[redacted]`).
+            Lookup::Setting { .. } | Lookup::InsideSetting { .. }
+                if a_servers_values(key).is_some() =>
+            {
+                value.clone()
+            }
             Lookup::Setting { child, .. } => match &child.node {
                 Node::Leaf(kind) => redact_kind(kind, value),
                 _ => value.clone(),
@@ -370,6 +379,27 @@ fn command_line(name: Option<&str>, value: &Value) -> Option<Value> {
         ("url", Value::String(url)) => Some(Value::String(crate::import::shown_address(url))),
         ("command", Value::String(program)) => {
             Some(Value::String(crate::import::shown_program(program)))
+        }
+        _ => None,
+    }
+}
+
+/// The key of an MCP server's `env` or `headers`, or of one entry of them,
+/// at the root of a file or in a profile: what the trust question shows of
+/// a project's server whole.
+fn a_servers_values(key: &KeyPath) -> Option<()> {
+    let parts = key.parts();
+    let parts = match parts {
+        [first, _, rest @ ..] if first == "profiles" => rest,
+        _ => parts,
+    };
+    match parts {
+        [mcp, servers, _, values, ..]
+            if mcp == "mcp"
+                && servers == "servers"
+                && matches!(values.as_str(), "env" | "headers") =>
+        {
+            Some(())
         }
         _ => None,
     }

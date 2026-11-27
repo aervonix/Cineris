@@ -209,28 +209,40 @@ fn what_the_first_run_hid_is_hidden_by_every_view() {
 /// a token under a credential's name, a key of a known format, an address's
 /// user part with or without a scheme, each `[redacted]`, and a literal of
 /// a server's environment. Since step 30 declares `[mcp]`, an argument that
-/// is not text, and a key the section does not have, refuse the file.
+/// is not text refuses its server, with a warning (since the full review of
+/// step 30's first part), and a key the section does not have refuses the
+/// file: neither the warning, the views nor the refusal shows the value.
 #[test]
 fn a_hand_written_server_is_shown_by_the_same_rule() {
     let machine = Machine::new("imports_by_hand");
-    for (text, naming) in [
-        (
-            "[mcp.servers.hand]\ncommand = \"h\"\nargs = [\"x\", { token = \"InTable0123\" }]\n",
-            "mcp.servers.hand.args",
-        ),
-        (
-            "[mcp.servers.hand]\ncommand = \"h\"\nargs = [[\"--api-key\", \"InList0123\"]]\n",
-            "mcp.servers.hand.args",
-        ),
-        ("[[mcp.hooks]]\npassword = \"Hook0123456\"\n", "mcp.hooks"),
+    for text in [
+        "[mcp.servers.hand]\ncommand = \"h\"\nargs = [\"x\", { token = \"InTable0123\" }]\n",
+        "[mcp.servers.hand]\ncommand = \"h\"\nargs = [[\"--api-key\", \"InList0123\"]]\n",
     ] {
         machine.layer(LayerKind::User, text);
-        let failure = machine.failure().join("\n");
-        assert!(failure.contains(naming), "{text}: {failure}");
-        for secret in ["InTable0123", "InList0123", "Hook0123456"] {
-            assert!(!failure.contains(secret), "{secret} in:\n{failure}");
+        let loaded = machine.load();
+        assert!(loaded.settings.mcp.servers.refused.contains_key("hand"));
+        let env = machine.env().clone();
+        let said = machine.said(&loaded).join("\n");
+        assert!(said.contains("mcp.servers.hand.args"), "{text}: {said}");
+        for view in [
+            said,
+            loaded.show(&env, false),
+            loaded.show_layer(LayerKind::User, &env),
+            format!("{loaded:?}"),
+        ] {
+            for secret in ["InTable0123", "InList0123"] {
+                assert!(!view.contains(secret), "{secret} in:\n{view}");
+            }
         }
     }
+    machine.layer(
+        LayerKind::User,
+        "[[mcp.hooks]]\npassword = \"Hook0123456\"\n",
+    );
+    let failure = machine.failure().join("\n");
+    assert!(failure.contains("mcp.hooks"), "{failure}");
+    assert!(!failure.contains("Hook0123456"), "{failure}");
     machine.layer(
         LayerKind::User,
         "[mcp.servers.hand]\n\
@@ -344,19 +356,36 @@ fn the_trust_question_shows_a_projects_command_lines_whole() {
 /// header given as an argument, `X-API-Key: …` and mcp-remote's
 /// `Authorization: Bearer …`. A single letter's flag names nothing, and its
 /// value is shown. `args` as one text or as a table, which the views read
-/// by the rule while the section was reserved, refuse the file since step
-/// 30, and the refusal shows neither value.
+/// by the rule while the section was reserved, refuse their server since
+/// the full review of step 30's first part (the file since step 30), and
+/// neither the warning nor a view shows the value.
 #[test]
 fn every_shape_of_a_command_line_is_read_by_the_rule() {
     let machine = Machine::new("imports_shapes");
-    for text in [
-        "[mcp.servers.text]\ncommand = \"t-mcp\"\nargs = \"--api-key Text0123456\"\n",
-        "[mcp.servers.table]\ncommand = \"t-mcp\"\nargs = { a = \"--api-key\", b = \"Table0123456\" }\n",
+    for (text, name) in [
+        (
+            "[mcp.servers.text]\ncommand = \"t-mcp\"\nargs = \"--api-key Text0123456\"\n",
+            "text",
+        ),
+        (
+            "[mcp.servers.table]\ncommand = \"t-mcp\"\nargs = { a = \"--api-key\", b = \"Table0123456\" }\n",
+            "table",
+        ),
     ] {
         machine.layer(LayerKind::User, text);
-        let failure = machine.failure().join("\n");
-        assert!(failure.contains(".args"), "{text}: {failure}");
-        assert!(!failure.contains("0123456"), "{failure}");
+        let loaded = machine.load();
+        assert!(loaded.settings.mcp.servers.refused.contains_key(name));
+        let env = machine.env().clone();
+        let said = machine.said(&loaded).join("\n");
+        assert!(said.contains(".args"), "{text}: {said}");
+        for view in [
+            said,
+            loaded.show(&env, false),
+            loaded.show_layer(LayerKind::User, &env),
+            format!("{loaded:?}"),
+        ] {
+            assert!(!view.contains("0123456"), "{view}");
+        }
     }
     machine.layer(
         LayerKind::User,

@@ -6,7 +6,11 @@
 //! - **An unknown key is a warning** with the nearest name that is known.
 //!   Strict checking makes it an error.
 //! - **In a table the harness enforces, an unknown key is always an error**
-//!   (decision 0028). Permissions, the sandbox and the limits are read by
+//!   (decision 0028). **But for an MCP server's entry** (since step 30's
+//!   full review): an unknown key, a wrong type or a value out of range in
+//!   `[mcp.servers.<name>]` is a warning that names the server, which is
+//!   not started (`crate::mcp::SERVER_NOT_STARTED`); one directly in
+//!   `[mcp]` still refuses the file. Permissions, the sandbox and the limits are read by
 //!   more than one build: an older build that skipped a restriction it did
 //!   not know would run with a wider configuration than the file asks for.
 //!   So the file is refused whole, and the configuration that was in force
@@ -117,6 +121,17 @@ impl Checked<'_> {
         line: Option<u32>,
         message: String,
     ) {
+        // A key of an MCP server's entry that cannot be read refuses that
+        // server alone (the full review of step 30's first part): another
+        // client's `type = "stdio"`, or `args` as one text, does not stop
+        // the harness.
+        let (severity, message) = match crate::mcp::server_of(key) {
+            Some(_) if severity == Severity::Error => (
+                Severity::Warning,
+                format!("{message}; {}", crate::mcp::SERVER_NOT_STARTED),
+            ),
+            _ => (severity, message),
+        };
         diagnostics.push(Diagnostic {
             severity,
             layer: Some(self.layer),
@@ -294,7 +309,10 @@ fn unknown_key(
     let suggestion = nearest(name, &schema::names(node))
         .map(|known| format!(" Did you mean `{known}`?"))
         .unwrap_or_default();
-    let (severity, message) = if enforced {
+    let (severity, message) = if crate::mcp::server_of(key).is_some() {
+        // Its server is not started ([`Checked::report_at`]).
+        (Severity::Error, format!("unknown key.{suggestion}"))
+    } else if enforced {
         (
             Severity::Error,
             format!(

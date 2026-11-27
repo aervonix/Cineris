@@ -21,5 +21,5 @@ pub mod spawn;
 
 pub use definitions::{Definitions, Refused, definitions};
 pub use env::{EnvParts, ServerEnv, server_env};
-pub use process::{LINES_QUEUED, MAX_LINE, STAGE_GRACE, STDERR_KEPT};
+pub use process::{LINES_QUEUED, MAX_LINE, OUTPUT_QUEUED, QUEUED_BYTES, STAGE_GRACE, STDERR_KEPT};
 pub use spawn::{Confinement, ServerSpawner, SpawnerOptions};

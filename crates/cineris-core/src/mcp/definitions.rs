@@ -60,27 +60,31 @@ impl Refused {
 }
 
 /// The definitions of `loaded`'s servers, the user's and the project's, and
-/// the entries it refuses ([the module](self)).
+/// the entries it refuses ([the module](self)). Every provider's key is
+/// withheld: the built-in providers', each configured one's, and each a
+/// provider's header reads (`crate::provider::key_variables`, the full
+/// review of step 30's first part), from a local server's variables and a
+/// remote one's headers alike.
 #[must_use]
 pub fn definitions(loaded: &Loaded) -> Definitions {
     let settings = &loaded.settings;
-    let keys: Vec<String> = settings
-        .providers
-        .values()
-        .filter_map(|provider| provider.key_env.clone())
-        .collect();
+    let keys = crate::provider::key_variables(settings);
+    let env_remove = &settings.shell.env_remove;
     let start_default = Duration::from_millis(settings.mcp.start_timeout_ms);
+    let servers = &settings.mcp.servers;
     let mut made = Definitions::default();
-    for (name, entry) in &settings.mcp.servers {
-        let problem = cineris_config::mcp::server_problem(
-            name,
-            entry,
-            false,
-            &keys,
-            &settings.shell.env_remove,
-        );
-        match problem {
-            Some(why) => made.refused.push(Refused {
+    let mut refused: Vec<Refused> = servers
+        .refused
+        .iter()
+        .map(|(name, why)| Refused {
+            name: name.clone(),
+            origin: Origin::User,
+            why: why.clone(),
+        })
+        .collect();
+    for (name, entry) in &servers.entries {
+        match cineris_config::mcp::server_problem(name, entry, false, &keys, env_remove) {
+            Some(why) => refused.push(Refused {
                 name: name.clone(),
                 origin: Origin::User,
                 why,
@@ -90,15 +94,27 @@ pub fn definitions(loaded: &Loaded) -> Definitions {
                 .push(definition(name, entry, Origin::User, start_default)),
         }
     }
+    refused.sort_by(|one, other| one.name.cmp(&other.name));
+    made.refused = refused;
     for server in &loaded.project_mcp_servers {
-        let why = if settings.mcp.servers.contains_key(&server.name) {
+        let users = servers.entries.contains_key(&server.name)
+            || servers.refused.contains_key(&server.name);
+        let why = if users {
             Some(
                 "your own configuration has a server of that name, which a project's cannot \
                  replace"
                     .to_owned(),
             )
         } else {
-            server.problem.clone()
+            server.problem.clone().or_else(|| {
+                cineris_config::mcp::server_problem(
+                    &server.name,
+                    &server.settings,
+                    true,
+                    &keys,
+                    env_remove,
+                )
+            })
         };
         match why {
             Some(why) => made.refused.push(Refused {
@@ -207,6 +223,22 @@ mod tests {
         cineris_config::load(&options).unwrap()
     }
 
+    /// The configuration withholds a provider's key from a server as it
+    /// loads by `cineris_base::child_env::KNOWN_KEYS`, as it cannot see the
+    /// provider layer's table: every built-in provider's key variable is on
+    /// that list (the full review of step 30's first part).
+    #[test]
+    fn every_built_in_providers_key_is_a_known_key() {
+        for name in crate::provider::builtin_names() {
+            if let Some((_, Some(variable))) = crate::provider::builtin(name) {
+                assert!(
+                    cineris_base::child_env::KNOWN_KEYS.contains(&variable),
+                    "{name}'s `{variable}`"
+                );
+            }
+        }
+    }
+
     /// The user's servers and a project's become definitions, each with
     /// its origin and every key of its entry; a project's whose name is the
     /// user's, and an entry that is not started as it is, are refused with
@@ -222,7 +254,13 @@ mod tests {
                     tools = [\"create_issue\"]\ndeny_tools = [\"delete_issue\"]\n\
                     expose = \"direct\"\ntimeout_ms = 30000\nenabled = false\n\
                     start_timeout_ms = 5000\n\
-                    [mcp.servers.broken]\nenabled = true\n";
+                    [mcp.servers.broken]\nenabled = true\n\
+                    [mcp.servers.typed]\ncommand = \"t\"\ntype = \"stdio\"\n\
+                    [mcp.servers.venice]\ncommand = \"v\"\n\
+                    env = { K = { env = \"VENICE_API_KEY\" } }\n\
+                    [mcp.servers.teamed]\ncommand = \"t\"\n\
+                    env = { K = { env = \"TEAM_TOKEN\" } }\n\
+                    [providers.openrouter]\nheaders = { X-Team = { env = \"TEAM_TOKEN\" } }\n";
         let project = "[mcp.servers.docs]\ncommand = \"not-yours\"\n\
                        [mcp.servers.lint]\ncommand = \"lint-mcp\"\n\
                        [mcp.servers.remote]\nurl = \"https://r.example.com/mcp\"\n\
@@ -297,18 +335,29 @@ mod tests {
                 refused,
                 [
                     ("broken", Origin::User),
+                    ("teamed", Origin::User),
+                    ("typed", Origin::User),
+                    ("venice", Origin::User),
                     ("docs", Origin::ProjectConfig),
                     ("remote", Origin::ProjectConfig)
                 ]
             );
+            let why = |at: usize| made.refused[at].why.as_str();
+            assert!(why(0).contains("neither"), "{:?}", made.refused);
+            // Another client's key refuses that server alone (the full
+            // review), and a built-in provider's key is withheld though the
+            // user wrote no `key_env` for it.
+            // A variable a provider's header reads is a provider's key.
+            assert!(why(1).contains("TEAM_TOKEN"), "{}", why(1));
+            assert!(why(2).contains("unknown key"), "{}", why(2));
+            assert!(why(3).contains("VENICE_API_KEY"), "{}", why(3));
+            assert!(why(4).contains("your own configuration"));
             assert!(
-                made.refused[0].why.contains("neither"),
-                "{:?}",
-                made.refused
+                why(5).contains("CINERIS_MCP_REMOTE_AUTHORIZATION"),
+                "{}",
+                why(5)
             );
-            assert!(made.refused[1].why.contains("your own configuration"));
-            assert!(made.refused[2].why.contains("REMOTE_AUTHORIZATION"));
-            let notice = made.refused[1].notice();
+            let notice = made.refused[4].notice();
             assert!(
                 notice.starts_with("The project's MCP server `docs` is not started"),
                 "{notice}"

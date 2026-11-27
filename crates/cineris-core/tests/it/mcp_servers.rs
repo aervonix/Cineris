@@ -177,8 +177,10 @@ async fn send(pipes: &ServerPipes, line: &str) {
 /// - `flood BYTES`: says `ready`, writes a line of that many bytes, then
 ///   reads its input to its end and exits.
 /// - `ignore`: starts a child that runs until it is killed, says `child
-///   PID` and `ready`, reads its input to its end, says `eof`, and then
-///   runs on, its input closed, until it is killed.
+///   PID`, `self PID` and `ready`, reads its input to its end, says `eof`,
+///   and then runs on, its input closed, until it is killed.
+/// - `leave`: starts such a child, says `child PID`, `self PID` and
+///   `ready`, and exits, leaving the child running.
 /// - `stderr`: writes 20 KiB to standard error, then `token: ` and the
 ///   variable `TOKEN`, then `the end`; says `ready`, and reads its input to
 ///   its end.
@@ -237,12 +239,11 @@ pub(crate) fn serve_and_exit(arguments: &[OsString]) -> ! {
             drop(out);
             to_end();
         }
-        "ignore" => {
+        "ignore" | "leave" => {
             let exe = std::env::current_exe().expect("the test binary has a path");
             #[expect(
                 clippy::zombie_processes,
-                reason = "the child runs until its tree is killed, and the server never ends first \
-                          by itself"
+                reason = "the child runs until its tree is killed, and the server never waits for it"
             )]
             let child = std::process::Command::new(exe)
                 .args([
@@ -256,10 +257,13 @@ pub(crate) fn serve_and_exit(arguments: &[OsString]) -> ! {
                 .spawn()
                 .expect("start the child");
             say(&format!("child {}", child.id()));
+            say(&format!("self {}", std::process::id()));
             say("ready");
-            to_end();
-            say("eof");
-            crate::hang();
+            if mode == "ignore" {
+                to_end();
+                say("eof");
+                crate::hang();
+            }
         }
         "stderr" => {
             let mut err = std::io::stderr().lock();
@@ -311,6 +315,9 @@ fn sys_a_server_answers_each_line_and_ends_with_its_input() {
         .spawner(true)
         .spawn(&local(program, args, Vec::new()))
         .expect("the server starts");
+    // What waits for the client of its output is at most 16 MiB of lines
+    // at the cap (the full review: 64 such lines were 256 MiB).
+    assert!(pipes.output.max_capacity() * MAX_LINE <= cineris_core::mcp::QUEUED_BYTES);
     runtime().block_on(async {
         assert_eq!(said(&mut pipes.output).await.as_deref(), Some("ready"));
         for line in ["one", "{\"jsonrpc\":\"2.0\",\"id\":1}"] {
@@ -593,6 +600,7 @@ fn sys_a_server_that_ignores_its_closed_input_is_killed_after_its_grace() {
     runtime().block_on(async {
         let child = said(&mut pipes.output).await.expect("its child");
         let child: u32 = child.strip_prefix("child ").unwrap().parse().unwrap();
+        said(&mut pipes.output).await.expect("its own id");
         assert_eq!(said(&mut pipes.output).await.as_deref(), Some("ready"));
         let mut shutdown = std::pin::pin!(pipes.process.shutdown(GRACE));
         // Polled once: the input is closed and the grace begins.
@@ -649,6 +657,7 @@ fn sys_a_servers_end_asked_for_twice_at_once_ends_it_once() {
         .expect("the server starts");
     runtime().block_on(async {
         said(&mut pipes.output).await.expect("its child");
+        said(&mut pipes.output).await.expect("its own id");
         assert_eq!(said(&mut pipes.output).await.as_deref(), Some("ready"));
         let mut first = std::pin::pin!(pipes.process.shutdown(GRACE));
         let mut second = std::pin::pin!(pipes.process.shutdown(GRACE));
@@ -778,6 +787,19 @@ fn sys_a_confined_server_writes_only_its_own_folder_and_reaches_the_network_only
     );
     assert!(!written.exists());
     assert_eq!(ask("write", "@tmp", false), "write ok");
+    // Not the system's temporary folder outside its own (the full review).
+    for outside in [
+        std::env::temp_dir().join(format!("cin-mcp-outside-{}", std::process::id())),
+        PathBuf::from(format!("/tmp/cin-mcp-outside-{}", std::process::id())),
+    ] {
+        assert_eq!(
+            ask("write", &outside.display().to_string(), false),
+            "write refused",
+            "{}",
+            outside.display()
+        );
+        assert!(!outside.exists());
+    }
 
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap().to_string();
@@ -851,4 +873,266 @@ fn sys_a_cmd_shim_is_started_and_never_runs_a_program_from_the_workspace() {
         assert_eq!(said(&mut pipes.output).await.as_deref(), Some("done"));
     });
     assert!(!marker.exists(), "a program the workspace holds was run");
+}
+
+/// The environment a test's server is given beside the base: a provider's
+/// key, a configured provider's and one of the harness's own, each a value
+/// no server may see.
+fn with_secrets() -> Vec<(OsString, OsString)> {
+    let mut inherited = base_env();
+    for (name, value) in [
+        ("ANTHROPIC_API_KEY", "sk-ant-never-0123456789"),
+        ("GATEWAY_KEY", "gateway-never-0123456789"),
+        ("CINERIS_SECRET", "cineris-never-0123456789"),
+    ] {
+        inherited.push((name.into(), value.into()));
+    }
+    inherited
+}
+
+/// A value is read from the environment by a variable's exact name, and
+/// the name found is the one judged: a source written as a pattern is
+/// refused, never read as a prefix (the full review: `ANTHROPIC_API_KE*`
+/// gave a server the key).
+#[test]
+fn a_source_written_as_a_pattern_is_never_read() {
+    let inherited = with_secrets();
+    let withheld = ["GATEWAY_KEY".to_owned()];
+    for source in [
+        "ANTHROPIC_API_KE*",
+        "GATEWAY*",
+        "CINERIS*",
+        "*",
+        "ANTHROPIC_API_KE?",
+    ] {
+        let made = cineris_core::mcp::server_env(
+            &[EnvEntry {
+                name: "GIVEN".to_owned(),
+                value: ValueSource::Env(source.to_owned()),
+            }],
+            &cineris_core::mcp::EnvParts {
+                inherited: &inherited,
+                withheld: &withheld,
+                avoid: &[],
+                temp: Path::new("/state/mcp/1/tmp"),
+                cmd: None,
+                windows: cfg!(windows),
+            },
+        );
+        assert!(
+            matches!(&made, Err(SpawnError::Refused(why)) if why.contains("pattern")),
+            "`{source}`: {:?}",
+            made.as_ref().map(|made| made.vars.len())
+        );
+    }
+}
+
+/// End to end: a server whose entry takes `ANTHROPIC_API_KE*` is not
+/// started, and so never given the key.
+#[test]
+fn sys_a_server_is_never_given_a_providers_key_through_a_pattern() {
+    let place = Place::new("pattern");
+    let spawner = ServerSpawner::new(place.options(true, with_secrets()));
+    let (program, args) = this_server("env", &[]);
+    let mut server = local(
+        program,
+        args,
+        vec![EnvEntry {
+            name: "GIVEN".to_owned(),
+            value: ValueSource::Env("ANTHROPIC_API_KE*".to_owned()),
+        }],
+    );
+    server.origin = Origin::ProjectConfig;
+    let refused = spawner.spawn(&server).map(drop).unwrap_err();
+    assert!(matches!(refused, SpawnError::Refused(_)), "{refused:?}");
+}
+
+/// A `cwd` that leads into the workspace by another way than its text
+/// counts as the workspace: a link on Unix; on Windows another case and a
+/// trailing dot, which Windows takes off.
+#[test]
+fn sys_a_folder_that_leads_into_the_workspace_counts_as_the_workspace() {
+    let place = Place::new("folder_link");
+    let workspace = place.workspace();
+    let (program, args) = this_server("where", &[]);
+    #[cfg(unix)]
+    let ways = {
+        let link = place.scratch.join("outside").join("to-work");
+        std::os::unix::fs::symlink(&workspace, &link).unwrap();
+        vec![link]
+    };
+    #[cfg(windows)]
+    let ways = {
+        let plain = place.scratch.join("work");
+        let text = plain.display().to_string();
+        vec![
+            PathBuf::from(text.to_uppercase()),
+            PathBuf::from(format!("{text}.")),
+        ]
+    };
+    for way in ways {
+        let mut server = local(program.clone(), args.clone(), Vec::new());
+        if let Launch::Local { cwd, .. } = &mut server.launch {
+            *cwd = Some(way.display().to_string());
+        }
+        let mut pipes = place.spawner(false).spawn(&server).expect("it starts");
+        let folder =
+            runtime().block_on(async { said(&mut pipes.output).await.unwrap_or_default() });
+        let folder = PathBuf::from(folder.strip_prefix("cwd ").unwrap());
+        assert!(
+            !cineris_base::location_within(&folder, &workspace),
+            "{}: {}",
+            way.display(),
+            folder.display()
+        );
+        assert!(folder.ends_with("work"), "{}", folder.display());
+    }
+}
+
+/// The servers' own folders are never made inside the workspace or a write
+/// root, where a command could put something in a server's way.
+#[test]
+fn a_servers_folders_inside_the_workspace_are_refused() {
+    let place = Place::new("folders_inside");
+    let mut options = place.options(true, base_env());
+    options.folders = place.workspace().join(".state");
+    let (program, args) = this_server("echo", &[]);
+    let refused = ServerSpawner::new(options)
+        .spawn(&local(program, args, Vec::new()))
+        .map(drop)
+        .unwrap_err();
+    assert!(
+        matches!(&refused, SpawnError::Failed(why) if why.contains("inside the workspace")),
+        "{refused:?}"
+    );
+}
+
+/// Whether the process `id` has ended (Linux): it is gone, or a zombie that
+/// is no longer run.
+#[cfg(target_os = "linux")]
+fn ended(id: u32) -> bool {
+    std::fs::read_to_string(format!("/proc/{id}/stat")).map_or(true, |stat| {
+        stat.rsplit(')')
+            .next()
+            .is_some_and(|rest| rest.trim_start().starts_with('Z'))
+    })
+}
+
+/// Waits, for up to half a minute, until the process `id` has ended
+/// (Linux): a kill takes milliseconds, so this bounds a failure.
+#[cfg(target_os = "linux")]
+fn ends_soon(id: u32) -> bool {
+    let limit = std::time::Instant::now() + Duration::from_secs(30);
+    while !ended(id) {
+        if std::time::Instant::now() > limit {
+            return false;
+        }
+        std::thread::yield_now();
+    }
+    true
+}
+
+/// A server whose handle is dropped while it runs, its input closed and
+/// ignored, is killed, its tree with it.
+#[cfg(target_os = "linux")]
+#[test]
+fn sys_a_server_dropped_while_it_runs_is_killed() {
+    let place = Place::new("dropped");
+    let (program, args) = this_server("ignore", &[]);
+    let mut pipes = place
+        .spawner(true)
+        .spawn(&local(program, args, Vec::new()))
+        .expect("the server starts");
+    let (child, own) = runtime().block_on(async {
+        let child = said(&mut pipes.output).await.expect("its child");
+        let own = said(&mut pipes.output).await.expect("its own id");
+        assert_eq!(said(&mut pipes.output).await.as_deref(), Some("ready"));
+        (
+            child
+                .strip_prefix("child ")
+                .unwrap()
+                .parse::<u32>()
+                .unwrap(),
+            own.strip_prefix("self ").unwrap().parse::<u32>().unwrap(),
+        )
+    });
+    assert!(!ended(own));
+    drop(pipes.process);
+    assert!(ends_soon(own), "the server runs on after its handle went");
+    assert!(ends_soon(child), "its child runs on after its handle went");
+}
+
+/// A server that exits by itself and leaves a child running has its tree
+/// ended with it: the child is killed by the time its end is told, and its
+/// output then ends; and its own folder is gone by then.
+#[test]
+fn sys_a_server_that_ends_by_itself_leaves_nothing_running_and_no_folder() {
+    let place = Place::new("leave");
+    let (program, args) = this_server("leave", &[]);
+    let mut pipes = place
+        .spawner(true)
+        .spawn(&local(program, args, Vec::new()))
+        .expect("the server starts");
+    runtime().block_on(async {
+        let child = said(&mut pipes.output).await.expect("its child");
+        let child: u32 = child.strip_prefix("child ").unwrap().parse().unwrap();
+        said(&mut pipes.output).await.expect("its own id");
+        assert_eq!(said(&mut pipes.output).await.as_deref(), Some("ready"));
+        assert_eq!(pipes.process.exited().await, "exited with code 0");
+        #[cfg(target_os = "linux")]
+        assert!(ended(child), "its child runs on after it ended");
+        #[cfg(not(target_os = "linux"))]
+        let _ = child;
+        while pipes.output.recv().await.is_some() {}
+    });
+    // Its own folder went before its end was told.
+    let folders: Vec<_> = std::fs::read_dir(place.scratch.join("state").join("mcp"))
+        .map(|entries| entries.collect())
+        .unwrap_or_default();
+    assert!(folders.is_empty(), "{folders:?}");
+}
+
+/// A `command` or a `cwd` through `/proc` is refused: `/proc/self/cwd` is
+/// the harness's folder where it is checked, and the server's where it
+/// starts.
+#[cfg(target_os = "linux")]
+#[test]
+fn sys_a_command_or_folder_through_proc_is_refused() {
+    let place = Place::new("proc");
+    let spawner = place.spawner(true);
+    let refused = spawner
+        .spawn(&local(
+            "/proc/self/cwd/server".to_owned(),
+            Vec::new(),
+            Vec::new(),
+        ))
+        .map(drop)
+        .unwrap_err();
+    assert!(
+        matches!(&refused, SpawnError::Refused(why) if why.contains("/proc")),
+        "{refused:?}"
+    );
+    let (program, args) = this_server("where", &[]);
+    let mut server = local(program, args, Vec::new());
+    if let Launch::Local { cwd, .. } = &mut server.launch {
+        *cwd = Some("/proc/self/cwd".to_owned());
+    }
+    let refused = spawner.spawn(&server).map(drop).unwrap_err();
+    assert!(
+        matches!(&refused, SpawnError::Refused(why) if why.contains("/proc")),
+        "{refused:?}"
+    );
+    // Nor is a `PATH` entry there given: the server would find a program
+    // in its own folder through it, the workspace in a trusted project.
+    let mut inherited = base_env();
+    inherited.retain(|(name, _)| name != "PATH");
+    inherited.push(("PATH".into(), "/proc/self/cwd/bin:/usr/bin:/bin".into()));
+    let (program, args) = this_server("env", &[]);
+    let mut pipes = ServerSpawner::new(place.options(true, inherited))
+        .spawn(&local(program, args, Vec::new()))
+        .expect("it starts");
+    let given =
+        runtime().block_on(async { said(&mut pipes.output).await.expect("its environment") });
+    let given: Value = serde_json::from_str(given.strip_prefix("env ").unwrap()).unwrap();
+    assert_eq!(given["PATH"], "/usr/bin:/bin");
 }

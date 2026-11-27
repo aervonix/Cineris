@@ -30,7 +30,7 @@ use crate::env::Env;
 use crate::key::KeyPath;
 use crate::layer::{Diagnostic, LayerKind, Origin, Severity, Withheld};
 use crate::merge::{self, LayerView, Merger, Source};
-use crate::schema::{self, Effect, Lookup, Meta, Setting, Settings};
+use crate::schema::{self, Effect, EnvText, Lookup, Meta, Setting, Settings};
 use crate::validate::{self, Checked};
 
 /// A configuration file larger than this is refused. A real one is a few
@@ -510,7 +510,7 @@ pub(crate) fn merge_layers(
     if failed(&diagnostics) {
         return Err(LoadFailure { diagnostics });
     }
-    let settings = match Settings::read(&Value::Table(merger.values.clone())) {
+    let mut settings = match Settings::read(&Value::Table(merger.values.clone())) {
         Ok(settings) => settings,
         Err(message) => {
             // Every layer was checked against the same schema, so this is
@@ -527,7 +527,13 @@ pub(crate) fn merge_layers(
             return Err(LoadFailure { diagnostics });
         }
     };
-    let project_mcp_servers = mcp_servers(layers, &merger, &settings, &mut diagnostics);
+    let project_mcp_servers = mcp_servers(
+        layers,
+        &merger,
+        &mut settings,
+        profile.as_deref(),
+        &mut diagnostics,
+    );
     Ok(Loaded {
         settings,
         diagnostics,
@@ -620,26 +626,24 @@ fn project_hooks(
 }
 
 /// The MCP servers of the configuration (since step 30, `crate::mcp`):
-/// each of the user's, merged, judged whole, with a warning naming one
-/// that is not started as it is; and the project's, read apart from every
-/// other layer, as its hooks are ([`project_hooks`]), each judged as a
-/// project's. A project's server whose name the managed file locks, or
-/// every one where it locks `mcp` or `mcp.servers`, is left out, with a
-/// note.
+/// each of the user's, merged, with a warning naming one that is not
+/// started as it is ([`refuse_unread`] and `crate::mcp::server_problem`);
+/// and the project's, read apart from every other layer, as its hooks are
+/// ([`project_hooks`]), each judged as a project's. A project's server
+/// whose name the managed file locks, or every one where it locks `mcp`
+/// or `mcp.servers`, is left out, with a note.
 fn mcp_servers(
     layers: &[FileLayer],
     merger: &Merger,
-    settings: &Settings,
+    settings: &mut Settings,
+    profile: Option<&str>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Vec<crate::mcp::ProjectMcpServer> {
-    let keys: Vec<String> = settings
-        .providers
-        .values()
-        .filter_map(|provider| provider.key_env.clone())
-        .collect();
+    refuse_unread(settings, diagnostics, profile);
+    let keys = crate::mcp::provider_keys(settings);
     let env_remove = &settings.shell.env_remove;
-    let refused = |why: &str| format!("this MCP server is not started: {why}");
-    for (name, entry) in &settings.mcp.servers {
+    let refused = |why: &str| format!("{}: {why}", crate::mcp::SERVER_NOT_STARTED);
+    for (name, entry) in &settings.mcp.servers.entries {
         let Some(why) = crate::mcp::server_problem(name, entry, false, &keys, env_remove) else {
             continue;
         };
@@ -658,6 +662,20 @@ fn mcp_servers(
             message: refused(&why),
         });
     }
+    // What the user's own servers take from the environment: a project's
+    // header never takes one of them (the full review of step 30's first
+    // part).
+    let taken: Vec<(String, String)> = settings
+        .mcp
+        .servers
+        .entries
+        .iter()
+        .flat_map(|(name, entry)| {
+            crate::mcp::sources(entry)
+                .into_iter()
+                .map(move |variable| (variable, name.clone()))
+        })
+        .collect();
 
     let mut entries: BTreeMap<String, (toml::Table, Origin)> = BTreeMap::new();
     for layer in layers.iter().filter(|layer| layer.kind.is_project()) {
@@ -670,9 +688,6 @@ fn mcp_servers(
             continue;
         };
         for (name, entry) in servers {
-            let Value::Table(entry) = entry else {
-                continue;
-            };
             let key = KeyPath::new(["mcp", "servers", name.as_str()]);
             let origin = Origin {
                 layer: layer.kind,
@@ -696,45 +711,109 @@ fn mcp_servers(
             let (merged, _) = entries
                 .entry(name.clone())
                 .or_insert_with(|| (toml::Table::new(), origin));
-            for (field, value) in entry {
-                merged.insert(field.clone(), value.clone());
+            // An entry that is not a table is a problem of its own, which
+            // the check said already.
+            if let Value::Table(entry) = entry {
+                for (field, value) in entry {
+                    merged.insert(field.clone(), value.clone());
+                }
             }
         }
     }
+    // What the check could not read of a project's entries.
+    let unread = |name: &str| {
+        diagnostics.iter().find_map(|diagnostic| {
+            let key = diagnostic.key.as_ref()?;
+            let project = diagnostic.layer.is_some_and(LayerKind::is_project);
+            (project
+                && key.parts().first().is_some_and(|first| first == "mcp")
+                && crate::mcp::server_of(key) == Some(name)
+                && diagnostic.message.ends_with(crate::mcp::SERVER_NOT_STARTED))
+            .then(|| diagnostic.message.clone())
+        })
+    };
     let mut servers = Vec::with_capacity(entries.len());
+    let mut said = Vec::new();
     for (name, (entry, origin)) in entries {
-        let key = KeyPath::new(["mcp", "servers", name.as_str()]);
-        match schema::McpServerSettings::read(&Value::Table(entry.clone())) {
-            Ok(settings) => {
-                let problem = crate::mcp::server_problem(&name, &settings, true, &keys, env_remove);
+        let read = schema::McpServerSettings::read(&Value::Table(entry.clone()));
+        let (settings, problem) = match (unread(&name), read) {
+            (Some(why), read) => (read.unwrap_or_default(), Some(why)),
+            (None, Err(why)) => (schema::McpServerSettings::default(), Some(why)),
+            (None, Ok(settings)) => {
+                let problem =
+                    crate::mcp::server_problem(&name, &settings, true, &keys, env_remove).or_else(
+                        || {
+                            settings.headers.0.iter().find_map(|(header, value)| {
+                                let EnvText::Env(variable) = value else {
+                                    return None;
+                                };
+                                let upper = variable.to_ascii_uppercase();
+                                taken.iter().find(|(own, _)| *own == upper).map(|(_, server)| {
+                                format!(
+                                    "its header `{}` would take `{}`, which your own server \
+                                     `{}` takes",
+                                    cineris_base::in_code(header),
+                                    cineris_base::in_code(variable),
+                                    cineris_base::in_code(server)
+                                )
+                            })
+                            })
+                        },
+                    );
                 if let Some(why) = &problem {
-                    diagnostics.push(Diagnostic {
+                    said.push(Diagnostic {
                         severity: Severity::Warning,
                         layer: Some(origin.layer),
                         file: origin.file.clone(),
                         line: origin.line,
-                        key: Some(key),
+                        key: Some(KeyPath::new(["mcp", "servers", name.as_str()])),
                         message: refused(why),
                     });
                 }
-                servers.push(crate::mcp::ProjectMcpServer::new(
-                    name, settings, origin, problem, entry,
-                ));
+                (settings, problem)
             }
-            // Each layer was checked already, so each entry reads.
-            Err(message) => diagnostics.push(Diagnostic {
-                severity: Severity::Warning,
-                layer: Some(origin.layer),
-                file: origin.file.clone(),
-                line: origin.line,
-                key: Some(key),
-                message: format!(
-                    "the project's MCP server could not be read, and is not used: {message}"
-                ),
-            }),
-        }
+        };
+        servers.push(crate::mcp::ProjectMcpServer::new(
+            name, settings, origin, problem, entry,
+        ));
     }
+    diagnostics.append(&mut said);
     servers
+}
+
+/// Takes out of the user's servers each that a key of its entry refuses: a
+/// key the configuration's check did not know or could not read, which it
+/// said as a warning naming the server (`crate::mcp::SERVER_NOT_STARTED`),
+/// in a layer of the user's at its top level, or in the profile applied.
+/// What `Settings` read of the merged values cannot tell: a key it does not
+/// know is not in them at all.
+pub(crate) fn refuse_unread(
+    settings: &mut Settings,
+    diagnostics: &[Diagnostic],
+    profile: Option<&str>,
+) {
+    for diagnostic in diagnostics {
+        let (Some(key), Some(layer)) = (&diagnostic.key, diagnostic.layer) else {
+            continue;
+        };
+        if layer.is_project() || !diagnostic.message.ends_with(crate::mcp::SERVER_NOT_STARTED) {
+            continue;
+        }
+        let parts = key.parts();
+        let applied = match parts {
+            [first, name, ..] if first == "profiles" => profile == Some(name.as_str()),
+            _ => true,
+        };
+        let Some(server) = crate::mcp::server_of(key).filter(|_| applied) else {
+            continue;
+        };
+        let servers = &mut settings.mcp.servers;
+        servers.entries.remove(server);
+        servers
+            .refused
+            .entry(server.to_owned())
+            .or_insert_with(|| diagnostic.message.clone());
+    }
 }
 
 /// Reads, parses and checks one file, named `file` and read from
@@ -1351,7 +1430,7 @@ impl Loaded {
                 .filter(|(at, _)| taken(at))
                 .map(|(at, origins)| (at.clone(), origins.clone())),
         );
-        let settings =
+        let mut settings =
             Settings::read(&Value::Table(values.clone())).map_err(|message| LoadFailure {
                 diagnostics: vec![Diagnostic {
                     severity: Severity::Error,
@@ -1365,6 +1444,7 @@ impl Loaded {
                     ),
                 }],
             })?;
+        refuse_unread(&mut settings, &newer.diagnostics, newer.profile.as_deref());
         let withheld = self
             .withheld
             .iter()

@@ -817,11 +817,17 @@ impl HeaderVariables {
 /// provider's key, one of the harness's own, or one that tells the system's
 /// loader what to run (`crate::mcp::loads_code`).
 fn givable(server: &ImportedServer) -> bool {
+    // A variable is taken from the environment by its own name, which must
+    // be one and never a pattern (`*`: the full review of step 30's first
+    // part).
     let named = server
         .env
         .iter()
-        .chain(server.headers.iter().map(|header| &header.name))
-        .all(|name| crate::mcp::bad_variable_name(name).is_none());
+        .all(|name| crate::mcp::bad_source_name(name).is_none())
+        && server
+            .headers
+            .iter()
+            .all(|header| crate::mcp::bad_variable_name(&header.name).is_none());
     named
         && !server
             .env
@@ -2500,11 +2506,12 @@ mod tests {
         assert_eq!(variable(&servers, "docs", "Token"), "DOCS_TOKEN_2");
         assert_eq!(variable(&servers, "x", "X-Token"), "X_X_TOKEN");
         assert_eq!(variable(&servers, "x", "X_Token"), "X_X_TOKEN_2");
-        // The configuration's own providers' keys, which this crate does
-        // not know alone, in any case.
+        // A built-in provider's key is a known one (since step 30's full
+        // review), and a configured provider's, which this crate does not
+        // know alone, in any case.
         assert_eq!(
             variable(&servers, "openrouter", "api-key"),
-            "OPENROUTER_API_KEY"
+            "MCP_OPENROUTER_API_KEY"
         );
         HeaderVariables::new(["openrouter_api_key"]).name(&mut servers);
         assert_eq!(

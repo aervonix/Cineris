@@ -27,12 +27,19 @@ use std::ffi::{OsStr, OsString};
 use std::sync::{Mutex, PoisonError};
 
 /// The variables that are always taken out: the keys of the providers the
-/// harness knows, whatever list a caller gives. The core adds the key
-/// variable of every provider it is configured with ([`Withheld`]).
+/// harness knows, whatever list a caller gives, the built-in providers'
+/// among them (`cineris-core` checks its built-in table against this list).
+/// The core adds the key variable of every provider it is configured with
+/// ([`Withheld`]). Since step 30's full review this is also the one list a
+/// configuration's MCP server is held to as it loads, where the provider
+/// layer's table cannot be seen.
 pub const KNOWN_KEYS: &[&str] = &[
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",
     "OPENAI_API_KEY",
+    "OPENROUTER_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "VENICE_API_KEY",
     "GEMINI_API_KEY",
     "GOOGLE_API_KEY",
 ];

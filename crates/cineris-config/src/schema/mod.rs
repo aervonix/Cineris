@@ -53,9 +53,9 @@ pub use sections::{
 };
 pub use types::{
     BackspaceChoice, Bindings, ColorChoice, DensityChoice, EnvText, ExposeChoice, GlyphChoice,
-    Headers, HookEventName, PresenterChoice, Profiles, ReasoningShown, ReasoningVisibility,
-    Reserved, ServerAddress, ServerArgs, ServerProgram, SessionDurability, StoreChoice,
-    ToolOutputChoice, UsageRanges, Variables, VerifyMode, Weekday,
+    Headers, HookEventName, McpServers, PresenterChoice, Profiles, ReasoningShown,
+    ReasoningVisibility, Reserved, ServerAddress, ServerArgs, ServerProgram, SessionDurability,
+    StoreChoice, ToolOutputChoice, UsageRanges, Variables, VerifyMode, Weekday,
 };
 pub(crate) use types::{magnitude, milliseconds_as_text};
 

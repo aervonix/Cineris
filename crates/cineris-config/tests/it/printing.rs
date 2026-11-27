@@ -55,14 +55,17 @@ fn no_debug_or_display_form_holds_a_key() {
             &format!("{}{}", header("azure"), elsewhere()),
         )
         .layer(LayerKind::Project, &header("gateway"))
-        // A project's server, kept apart. (A project's values,
-        // its local file's too, are shown whole to the trust question, but
-        // what the formats know, since the review of the step 25 fixes:
-        // `imports::the_trust_question_shows_a_projects_command_lines_whole`.
-        // The key the user's own file holds is the canary.)
+        // A project's server, kept apart, holding the canary as a literal
+        // of its `env`: no `Debug` form shows it (the full review of step
+        // 30's first part). Only the trust question shows a project's
+        // values whole, but what the formats know (since the review of the
+        // step 25 fixes:
+        // `imports::the_trust_question_shows_a_projects_command_lines_whole`).
         .layer(
             LayerKind::ProjectLocal,
-            "[mcp.servers.theirs]\ncommand = \"their-mcp\"\n",
+            &format!(
+                "[mcp.servers.theirs]\ncommand = \"their-mcp\"\nenv = {{ TOKEN = \"{KEY}\" }}\n"
+            ),
         );
     let env = machine.env().clone();
     let loaded = machine.load();

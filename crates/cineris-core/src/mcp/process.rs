@@ -25,9 +25,10 @@
 //!   client down): the second waits for the first, and then returns at
 //!   once, the server having ended.
 //!
-//! The client's queues are bounded ([`LINES_QUEUED`] lines each way): a
-//! client that does not read holds the server, and a server that does not
-//! read holds the client's sends.
+//! The client's queues are bounded ([`OUTPUT_QUEUED`] lines of the
+//! server's output, at most [`QUEUED_BYTES`], and [`LINES_QUEUED`] of its
+//! input): a client that does not read holds the server, and a server that
+//! does not read holds the client's sends.
 
 #![allow(
     clippy::disallowed_types,
@@ -55,8 +56,19 @@ pub const MAX_LINE: usize = 4 * 1024 * 1024;
 /// How much of a server's standard error is kept: its last 8 KiB.
 pub const STDERR_KEPT: usize = 8 * 1024;
 
-/// How many lines each of the client's queues holds.
+/// How many lines the client's queue of input holds: the client's own.
 pub const LINES_QUEUED: usize = 64;
+
+/// The most bytes of a server's output that wait for the client: 16 MiB.
+pub const QUEUED_BYTES: usize = 16 * 1024 * 1024;
+
+/// How many lines of a server's output wait for the client: as many as
+/// [`QUEUED_BYTES`] holds of the longest, so that a server writing lines at
+/// the cap holds no more than that in the harness (the full review of step
+/// 30's first part: 64 lines were 256 MiB). Past it, the reader waits, and
+/// the server's writes wait on the pipe.
+pub const OUTPUT_QUEUED: usize = QUEUED_BYTES / MAX_LINE;
+const _: () = assert!(OUTPUT_QUEUED >= 1 && OUTPUT_QUEUED * MAX_LINE <= QUEUED_BYTES);
 
 /// The grace between two stages of stopping a server's tree, after its own
 /// grace: a command's ([`cineris_tools::process::DEFAULT_GRACE`]).
@@ -112,6 +124,9 @@ pub(crate) fn start(
         shown,
         folder,
     } = prepared;
+    // Removed with whatever returns first: a start that fails here, the
+    // waiter's thread when the server has ended, or that thread not made.
+    let folder = OwnFolder(folder);
     let setup = |error: std::io::Error| {
         SpawnError::Failed(format!("`{shown}` could not be set up: {error}"))
     };
@@ -122,27 +137,26 @@ pub(crate) fn start(
     let (readers_done, readers) = watch::channel(0u8);
     let (started_sender, started) = std::sync::mpsc::channel();
 
-    let server_folder = folder.clone();
     let waiter = std::thread::Builder::new()
         .name("cineris-mcp-server".to_owned())
         .spawn(move || {
             let tree = match Tree::spawn(command, guard.as_ref()) {
                 Ok(tree) => tree,
                 Err(error) => {
+                    drop(folder);
                     let _ = started_sender.send(Err(error));
-                    remove_folder(&server_folder);
                     return;
                 }
             };
             let _ = started_sender.send(Ok(tree.clone()));
             let ended = tree.wait();
-            // Whatever it left running ends with it.
+            // Whatever it left running ends with it, and its folder goes,
+            // before its end is told.
             tree.end();
+            drop(folder);
             let _ = exit_sender.send(Some(words(&ended, confined)));
-            remove_folder(&server_folder);
         });
     if let Err(error) = waiter {
-        remove_folder(&folder);
         return Err(setup(error));
     }
     let tree = match started.recv() {
@@ -164,7 +178,7 @@ pub(crate) fn start(
         closing: AtomicBool::new(false),
     });
     let (input, lines_in) = mpsc::channel::<Vec<u8>>(LINES_QUEUED);
-    let (lines_out, output) = mpsc::channel(LINES_QUEUED);
+    let (lines_out, output) = mpsc::channel(OUTPUT_QUEUED);
     let (stdout, stdout_stop) = split.stdout;
     let (stderr, stderr_stop) = split.stderr;
     let threads = [
@@ -226,12 +240,17 @@ fn words(ended: &std::io::Result<Exit>, confined: bool) -> String {
     }
 }
 
-/// Removes a server's own folder and everything in it, following no link.
-fn remove_folder(folder: &std::path::Path) {
-    if let Err(error) = std::fs::remove_dir_all(folder)
-        && error.kind() != std::io::ErrorKind::NotFound
-    {
-        tracing::warn!(folder = %folder.display(), %error, "an MCP server's folder was not removed");
+/// A server's own folder, removed with everything in it, following no link,
+/// when this is dropped.
+struct OwnFolder(PathBuf);
+
+impl Drop for OwnFolder {
+    fn drop(&mut self) {
+        if let Err(error) = std::fs::remove_dir_all(&self.0)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(folder = %self.0.display(), %error, "an MCP server's folder was not removed");
+        }
     }
 }
 
@@ -449,6 +468,20 @@ impl Drop for Running {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A server's folder goes when its owner is dropped, whatever ended the
+    /// start: a pipe or a thread that could not be made returns early and
+    /// drops it (the full review of step 30's first part).
+    #[test]
+    fn a_servers_folder_goes_with_its_owner() {
+        let scratch = cineris_testkit::Scratch::outside("cineris-core-mcp-process", "folder");
+        let folder = scratch.dir("own");
+        std::fs::write(folder.join("tmp-file"), "x").unwrap();
+        drop(OwnFolder(folder.clone()));
+        assert!(!folder.exists());
+        // One already gone is no failure.
+        drop(OwnFolder(folder));
+    }
 
     #[test]
     fn an_end_is_said_in_words() {
