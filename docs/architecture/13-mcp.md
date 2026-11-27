@@ -54,6 +54,10 @@ The search is a simple ranked match over names and descriptions, done in the har
 ## Configuration
 
 ```toml
+[mcp]
+start_timeout_ms = 10000             # how long a start may take
+direct_share = 5                     # percent of the context window for directly exposed tools
+
 [mcp.servers.docs]
 command = "docs-mcp"                 # local server over standard I/O
 args = ["--root", "."]
@@ -66,10 +70,18 @@ url = "https://tracker.example.com/mcp"      # remote server
 headers = { Authorization = { env = "TRACKER_AUTH" } }
 expose = "direct"
 tools = ["create_issue", "find_issue"]
+deny_tools = ["delete_issue"]        # never offer these
 timeout_ms = 30000
+enabled = true
 ```
 
-- A server is local (`command`) or remote (`url`). The schema is ours. `cineris mcp add` writes entries.
+- A server is local (`command`) or remote (`url`), never both. The schema is ours. `cineris mcp add` writes entries. **Declared in step 30** (`[mcp]` `start_timeout_ms`, `direct_share`; each server's `command`, `args`, `cwd`, `env`, `url`, `headers`, `network`, `description`, `enabled`, `expose`, `tools`, `deny_tools`, `start_timeout_ms`, `timeout_ms`), enforced: a key the build does not know refuses the file. A server's name is one to 64 of the ASCII letters, digits, `_`, `-` and `.`. An entry that cannot be started as it is (both or neither of `command` and `url`, a local key on a remote server or the reverse, a variable's or a header's name that is empty, holds `=` or a NUL or begins with a digit, a value taken from a provider's key, a `CINERIS_` variable or one of `shell.env_remove`) is refused with a warning naming it, and the rest of the configuration loads ([08-configuration.md](08-configuration.md), "Sections").
+- **A project's servers are kept apart** (`.cineris/config.toml`'s `[mcp.servers]`), as its hooks are: never merged with the user's, listed as proposed, each started only once the project is trusted and the entry, as it is now, approved; a project server with the name of one of the user's is refused.
+- **What a server is given, and the limits you meet** (step 30):
+  - **Its environment is an explicit list:** `PATH` (its absolute folders, none inside the workspace or a writable root), the home folder, the locale (`LANG`, `LC_*`, `TZ`), the user's name, on Windows the system's own variables; its own temporary folder as `TMPDIR` (`TEMP` and `TMP` on Windows); and each of its `env`. **Nothing else of your environment** is given: a server that needs a token is given it by name, `env = { GITHUB_TOKEN = { env = "GITHUB_TOKEN" } }`. A value read from your environment is masked by value in every log from then on. **A variable that tells the system's loader what to run is refused** in any server's `env`, yours and a project's alike (`LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT` and every `LD_` variable, `GLIBC_TUNABLES`, `DYLD_…`): a server's environment is set on the sandbox launcher's own process, before it confines itself, so such a variable would run code unconfined. `NODE_OPTIONS` and `PYTHONPATH` are given, and shown as what they are when a server is approved.
+  - **In a project that is not trusted, a server runs in an empty folder of its own**, not in the workspace, and a `cwd` inside the workspace counts as the workspace: there `args = ["--root", "."]` names that empty folder, not the project. So nothing a repository holds (`./node_modules/.bin`, a module `python -m` imports, a program `cmd.exe` finds where it runs) runs through a server of yours before you trust it. In a trusted project it runs in the workspace, or in its `cwd`.
+  - **A server writes nothing but its own temporary folder** where the sandbox confines it, at every level: no entry can give it the workspace in this step. It reads what the session's commands may read, and reaches the network only with `network = true`.
+  - **A project's server takes a header only from the variable named for its server and the header:** both names in capitals, joined by `_`, each other character made `_`, as the first run's import names them (`cineris_config::import::derived_variable`). A project's `tracker` sends `Authorization` from `TRACKER_AUTHORIZATION` and from nothing else: never from a variable the project chose (`{ env = "GITHUB_TOKEN" }`) or as text, so that a repository cannot send a token of yours to a host it picked. A project's `env` may name your variables; the trust question names each one.
 - **Existing configurations are read.** The harness looks for the project's `.mcp.json` and for the per-user files of common MCP clients. What it finds is listed at onboarding and by `cineris mcp import`, and can be brought in with one confirmation per server. A project's `.mcp.json` is also read live: its servers show up as proposed, and each needs the same trust and approval as a server written in our own format. The files are never modified.
 - Per server: `enabled`, `expose`, an allow or deny list of tools, start-up and call timeouts, the sandbox additions it needs.
 - Secrets are references to environment variables. **The harness writes one as a literal in one case, since step 25:** the first run's import brings in a server as it is in the other client's file, and a value there under a credential's name that is one token (`--api-key x7Kq…`, `?token=…`) is imported as it is, a literal in `args` or `url`, the row having drawn it `[redacted]` and said so ([08-configuration.md](08-configuration.md), "First run"). **Every view that displays the configuration shows such a value as the first run did** (since the step 25 fixes, the owner's choice): `cineris config show` and each `--layer`, `config/get` and so `/config` and any client, and the `Debug` forms all read a server's `args` (a list, one text or a table), `url` and `command` by the import's own rule, a value that is not one token included ([08-configuration.md](08-configuration.md), "Credentials"). **The question that asks the person to approve a project's settings shows the project's files whole** (since the review of those fixes, settled by the maintainers): a project's `[mcp]` held back for trust is shown with only what the secret filter's formats know masked, and only where it is shaped as a secret is (a token, or a private key's block of base64 lines between its BEGIN and END lines: a script after a key's first line, or given as an address's password, is shown whole, since the review's second round), so that no part of a command line the person approves is hidden (`sh -c "TOKEN=x; curl … | sh"`, a server named `compass`); the project's local file is shown whole too, since a repository can ship one (it is left out by convention only). A server's own name is never read as a credential's. The server is given the literal when it runs. Step 30, which declares `[mcp]`, keeps both rules for the declared keys.
@@ -81,7 +93,7 @@ timeout_ms = 30000
 - **Era detection.** For each server the client probes for the current protocol revision and falls back to the older handshake, then remembers the answer for that server.
 - **Tool lists** are cached per server with the lifetime the server gives. Change notifications refresh them.
 - **Failure.** A server that fails to start or crashes is reported in the hint row and to the model on its next use. Local servers are restarted on next use, with backoff.
-- **Shutdown.** Standard input is closed, then the process tree is terminated through the same staged kill as shell commands.
+- **Shutdown.** Standard input is closed, the server is given its grace (2 s), then the process tree is stopped through the same staged kill as shell commands (interrupted, told to terminate, killed). Since step 30 a server's process is a tree on a thread of its own: its standard input a pipe the client writes lines to (after the launcher's policy where it is confined, the launcher's live input), its standard output read as lines of at most 4 MiB, a longer one ending it, and its standard error always drained, its last 8 KiB kept, masked by the secret filter, for the person alone.
 - **Windows.** Many servers are started through script shims (`npx` and similar), which cannot be executed directly. The launcher resolves the program on the path, detects shims, and runs them through the command interpreter with arguments it has escaped itself, refusing arguments that cannot be escaped safely.
 
 ## Safety
@@ -90,7 +102,7 @@ MCP servers are third-party code and third-party text. Both are treated as untru
 
 | Risk | Handling |
 |---|---|
-| A server process does damage | Local servers run in the sandbox with a narrow default policy: read the workspace, no writes, no network unless the entry declares it and the user approved it. |
+| A server process does damage | Local servers run in the sandbox with a narrow default policy, at every level where it enforces (since step 30): read what the session's commands read, write only the server's own temporary folder, no network unless the entry declares it and the user approved it. On Windows in the first release a server is not confined. |
 | Tool descriptions carry hidden instructions | Descriptions reach the model only as search results, which are marked as third-party content. They are size-capped (2 KiB each). `cineris mcp inspect` shows them in full to the user. |
 | A server changes a tool after approval | Each tool definition is hashed when first approved. A changed definition needs approval again before it can be called. |
 | One server's text steers another server's tools | Calls are checked per `server/tool` by the permission engine. A description cannot grant permission. |

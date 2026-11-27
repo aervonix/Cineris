@@ -79,3 +79,304 @@ replace: Given::Live => std::process::Stdio::null()
 os: linux
 caught-by:
     cineris-sandbox::it confined::sys_a_confined_command_reads_its_live_input_line_by_line
+
+# A, after its early review: what the launcher leaves the command.
+
+[break] stray-descriptor-reaches-the-command
+rule: A descriptor the launcher inherited by mistake never reaches the command it becomes.
+file: crates/cineris-sandbox/src/launch.rs
+in: become_command
+find: close_on_exec();
+replace:
+os: linux
+caught-by:
+    cineris-sandbox::it confined::sys_a_descriptor_the_launcher_inherited_never_reaches_the_command
+
+[break] closed-input-is-the-launchers-own
+rule: A confined command given no input has a closed one, not the launcher's own at its end.
+file: crates/cineris-sandbox/src/launch.rs
+in: become_command
+find: Given::Closed => std::process::Stdio::null()
+replace: Given::Closed => std::process::Stdio::inherit()
+os: linux
+caught-by:
+    cineris-sandbox::it confined::sys_a_confined_command_with_no_input_reads_its_end_at_once
+
+[break] live-policy-with-an-empty-input-field-is-taken
+rule: A policy with an `input` field is refused in the live mode, an empty input's included.
+file: crates/cineris-sandbox/src/launch.rs
+in: launch
+find: (policy, None) => (policy, Given::Live)
+replace: (policy, None) => (policy, Given::Live), (policy, Some(input)) if input.is_empty() => (policy, Given::Live)
+caught-by:
+    cineris-sandbox::it confined::sys_a_live_length_that_is_not_the_policys_runs_nothing
+
+[break] loader-variable-given-to-a-server
+rule: No server's entry gives a variable that tells the system's loader what to run.
+file: crates/cineris-config/src/mcp.rs
+in: loads_code
+find: name.starts_with("LD_") || name.starts_with("DYLD_") || name == "GLIBC_TUNABLES"
+replace: name.is_empty()
+caught-by:
+    cineris-config mcp::tests::a_name_or_a_source_no_server_may_have_refuses_it
+    cineris-core mcp::env::tests::a_name_that_cannot_be_given_refuses_the_start
+    cineris-config mcp::tests::the_first_run_imports_no_server_the_loader_would_refuse
+
+# B. A server's process (cineris-core, `mcp`): the explicit environment.
+
+[break] server-env-takes-a-withheld-source
+rule: A server's variable never takes its value from a provider's key, a variable of the harness's own or one `shell.env_remove` names.
+file: crates/cineris-core/src/mcp/env.rs
+in: server_env
+find: if withheld(OsStr::new(source)) {
+replace: if withheld(OsStr::new(source)) && source.is_empty() {
+caught-by:
+    cineris-core mcp::env::tests::a_source_that_is_absent_or_withheld_refuses_the_start
+    cineris-core::it mcp_servers::sys_a_server_is_given_exactly_its_list
+
+[break] server-env-is-the-whole-environment
+rule: A server is given the base list of the harness's environment and nothing else of it.
+file: crates/cineris-core/src/mcp/env.rs
+in: server_env
+find: .any(|pattern| child_env::is_named(name, pattern, windows))
+replace: .any(|_| true)
+caught-by:
+    cineris-core mcp::env::tests::a_server_is_given_the_base_list_and_nothing_else
+    cineris-core::it mcp_servers::sys_a_server_is_given_exactly_its_list
+
+[break] server-path-keeps-the-workspace
+rule: A server's `PATH` has no folder inside the workspace or a write root.
+file: crates/cineris-core/src/mcp/env.rs
+in: server_env
+find: child_env::keep_out_of(&mut vars, parts.avoid, windows);
+replace: let _ = parts.avoid;
+caught-by:
+    cineris-core mcp::env::tests::path_keeps_absolute_folders_outside_the_workspace
+
+[break] server-temp-is-not-its-own
+rule: A server's `TMPDIR` is its own private temporary folder.
+file: crates/cineris-core/src/mcp/env.rs
+in: server_env
+find: vec![("TMPDIR", temp)]
+replace: vec![("TMPDIR", OsString::from("/tmp"))]
+caught-by:
+    cineris-core mcp::env::tests::a_server_is_given_the_base_list_and_nothing_else
+
+[break] server-cmd-looks-where-it-runs
+rule: On Windows a server is given `NoDefaultCurrentDirectoryInExePath`, so that `cmd.exe` runs no program from the folder it runs in.
+file: crates/cineris-core/src/mcp/env.rs
+in: server_env
+find: (child_env::NO_CURRENT_DIRECTORY, OsString::from("1"))
+replace: ("NOT_SET_BY_THE_HARNESS", OsString::from("1"))
+caught-by:
+    cineris-core mcp::env::tests::on_windows_the_systems_own_and_the_harnesss_settings_are_given
+
+# B. A server's start: the program, the folder, the confinement, the filter.
+
+[break] server-program-inside-the-workspace-is-taken
+rule: A server's program named by a path inside the workspace or a write root is never started.
+file: crates/cineris-core/src/mcp/spawn.rs
+in: ServerSpawner::prepare
+find: cineris_base::program::passes_through(Path::new(path), &resolved_avoid)
+replace: cineris_base::program::passes_through(Path::new(path), &[])
+caught-by:
+    cineris-core::it mcp_servers::a_program_inside_the_workspace_is_never_started
+
+[break] server-runs-in-the-workspace-untrusted
+rule: A server runs in the workspace only in a trusted project, and otherwise in an empty folder of its own.
+file: crates/cineris-core/src/mcp/spawn.rs
+in: ServerSpawner::working_folder
+find: if inside && !self.options.trusted {
+replace: if inside && self.options.trusted && !self.options.trusted {
+caught-by:
+    cineris-core::it mcp_servers::sys_the_workspace_is_a_servers_folder_only_in_a_trusted_project
+
+[break] server-asking-to-write-is-started
+rule: No server is given the workspace to write in this release: an entry that asks is refused.
+file: crates/cineris-core/src/mcp/spawn.rs
+in: ServerSpawner::prepare
+find: if *write {
+replace: if *write && program.is_empty() {
+caught-by:
+    cineris-core::it mcp_servers::a_program_inside_the_workspace_is_never_started
+
+[break] confined-server-writes-the-workspace
+rule: A confined server's only write root is its own temporary folder.
+file: crates/cineris-core/src/mcp/spawn.rs
+in: ServerSpawner::prepare
+find: write: vec![own.temp.clone()]
+replace: write: vec![own.temp.clone(), self.options.workspace.clone()]
+os: linux
+caught-by:
+    cineris-core::it mcp_servers::sys_a_confined_server_writes_only_its_own_folder_and_reaches_the_network_only_when_told
+
+[break] confined-server-always-reaches-the-network
+rule: A confined server reaches the network only when its entry says `network = true`.
+file: crates/cineris-core/src/mcp/spawn.rs
+in: ServerSpawner::prepare
+find: network: if *network {
+replace: network: if *network || !*network {
+os: linux
+caught-by:
+    cineris-core::it mcp_servers::sys_a_confined_server_writes_only_its_own_folder_and_reaches_the_network_only_when_told
+
+[break] server-secrets-not-given-to-the-filter
+rule: Every value a server is given from the user's environment is masked by the session's secret filter from then on.
+file: crates/cineris-core/src/mcp/spawn.rs
+in: ServerSpawner::prepare
+find: filter.add_value(secret);
+replace: let _ = secret;
+caught-by:
+    cineris-core::it mcp_servers::sys_a_server_is_given_exactly_its_list
+    cineris-core::it mcp_servers::sys_a_servers_standard_error_is_kept_to_its_end_and_masked
+
+# B. A server's pipes and its end.
+
+[break] server-line-cap-not-held
+rule: A line of a server's output longer than 4 MiB ends the output with `LineError::TooLong`.
+file: crates/cineris-core/src/mcp/process.rs
+in: read_lines
+find: FrameDecoder::with_max_line_len(MAX_LINE)
+replace: FrameDecoder::with_max_line_len(MAX_LINE * 2)
+caught-by:
+    cineris-core::it mcp_servers::sys_a_line_over_the_cap_ends_the_output
+
+[break] server-input-line-with-a-line-end-written
+rule: A line for a server's input that holds a line end of its own is never written: it would be two messages.
+file: crates/cineris-core/src/mcp/process.rs
+in: write_input
+find: if line.contains(&b'\n') {
+replace: if line.contains(&b'\n') && line.is_empty() {
+caught-by:
+    cineris-core::it mcp_servers::sys_a_server_answers_each_line_and_ends_with_its_input
+
+[break] server-stderr-not-masked
+rule: A server's standard error is shown through the session's secret filter.
+file: crates/cineris-core/src/mcp/process.rs
+in: Running::stderr_tail
+find: .redact(&text)
+replace: .redact("") + text.as_ref()
+caught-by:
+    cineris-core::it mcp_servers::sys_a_servers_standard_error_is_kept_to_its_end_and_masked
+
+[break] server-stderr-kept-whole
+rule: Only the last 8 KiB of a server's standard error are kept.
+file: crates/cineris-core/src/mcp/process.rs
+in: drain
+find: let over = kept.len().saturating_sub(STDERR_KEPT);
+replace: let over = kept.len().saturating_sub(STDERR_KEPT * 16);
+caught-by:
+    cineris-core::it mcp_servers::sys_a_servers_standard_error_is_kept_to_its_end_and_masked
+
+[break] server-shutdown-gives-no-grace
+rule: A server's end gives it its grace, on the session's timer, after its input is closed and before its tree is stopped.
+file: crates/cineris-core/src/mcp/process.rs
+in: Running::shutdown
+find: if !self.ended_within(grace).await {
+replace: if !self.ended_within(Duration::ZERO).await {
+caught-by:
+    cineris-core::it mcp_servers::sys_a_server_that_ignores_its_closed_input_is_killed_after_its_grace
+
+# C. `[mcp]` in the configuration.
+
+[break] server-name-not-the-registrys
+rule: A server's name is one to 64 of the ASCII letters, digits, `_`, `-` and `.`, and the first run imports no other.
+file: crates/cineris-config/src/mcp.rs
+in: server_name_ok
+find: character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '.')
+replace: !character.is_control()
+caught-by:
+    cineris-config mcp::tests::a_servers_name_is_the_registrys_rule
+    cineris-config mcp::tests::the_first_run_imports_no_server_the_loader_would_refuse
+
+[break] server-both-local-and-remote-taken
+rule: A server is local or remote, never both.
+file: crates/cineris-config/src/mcp.rs
+in: server_problem
+find: (true, true) => return Some
+replace: (true, true) if name.is_empty() => return Some
+caught-by:
+    cineris-config mcp::tests::a_server_is_local_or_remote_and_has_only_its_kinds_keys
+
+[break] remote-server-takes-network
+rule: A remote server has no key of a local server's (`args`, `cwd`, `env`, `network`).
+file: crates/cineris-config/src/mcp.rs
+in: server_problem
+find: ("network", entry.network)
+replace: ("network", false)
+caught-by:
+    cineris-config mcp::tests::a_server_is_local_or_remote_and_has_only_its_kinds_keys
+
+[break] env-source-provider-key-taken-at-load
+rule: A server's variable that takes its value from a provider's key, the harness's own or one `shell.env_remove` names refuses the server as the configuration loads.
+file: crates/cineris-config/src/mcp.rs
+in: server_problem
+find: withheld_source(source, keys, env_remove)
+occurrence: 1
+replace: withheld_source(source, keys, env_remove) && source.is_empty()
+caught-by:
+    cineris-config mcp::tests::a_name_or_a_source_no_server_may_have_refuses_it
+
+[break] project-header-from-any-variable
+rule: A project's server takes a header only from the variable named for its server and the header.
+file: crates/cineris-config/src/mcp.rs
+in: server_problem
+find: EnvText::Env(source) if project && *source != derived =>
+replace: EnvText::Env(source) if project && *source != derived && source.is_empty() =>
+caught-by:
+    cineris-config mcp::tests::a_projects_header_is_taken_only_from_its_derived_variable
+    cineris-core mcp::definitions::tests::the_users_and_a_projects_servers_become_definitions
+
+[break] project-server-merged-with-the-users
+rule: A project's server is kept apart: never merged with the user's.
+file: crates/cineris-config/src/schema/sections.rs
+find: [KeptApart, NextSession] pub command: Option<ServerProgram>
+replace: [Preference, NextSession] pub command: Option<ServerProgram>
+caught-by:
+    cineris-core mcp::definitions::tests::the_users_and_a_projects_servers_become_definitions
+    cineris-config::it trust::the_documented_classes_hold
+
+[break] declared-args-shown-whole
+rule: An MCP server's `args`, `url` and `command`, declared since step 30, are shown by the first run's import's rule in every view.
+file: crates/cineris-config/src/schema/redact.rs
+in: redact
+find: Lookup::Setting { .. } if a_servers_command_line(key) =>
+replace: Lookup::Setting { .. } if a_servers_command_line(key) && key.is_root() =>
+caught-by:
+    cineris-config::it imports::what_the_first_run_hid_is_hidden_by_every_view
+
+[break] declared-args-debug-whole
+rule: The settings' `Debug` form shows an MCP server's arguments by the first run's import's rule.
+file: crates/cineris-config/src/schema/types.rs
+find: write!(f, "{:?}", crate::import::shown_args(&self.0))
+replace: write!(f, "{:?}", self.0)
+caught-by:
+    cineris-config::it imports::what_the_first_run_hid_is_hidden_by_every_view
+
+[break] locked-project-server-read
+rule: A project's server whose name the managed file locks is not read.
+file: crates/cineris-config/src/load.rs
+in: mcp_servers
+find: if merger.is_locked(&key) {
+replace: if merger.is_locked(&key) && key.is_root() {
+caught-by:
+    cineris-config::it layers::a_value_cannot_replace_a_table_that_holds_a_locked_key
+
+[break] first-run-imports-a-variable-no-server-is-given
+rule: The first run does not import a server whose variable's or header's name cannot be one, or that takes a provider's key from the environment.
+file: crates/cineris-config/src/import.rs
+find: not_text || !givable(&server)
+replace: not_text
+caught-by:
+    cineris-config mcp::tests::the_first_run_imports_no_server_the_loader_would_refuse
+
+# D. From the configuration to definitions.
+
+[break] project-server-of-the-users-name-taken
+rule: A project's server whose name the user's configuration has is refused.
+file: crates/cineris-core/src/mcp/definitions.rs
+in: definitions
+find: settings.mcp.servers.contains_key(&server.name)
+replace: settings.mcp.servers.contains_key(&server.name) && server.name.is_empty()
+caught-by:
+    cineris-core mcp::definitions::tests::the_users_and_a_projects_servers_become_definitions

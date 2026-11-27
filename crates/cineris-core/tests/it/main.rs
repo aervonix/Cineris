@@ -60,6 +60,8 @@ mod hook_wiring;
 mod index;
 mod knowledge;
 mod lifecycle;
+#[cfg(feature = "mcp")]
+mod mcp_servers;
 mod plan;
 mod provider;
 mod put_back;
@@ -130,6 +132,11 @@ pub const ECHO_MARK: &str = "cin-echo-report:";
 /// answers as the word after it says (`hook_and_exit`).
 pub const HOOK: &str = "cin-hook";
 
+/// The argument that makes this binary an MCP server's program, which acts
+/// as the word after it says (`mcp_servers::serve_and_exit`).
+#[cfg(feature = "mcp")]
+pub const MCP: &str = "cin-mcp-server";
+
 /// What the test runner runs as an ordinary test, which passes at once, and
 /// what the sandbox tests start as the launcher.
 #[test]
@@ -148,6 +155,12 @@ fn launcher_entry() {
         && !launched
     {
         hook_and_exit(&arguments[at + 1..]);
+    }
+    #[cfg(feature = "mcp")]
+    if let Some(at) = arguments.iter().position(|argument| argument == MCP)
+        && !launched
+    {
+        mcp_servers::serve_and_exit(&arguments[at + 1..]);
     }
     if let Some(at) = arguments.iter().position(|argument| argument == LAUNCH_GIT) {
         // The harness's own git, which `sandbox::launcher`'s wrapper

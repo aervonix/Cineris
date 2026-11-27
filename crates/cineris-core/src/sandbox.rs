@@ -1316,14 +1316,18 @@ pub(crate) fn make_temp(path: &Path) -> std::io::Result<PathBuf> {
     Ok(path.to_path_buf())
 }
 
+/// Makes the directory `path`, open to the user alone; an error when
+/// something is there already.
 #[cfg(unix)]
-fn make_private_dir(path: &Path) -> std::io::Result<()> {
+pub(crate) fn make_private_dir(path: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::DirBuilderExt;
     std::fs::DirBuilder::new().mode(0o700).create(path)
 }
 
+/// Makes the directory `path`, open to the user alone; an error when
+/// something is there already.
 #[cfg(not(unix))]
-fn make_private_dir(path: &Path) -> std::io::Result<()> {
+pub(crate) fn make_private_dir(path: &Path) -> std::io::Result<()> {
     if std::fs::symlink_metadata(path).is_ok() {
         return Err(std::io::ErrorKind::AlreadyExists.into());
     }

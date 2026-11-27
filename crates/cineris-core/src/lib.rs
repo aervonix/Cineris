@@ -21,6 +21,7 @@
 //! | `manage` | The command line's subcommands to the credential store, the stored approvals and the trust store, judged as a session judges them. |
 //! | `stats` | The loop's statistics events to the statistics store's recorder. |
 //! | `usage` | `usage/report` from the aggregates, and `usage/refresh` to the providers' documented usage endpoints. |
+//! | [`mcp`] | MCP's local servers started as the harness starts a program, and the configuration's servers as `cineris-mcp`'s definitions (behind the `mcp` feature). |
 //!
 //! A front end needs [`Core`], [`CoreOptions`], [`ClientInfo`], and the
 //! protocol's own types: an [`Op`](cineris_protocol::methods::Op) in, an
@@ -41,6 +42,10 @@ pub use commands::A_SCRIPT_COMMAND_RUNS;
 mod instructions;
 mod knowledge;
 mod manage;
+// MCP's local servers as the harness starts them, and the configuration's
+// servers as `cineris-mcp`'s definitions (step 30).
+#[cfg(feature = "mcp")]
+pub mod mcp;
 mod paging;
 mod policy;
 // An extension's programs and a hook command's: found, quoted and started
