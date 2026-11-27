@@ -52,4 +52,17 @@ The part of the fixes to step 28 that takes the review's findings 4, 5 and 14 (t
 
 ## Breaks
 
-`mutations/step-28-fixes-hooks.breaks`, run with `cargo xtask mutate step-28-fixes-hooks`: VERDICTS.
+`mutations/step-28-fixes-hooks.breaks`, fifteen breaks, one or more for each part of each fix, run with `cargo xtask mutate step-28-fixes-hooks --jobs 2` on a Linux runner (`try` run 45949646735): "15 break(s): 15 did what the list expects, 0 flagged". The breaks that put `main`'s behaviour back are each caught by the new tests:
+- `changed-hook-holds-nothing` and `removed-hook-holds-nothing` (finding 4) by `an_approved_projects_hook_holds_both_gates_once_not_as_approved` and `hook_trust::an_approved_projects_gate_holds_whatever_its_file_does_to_it`;
+- `trust-lowered-keeps-project-hooks` (finding 5) by `hook_trust::sys_a_projects_hook_command_stops_with_its_trust` and `hook_trust::a_projects_held_gates_leave_with_its_trust`;
+- `secret-path-handed-before-the-yes` (finding 14) by `hook_trust::sys_a_users_hook_is_handed_a_secret_file_only_after_the_yes`.
+
+Eight of step 28's own breaks named code these fixes moved, and were moved with it, their rules unchanged except two. `step-28/a-changed-projects-hook-lapses` now breaks the held gates. `step-28/pinned-users-names-listed-for-nothing` now says that the user's folder is also listed when the project has an extension pinned, since a pinned one may be listed as removed. They were run again on a Linux runner (`try` run 45950821966): "8 break(s): 8 did what the list expects, 0 flagged".
+
+## Runs
+
+- The tests of `cineris-policy` and `cineris-agent` and of every crate that depends on them (`cargo xtask test --dependents -p cineris-policy -p cineris-agent`, 1,832 tests) all passed, on the reference machine.
+- `cineris-core`, `cineris-agent`, `cineris-policy` and `cineris-cli` on a Windows runner: all passed (`try` run 45949643744).
+- `cargo xtask stress -p cineris-agent --count 300` on a Linux runner: every test passed every time (run 45949653128).
+- `cargo xtask stress -p cineris-core --count 100` on a Linux runner: 721 tests, 100 times each, seeds 0 to 99; every test passed every time (run 45949649735).
+- One test of step 28's changed with the fix: `extensions_review::a_projects_folder_of_extensions_made_in_a_session_is_looked_in_at_the_next_turn` now expects the extension pinned and not yet in its folder to be listed as removed in the question it answers not now.
