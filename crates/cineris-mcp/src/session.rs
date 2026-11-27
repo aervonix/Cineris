@@ -608,6 +608,10 @@ impl Session {
             let ended = self.listened(id, message).await;
             match ended {
                 Listened::Stopped | Listened::Closed => return,
+                Listened::Declined => {
+                    self.router.close_listen();
+                    return;
+                }
                 Listened::Refused => {
                     self.rpc
                         .transport()
@@ -647,7 +651,7 @@ impl Session {
                 // The server's own end of it: a result.
                 Poll::Ready(Ok(Ok(_))) => return Poll::Ready(Listened::EndedByServer),
                 // An error: it will not keep one, so none is asked again.
-                Poll::Ready(Ok(Err(_))) => return Poll::Ready(Listened::Refused),
+                Poll::Ready(Ok(Err(_))) => return Poll::Ready(Listened::Declined),
                 Poll::Ready(Err(_)) => return Poll::Ready(Listened::Closed),
                 Poll::Pending => {}
             }
@@ -684,8 +688,11 @@ enum Listened {
     Closed,
     /// The server ended it: it is opened again.
     EndedByServer,
-    /// The server will not send change notices on it.
+    /// The server will not send change notices on it: it is cancelled.
     Refused,
+    /// The server answered it with an error: it is over, and not asked for
+    /// again.
+    Declined,
 }
 
 /// What a server answered `server/discover` with.

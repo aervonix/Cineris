@@ -368,3 +368,12 @@ find: self.rpc.transport().cancel(id, "the client is shutting down");
 replace: let _ = id;
 caught-by:
     cineris-mcp::it modern::shutdown_ends_the_change_stream_and_then_the_process
+
+[break] a-change-stream-answered-with-an-error-is-cancelled
+rule: A change stream the server answered with an error is over: it is neither cancelled nor asked for again.
+file: crates/cineris-mcp/src/session.rs
+in: Session::listened
+find: Poll::Ready(Ok(Err(_))) => return Poll::Ready(Listened::Declined)
+replace: Poll::Ready(Ok(Err(_))) => return Poll::Ready(Listened::Refused)
+caught-by:
+    cineris-mcp::it modern::a_change_stream_answered_with_an_error_is_over_and_not_asked_again
