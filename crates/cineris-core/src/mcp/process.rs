@@ -59,16 +59,23 @@ pub const STDERR_KEPT: usize = 8 * 1024;
 /// How many lines the client's queue of input holds: the client's own.
 pub const LINES_QUEUED: usize = 64;
 
-/// The most bytes of a server's output that wait for the client: 16 MiB.
+/// The most bytes of a server's output in lines handed to the client and
+/// not yet taken: those waiting in its queue and the one being handed over,
+/// 16 MiB. Besides them the reader holds the line it is cutting out: its
+/// decoder's buffer, at most `2 * MAX_LINE`, a read (64 KiB) and a line's
+/// ending, since it drops the lines it has handed over once they are half
+/// of what it holds; and a read buffer of 64 KiB. So a server writing lines
+/// at the cap holds at most about 24 MiB and 128 KiB of the harness's
+/// memory.
 pub const QUEUED_BYTES: usize = 16 * 1024 * 1024;
 
 /// How many lines of a server's output wait for the client: as many as
-/// [`QUEUED_BYTES`] holds of the longest, so that a server writing lines at
-/// the cap holds no more than that in the harness (the full review of step
-/// 30's first part: 64 lines were 256 MiB). Past it, the reader waits, and
-/// the server's writes wait on the pipe.
-pub const OUTPUT_QUEUED: usize = QUEUED_BYTES / MAX_LINE;
-const _: () = assert!(OUTPUT_QUEUED >= 1 && OUTPUT_QUEUED * MAX_LINE <= QUEUED_BYTES);
+/// [`QUEUED_BYTES`] holds of the longest beside the one being handed over
+/// (the full review of step 30's first part: 64 lines were 256 MiB; the
+/// second: the one being handed over was not counted). Past it, the
+/// reader waits, and the server's writes wait on the pipe.
+pub const OUTPUT_QUEUED: usize = QUEUED_BYTES / MAX_LINE - 1;
+const _: () = assert!(OUTPUT_QUEUED >= 1 && (OUTPUT_QUEUED + 1) * MAX_LINE <= QUEUED_BYTES);
 
 /// The grace between two stages of stopping a server's tree, after its own
 /// grace: a command's ([`cineris_tools::process::DEFAULT_GRACE`]).

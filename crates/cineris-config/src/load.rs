@@ -664,7 +664,11 @@ fn mcp_servers(
     }
     // What the user's own servers take from the environment: a project's
     // header never takes one of them (the full review of step 30's first
-    // part).
+    // part). Belt and braces: a project's header takes only a
+    // `CINERIS_MCP_` variable, and a user's server that takes one is refused
+    // already, as a variable of the harness's own (`withheld_source`), so
+    // this guards no server that can start. It is kept so that the
+    // namespace's rule is not the only guard, should it ever be loosened.
     let taken: Vec<(String, String)> = settings
         .mcp
         .servers
@@ -1445,6 +1449,18 @@ impl Loaded {
                 }],
             })?;
         refuse_unread(&mut settings, &newer.diagnostics, newer.profile.as_deref());
+        // A server's keys not taken are the ones in force, which this load
+        // judged: a server it refused for one of them stays refused (the
+        // second review of step 30's first part: a reload of a file that
+        // mended a misspelt `tools` made the server startable with every
+        // tool). An MCP server's keys take effect in the next session.
+        let kept: Vec<Diagnostic> = self
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.key.as_ref().is_some_and(|key| !taken(key)))
+            .cloned()
+            .collect();
+        refuse_unread(&mut settings, &kept, self.profile.as_deref());
         let withheld = self
             .withheld
             .iter()

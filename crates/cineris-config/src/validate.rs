@@ -121,12 +121,13 @@ impl Checked<'_> {
         line: Option<u32>,
         message: String,
     ) {
-        // A key of an MCP server's entry that cannot be read refuses that
-        // server alone (the full review of step 30's first part): another
-        // client's `type = "stdio"`, or `args` as one text, does not stop
-        // the harness.
+        // A key of an MCP server's entry in a file that cannot be read
+        // refuses that server alone (the full review of step 30's first
+        // part): another client's `type = "stdio"`, or `args` as one text,
+        // does not stop the harness. A mistake in `-c` is always an error
+        // (08-configuration; the second review).
         let (severity, message) = match crate::mcp::server_of(key) {
-            Some(_) if severity == Severity::Error => (
+            Some(_) if severity == Severity::Error && self.layer != LayerKind::CommandLine => (
                 Severity::Warning,
                 format!("{message}; {}", crate::mcp::SERVER_NOT_STARTED),
             ),

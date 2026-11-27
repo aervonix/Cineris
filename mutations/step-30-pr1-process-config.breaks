@@ -503,8 +503,8 @@ caught-by:
 rule: A key of an MCP server's entry the check cannot read refuses that server alone, never the file.
 file: crates/cineris-config/src/validate.rs
 in: Checked::report_at
-find: Some(_) if severity == Severity::Error =>
-replace: Some(_) if severity == Severity::Error && severity == Severity::Warning =>
+find: Some(_) if severity == Severity::Error && self.layer != LayerKind::CommandLine =>
+replace: Some(_) if severity == Severity::Error && self.layer == LayerKind::Managed =>
 caught-by:
     cineris-config::it mcp::a_stray_key_in_a_servers_entry_refuses_that_server_alone
 
@@ -532,7 +532,7 @@ in: Loaded::taking
 find: refuse_unread(&mut settings, &newer.diagnostics, newer.profile.as_deref());
 replace:
 caught-by:
-    cineris-config::it mcp::a_reload_keeps_a_stray_key_refusing_its_server
+    cineris-config::it mcp::a_reload_that_takes_a_stray_key_refuses_its_server
 
 [break] reload-keeps-the-older-project-servers
 rule: A reload takes a project's servers from the newer load: they are read live.
@@ -656,3 +656,32 @@ in: server_env
 find: if withheld(found) {
 replace: if withheld(found) && found.is_empty() {
 expect: survives
+
+# The second round of the review.
+
+[break] reload-forgets-what-the-load-in-force-refused
+rule: A reload keeps refusing a user's server the load in force refused for a key the reload did not take: the mix holds that key's value in force.
+file: crates/cineris-config/src/load.rs
+in: Loaded::taking
+find: refuse_unread(&mut settings, &kept, self.profile.as_deref());
+replace: let _ = &kept;
+caught-by:
+    cineris-config::it mcp::a_reload_that_takes_nothing_keeps_a_refused_server_refused
+
+[break] command-line-mistake-in-a-server-is-a-warning
+rule: A mistake in `-c mcp.servers.<name>.<key>` is an error, as any on the command line is; only a file's refuses its server alone.
+file: crates/cineris-config/src/validate.rs
+in: Checked::report_at
+find: Some(_) if severity == Severity::Error && self.layer != LayerKind::CommandLine =>
+replace: Some(_) if severity == Severity::Error =>
+caught-by:
+    cineris-config::it mcp::a_command_line_mistake_in_a_server_is_still_an_error
+
+[break] output-queue-forgets-the-line-handed-over
+rule: The lines waiting for the client and the one being handed over are at most 16 MiB at the cap.
+file: crates/cineris-core/src/mcp/process.rs
+in: start
+find: mpsc::channel(OUTPUT_QUEUED)
+replace: mpsc::channel(OUTPUT_QUEUED + 1)
+caught-by:
+    cineris-core::it mcp_servers::sys_a_server_answers_each_line_and_ends_with_its_input

@@ -315,9 +315,10 @@ fn sys_a_server_answers_each_line_and_ends_with_its_input() {
         .spawner(true)
         .spawn(&local(program, args, Vec::new()))
         .expect("the server starts");
-    // What waits for the client of its output is at most 16 MiB of lines
-    // at the cap (the full review: 64 such lines were 256 MiB).
-    assert!(pipes.output.max_capacity() * MAX_LINE <= cineris_core::mcp::QUEUED_BYTES);
+    // What waits for the client of its output, with the line being handed
+    // over, is at most 16 MiB of lines at the cap (the full review: 64 such
+    // lines were 256 MiB; the second: the line being handed over counts).
+    assert!((pipes.output.max_capacity() + 1) * MAX_LINE <= cineris_core::mcp::QUEUED_BYTES);
     runtime().block_on(async {
         assert_eq!(said(&mut pipes.output).await.as_deref(), Some("ready"));
         for line in ["one", "{\"jsonrpc\":\"2.0\",\"id\":1}"] {

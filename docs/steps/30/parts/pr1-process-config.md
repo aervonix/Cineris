@@ -43,10 +43,21 @@ A reviewer read the whole part: one high finding, four medium, four low, and sev
 | **Medium: the trust question hid a project's `env` literals** (`NODE_OPTIONS = "--require ./.hidden/evil.js"` showed `[redacted]`). | `redact_for_consent` shows a server's `env` and `headers` whole, only the secret filter's formats masked, as the rest of a project's entry. |
 | **Medium: `ProjectMcpServer`'s derived `Debug` printed its table**, literals included, into `Loaded`'s. | `Debug` written by hand without the table; `printing::no_debug_or_display_form_holds_a_key` has a project's server holding the canary. |
 | **Low: a start that failed before its waiter left its folder.** | The folder is an owned value (`OwnFolder`) removed when dropped, on every path, before the end is told. |
-| **Low: the output queue held up to 256 MiB.** | `OUTPUT_QUEUED = QUEUED_BYTES / MAX_LINE`: 4 lines, at most 16 MiB; past it the reader waits, and the server's writes wait on the pipe. |
+| **Low: the output queue held up to 256 MiB.** | `OUTPUT_QUEUED` lines at the cap, at most 16 MiB with the line being handed over (3 lines since the second round); past it the reader waits, and the server's writes wait on the pipe. |
 | **Low: one stray key in `[mcp.servers.<name>]` failed the whole configuration.** | An unknown key, a wrong type or a value out of range inside a server's entry is a warning naming the server (`SERVER_NOT_STARTED`), which is not started; `Settings` reads the servers through `McpServers`, which keeps an entry that does not read in `refused`, and the loader (and a reload's `taking`) refuses a user's server the check warned of. A project's server keeps its `problem`. **A bad key directly under `[mcp]` still refuses the file.** |
 | **Low: a `command` or `cwd` under `/proc`** was checked in the harness's process and resolved in the server's. | Refused at load (lexically) and at the start (through any link, `passes_through` with `/proc`); `/proc` is among the places no program is found and `PATH` leaves out. |
 | **Breaks no test caught** | Tests now catch each: a `cwd` that is a link into the workspace (a case form and a trailing dot on Windows); the servers' folders inside the workspace; a dropped server killed; a server that ends by itself leaving a child, its tree ended and its folder gone before its end is told; a confined write to the system's temporary folder refused; a reload taking a project's servers from the newer load. |
+
+## The second round
+
+The same reviewer read the fixes: every finding of the full review closed, and two medium and two low findings, each from a fix. The reviewer's tests are folded into `cineris-config::it mcp`; each fix has a break.
+
+| Finding | The fix |
+|---|---|
+| **Medium: a reload put a refused user server back in force, without the fixed file's restriction.** A reload takes only the `Now` keys, and every `mcp.servers.*` key is `NextSession`, so the mix keeps the in-force values; but the refusal was judged by the newer load's warnings alone. In force, `tool = ["read"]` (misspelt) refused `x`; the newer file's `tools = ["read"]` made the mix hold `x` startable with every tool, which neither load asked for. | `Loaded::taking` refuses, besides what the newer load refused, each server the in-force load refused for a key the reload did not take: the mix holds that key's in-force value (`mcp::a_reload_that_takes_nothing_keeps_a_refused_server_refused`). The test of the newer load's refusal now takes the server's keys, so that each refusal has a test of its own (`mcp::a_reload_that_takes_a_stray_key_refuses_its_server`). |
+| **Medium: a mistake in `-c mcp.servers.<name>.<key>` was no longer an error.** The downgrade made it a warning, which `apply_override` throws away with a candidate's other diagnostics: `-c mcp.servers.x.timeout_ms=1` loaded silently, and the server would start with a 1 ms limit, against 08-configuration's "A mistake here is always an error". | The downgrade is for a file's layer only, never `LayerKind::CommandLine` (`mcp::a_command_line_mistake_in_a_server_is_still_an_error`: out of range and of the wrong type). 08-configuration and 13-mcp say so. |
+| **Low: the output bound was about 24 MiB, not 16.** While `blocking_send` waits, the reader also holds its copy of the next line and its decoder's buffer. | `OUTPUT_QUEUED = QUEUED_BYTES / MAX_LINE - 1`, 3 lines: with the line being handed over, 16 MiB. The constants' docs state the whole bound: the decoder's buffer besides, at most `2 * MAX_LINE` and a read, and the read buffer: about 24 MiB and 128 KiB in all at the cap. |
+| **Low: "one of your own servers takes it" never guards a server that can start.** A user's server whose source is a `CINERIS_MCP_` variable is refused already, as a variable of the harness's own (`withheld_source`). | Kept as belt and braces, and said so in the loader's comment: a project's header takes only a `CINERIS_MCP_` variable, and the check is a second guard should the namespace's rule ever be loosened. Its test and break stay. |
 
 ## The interfaces added
 
@@ -138,6 +149,10 @@ No signature of `cineris-mcp`'s shared interface changed. `Launch::Local::write`
 | Definitions | `cineris-core mcp::definitions::tests::the_users_and_a_projects_servers_become_definitions` |
 
 Each rule has a break in [mutations/step-30-pr1-process-config.breaks](../../../../mutations/step-30-pr1-process-config.breaks).
+
+## For later parts
+
+- **A remote server's headers, resolved when it connects** (the part that connects): for a project's server the resolver must allow exactly `cineris_config::mcp::project_header_variable(name, header)` (`CINERIS_MCP_<SERVER>_<HEADER>`), the one `CINERIS_` variable a project's header may take, and nothing else of the harness's own.
 
 ## Left open, and untested on Windows
 

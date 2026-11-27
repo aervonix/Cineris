@@ -1,7 +1,7 @@
 //! `[mcp]` as it loads (since step 30): the full review of the first part's
-//! findings, each a test that failed before its fix.
+//! findings and its second round's, each a test that failed before its fix.
 
-use cineris_config::LayerKind;
+use cineris_config::{Effect, KeyPath, LayerKind, Override};
 
 use crate::Machine;
 
@@ -74,19 +74,97 @@ fn a_reload_takes_a_projects_servers_from_the_newer_load() {
     assert_eq!(names, ["new"]);
 }
 
-/// A user's server that a stray key refuses stays refused after a reload
-/// that takes nothing of it.
+/// A reload that takes a server's keys from the newer load refuses it as
+/// the newer load did: a stray key the newer file added.
 #[test]
-fn a_reload_keeps_a_stray_key_refusing_its_server() {
+fn a_reload_that_takes_a_stray_key_refuses_its_server() {
     let machine = Machine::new("mcp_reload_stray");
+    machine.layer(LayerKind::User, "[mcp.servers.typed]\ncommand = \"a\"\n");
+    let before = machine.load();
+    assert!(before.settings.mcp.servers.entries.contains_key("typed"));
     machine.layer(
         LayerKind::User,
         "[mcp.servers.typed]\ncommand = \"a\"\ntype = \"stdio\"\n",
     );
-    let before = machine.load();
-    let mix = before.taking(&before, &[]).unwrap();
+    let newer = machine.load();
+    let mix = before
+        .taking(&newer, &[KeyPath::parse("mcp.servers").unwrap()])
+        .unwrap();
     assert!(mix.settings.mcp.servers.refused.contains_key("typed"));
     assert!(mix.settings.mcp.servers.entries.is_empty());
+}
+
+/// A reload takes only the `Now` keys, and an MCP server's keys are
+/// `NextSession`: the mix keeps the in-force values, so a server the
+/// in-force load refused stays refused. In force, a misspelt `tools`
+/// refused `x`; the newer file spells it right; the mix must not hold `x`
+/// startable with every tool, which neither load asked for (the second
+/// review of step 30's first part).
+#[test]
+fn a_reload_that_takes_nothing_keeps_a_refused_server_refused() {
+    let machine = Machine::new("mcp_reload_unrefuses");
+    machine.layer(
+        LayerKind::User,
+        "[mcp.servers.x]\ncommand = \"srv\"\ntool = [\"read\"]\n",
+    );
+    let in_force = machine.load();
+    assert!(in_force.settings.mcp.servers.refused.contains_key("x"));
+    assert!(in_force.settings.mcp.servers.entries.is_empty());
+
+    machine.layer(
+        LayerKind::User,
+        "[mcp.servers.x]\ncommand = \"srv\"\ntools = [\"read\"]\n",
+    );
+    let latest = machine.load();
+    assert_eq!(
+        latest.settings.mcp.servers.entries["x"].tools,
+        Some(vec!["read".to_owned()])
+    );
+    let now: Vec<KeyPath> = latest
+        .changes_since(&in_force)
+        .into_iter()
+        .filter(|change| change.effect == Effect::Now)
+        .map(|change| change.key)
+        .collect();
+    let mix = in_force.taking(&latest, &now).unwrap();
+    let servers = &mix.settings.mcp.servers;
+    assert!(
+        servers.refused.contains_key("x")
+            || servers
+                .entries
+                .get("x")
+                .is_some_and(|entry| entry.tools.is_some()),
+        "the mix holds `x` startable with tools {:?}",
+        servers.entries.get("x").map(|entry| &entry.tools)
+    );
+}
+
+/// "A mistake here is always an error" (08-configuration, the command
+/// line): an out-of-range or ill-typed `-c mcp.servers.<name>.<key>`
+/// refuses the run. A warning would be thrown away with the candidate's
+/// other diagnostics, and the server would start with it (the second
+/// review of step 30's first part).
+#[test]
+fn a_command_line_mistake_in_a_server_is_still_an_error() {
+    for (argument, what) in [
+        ("mcp.servers.x.timeout_ms=1", "out of range"),
+        ("mcp.servers.x.args=--root", "wrong type"),
+    ] {
+        let mut machine = Machine::new("mcp_cli_mistake");
+        machine.layer(LayerKind::User, "[mcp.servers.x]\ncommand = \"srv\"\n");
+        machine.options.overrides = vec![Override::parse(argument).unwrap()];
+        if let Ok(loaded) = machine.try_load() {
+            let servers = &loaded.settings.mcp.servers;
+            panic!(
+                "{argument} ({what}) was taken: diagnostics {:?}; entries {:?}, timeout {:?}; \
+                 refused {:?}",
+                machine.said(&loaded),
+                servers.entries.keys().collect::<Vec<_>>(),
+                servers.entries.get("x").map(|entry| entry.timeout_ms),
+                servers.refused
+            );
+        }
+    }
 }
 
 /// 13-mcp: the trust question shows a project's server whole, with only
