@@ -276,9 +276,14 @@ name = "cineris-mcp"
 version = "0.0.0"
 dependencies = [
  "cineris-base",
+ "cineris-mcp",
  "cineris-protocol",
  "cineris-sandbox",
+ "cineris-testkit",
  "cineris-tools",
+ "serde_json",
+ "thiserror",
+ "tokio",
 ]
 
 [[package]]
