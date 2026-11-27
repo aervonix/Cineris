@@ -1,0 +1,8 @@
+After the external editor is killed, the keyboard protocol's flags it pushed on the main screen are left there, and a signal that lands while the program pushes its own flags on the main screen can leave those there too.
+
+- Area: cineris-term
+- Owner: step 33
+
+| Item | Who | When |
+|---|---|---|
+| **Left by the step 25 fixes** ([steps/step-25-fixes/parts/terminal.md](../steps/step-25-fixes/parts/terminal.md)), which made every pop of the keyboard flags happen on the screen whose stack holds the push, so that the shell's own entry survives every way out. Two corners stay. (1) **A killed editor's own pushes on the main screen.** `LEFT_ON` (`crates/cineris-tui/src/external.rs`), written after an editor the program had to kill, pops up to 99 levels on the alternate screen only (`?1047h`, `CSI < 99 u`, `?1047l`): before the fixes it popped them on the main screen too, which popped the shell's entry with the editor's. An editor that pushed flags on the main screen and was killed before it popped them leaves them, and the shell then reads keys in the enhanced form until it is reset. (2) **A signal during the main screen's push.** The record's `MAIN_KEYBOARD` bit is set only after the push lands, so an emergency restore that runs between the push's write and the bit leaves the flags on the main screen. **Recommendation:** (1) ask the terminal for the main screen's flags before the editor runs and after it (`CSI ? u`) and pop only what the editor added; (2) set the bit before the write and pop on the main screen only where the program's push was the last on its stack, or accept the window as narrower than a write. | Step 33 (the terminal) | Before the first release |
