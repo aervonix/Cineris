@@ -84,6 +84,39 @@ fn empty_batches_count_from_a_server_that_may_batch_and_from_one_that_may_not() 
 }
 
 #[test]
+fn batched_answers_cost_nothing_and_batched_strays_cost_their_bytes() {
+    run(async {
+        let timer = timer();
+        let mebibyte = "x".repeat(1024 * 1024);
+        // Seventeen answers of 1 MiB, each in a batch of its own: 17 MiB of
+        // answers, which cost nothing.
+        let server = FakeServer::legacy("2025-03-26").reply(
+            "big",
+            Reply::BatchedResult(json!({"content": [{"type": "text", "text": mebibyte}]})),
+        );
+        let client = connect(&server, &timer).await;
+        let cancel = CancelToken::new();
+        for _ in 0..17 {
+            client.call("big", json!({}), &cancel).await.unwrap();
+        }
+        client.call("small", json!({}), &cancel).await.unwrap();
+
+        // Seventeen strays of 1 MiB, each in a batch of its own: the line's
+        // bytes are counted with the first message counted.
+        let server = FakeServer::legacy("2025-03-26");
+        let client = connect(&server, &timer).await;
+        let stray = json!([{"jsonrpc": "2.0", "id": 99_999, "result": {"text": mebibyte}}]);
+        server.flood(17, stray).await;
+        let error = client.closed().await;
+        assert!(misbehaved(&error), "{error:?}");
+        let ClientError::Protocol(why) = error else {
+            unreachable!()
+        };
+        assert!(why.contains("16 MiB"), "{why}");
+    });
+}
+
+#[test]
 fn the_allowance_is_a_minutes() {
     run(async {
         let timer = timer();

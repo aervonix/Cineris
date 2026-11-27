@@ -453,6 +453,87 @@ fn an_answer_a_pipe_hands_on_after_the_exit_reaches_its_call() {
     });
 }
 
+/// A legacy server that answers the handshake, then exits on `tools/call`
+/// while a process it left keeps its output open. Written by the second
+/// review of the client.
+async fn exits_holding_output(
+    mut input: tokio::sync::mpsc::Receiver<Vec<u8>>,
+    output: tokio::sync::mpsc::Sender<Result<Vec<u8>, cineris_mcp::LineError>>,
+    exited: Arc<tokio::sync::watch::Sender<Option<String>>>,
+) {
+    while let Some(text) = input.recv().await {
+        let message: Json = serde_json::from_slice(&text).unwrap();
+        let Some(id) = message.get("id").cloned() else {
+            continue;
+        };
+        let reply = match message["method"].as_str().unwrap_or_default() {
+            "initialize" => json!({"jsonrpc": "2.0", "id": id, "result": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "x", "version": "1"},
+            }}),
+            "tools/call" => {
+                exited.send_replace(Some("it exited, its child holding the pipe".to_owned()));
+                // The child holds the output open for ever.
+                let _held = output;
+                std::future::pending::<()>().await;
+                return;
+            }
+            _ => json!({"jsonrpc": "2.0", "id": id,
+                        "error": {"code": -32601, "message": "Method not found"}}),
+        };
+        if output.send(line(&reply)).await.is_err() {
+            return;
+        }
+    }
+}
+
+/// After the exit, the output is read for the grace at most: a child
+/// holding the pipe does not hold the client open. Written by the second
+/// review of the client.
+#[test]
+fn an_exit_whose_output_stays_open_ends_the_connection_after_the_grace() {
+    run(async {
+        let timer = timer();
+        let (input, input_lines) = tokio::sync::mpsc::channel(64);
+        let (output, output_lines) = tokio::sync::mpsc::channel(64);
+        let exited = Arc::new(tokio::sync::watch::channel(None).0);
+        tokio::spawn(exits_holding_output(
+            input_lines,
+            output,
+            Arc::clone(&exited),
+        ));
+        let pipes = cineris_mcp::ServerPipes {
+            input,
+            output: output_lines,
+            process: Box::new(HandProcess { exited }),
+        };
+        let client = StdioClient::connect(
+            &definition(),
+            pipes,
+            no_respawn(),
+            shared(&timer),
+            ClientOptions::default(),
+        )
+        .await
+        .unwrap();
+        let cancel = CancelToken::new();
+        let (called, ()) = join(client.call("x", json!({}), &cancel), async {
+            timer.sleeping_for(GRACE).await;
+            timer.advance(GRACE);
+        })
+        .await;
+        assert_eq!(
+            called.unwrap_err(),
+            ClientError::MayHaveRun("it exited, its child holding the pipe".to_owned())
+        );
+        assert_eq!(
+            client.closed().await,
+            ClientError::Stopped("it exited, its child holding the pipe".to_owned())
+        );
+    });
+}
+
 #[test]
 fn a_crash_while_nothing_is_asked_closes_the_client_with_the_exit() {
     run(async {

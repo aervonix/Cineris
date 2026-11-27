@@ -62,7 +62,7 @@ impl Gate {
 }
 
 /// How a server answers `server/discover`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum Discover {
     /// With a discovery result (a modern server's default).
     Answer,
@@ -81,6 +81,10 @@ pub enum Discover {
     /// Not the first time it is asked, and as [`Discover::Answer`] after: a
     /// modern server whose first answer was lost.
     SilentFirst,
+    /// As [`Discover::Answer`], once the gate is open: a server slower than
+    /// the probe to start. The gate is the server's, so a process started
+    /// after it opened answers at once.
+    Gated(Gate),
     /// With `-32022` naming these revisions, the first `times` it is asked,
     /// and as [`Discover::Answer`] after.
     Unsupported {
@@ -107,6 +111,8 @@ pub enum Reply {
     AlwaysInput(Json),
     /// Twice, the second a duplicate.
     Twice(Box<Reply>),
+    /// With this result in a batch of one (a `2025-03-26` server's way).
+    BatchedResult(Json),
     /// By exiting, then writing the inner reply: a last line a pipe's
     /// reader hands on after the exit is seen.
     ExitThenAnswer(Box<Reply>),
@@ -806,6 +812,12 @@ async fn respond(
                 .await;
         }
     } else {
+        if method == "initialize"
+            && let Some(gate) = &script.initialize_gate
+        {
+            // Held, then refused as a modern server refuses it.
+            gate.opened().await;
+        }
         if method == "initialize" && script.refuses_initialize_and_exits {
             process
                 .send(unsupported(&id, &script.supported, "2025-11-25"))
@@ -906,6 +918,10 @@ async fn discover(
         Discover::Error(code) => process.send(error(id, *code, "method not found")).await,
         Discover::Result(result) => process.send(answer(id, result.clone())).await,
         Discover::SilentFirst if asked == 1 => {}
+        Discover::Gated(gate) => {
+            gate.opened().await;
+            process.send(discovered(script, id)).await;
+        }
         Discover::ErrorThenExit(code) => {
             process.send(error(id, *code, "method not found")).await;
             process.exit("it exited after it refused a request before initialize");
@@ -918,22 +934,25 @@ async fn discover(
             process.send(unsupported(id, supported, requested)).await;
         }
         Discover::Answer | Discover::Unsupported { .. } | Discover::SilentFirst => {
-            process
-                .send(answer(
-                    id,
-                    json!({
-                        "resultType": "complete",
-                        "supportedVersions": script.supported,
-                        "capabilities": {"tools": {"listChanged": script.list_changed}},
-                        "instructions": "Fake instructions, which must never reach a prompt.",
-                        "ttlMs": 0,
-                        "cacheScope": "public",
-                        "_meta": {"io.modelcontextprotocol/serverInfo": {"name": "fake-modern", "version": "1"}},
-                    }),
-                ))
-                .await;
+            process.send(discovered(script, id)).await;
         }
     }
+}
+
+/// A modern server's discovery result, as the answer to `id`.
+fn discovered(script: &Script, id: &Json) -> Json {
+    answer(
+        id,
+        json!({
+            "resultType": "complete",
+            "supportedVersions": script.supported,
+            "capabilities": {"tools": {"listChanged": script.list_changed}},
+            "instructions": "Fake instructions, which must never reach a prompt.",
+            "ttlMs": 0,
+            "cacheScope": "public",
+            "_meta": {"io.modelcontextprotocol/serverInfo": {"name": "fake-modern", "version": "1"}},
+        }),
+    )
 }
 
 async fn initialize(script: &Script, process: &Process, id: &Json) {
@@ -1054,6 +1073,12 @@ fn call<'a>(
                 call(process, id, message, *inner, modern).await;
             }
             Reply::Crash => process.exit("it crashed during a call"),
+            Reply::BatchedResult(result) => {
+                let message = answer(id, result);
+                process
+                    .write(Ok(json!([message]).to_string().into_bytes()))
+                    .await;
+            }
             Reply::ExitThenAnswer(inner) => {
                 process.exit_keeping_output("it exited after its answer");
                 tokio::task::yield_now().await;
