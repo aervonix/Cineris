@@ -1,0 +1,64 @@
+# The engine part's fixes from the pre-push review of the step 28 fixes'
+# third pull request: a wait's grace for each thread it sees, kept when
+# another thread ends; a start evaluated as its time runs out giving no
+# runtime; the cap's branch of the wait; braces a manifest glob cannot
+# read refused; and the system resolver's places held to eight.
+
+[break] a-wait-begins-its-grace-again-at-every-wake
+rule: A start or a call waiting for threads being stopped gives each a grace from when it first sees it, which another thread's end does not begin again.
+file: crates/cineris-ext/src/engine/mod.rs
+in: settle
+find: .retain(|(watched, _)| stopping.iter().any(|other| Arc::ptr_eq(other, watched)));
+replace: .retain(|_| false);
+packages: cineris-ext
+caught-by:
+    cineris-ext::it left_running::a_wait_woken_by_another_thread_ending_keeps_its_grace
+
+[break] a-start-out-of-time-gives-its-runtime
+rule: A start whose main module is evaluated in its grace, its time up, gives no runtime, and its thread ends rather than wait for a call for ever.
+file: crates/cineris-ext/src/engine/mod.rs
+in: ScriptRuntime::start_watched
+find: Some(Ok(_)) if grace.is_some() => Err(LoadError::Limit(Limit::Time)),
+replace: Some(Ok(_)) if false => Err(LoadError::Limit(Limit::Time)),
+packages: cineris-ext
+caught-by:
+    cineris-ext::it left_running::a_start_evaluated_as_its_time_runs_out_leaves_no_thread
+
+[break] threads-being-stopped-do-not-count-toward-the-cap
+rule: A start or a call waits while the threads being stopped would, with those left running and the starts let go, reach the cap.
+file: crates/cineris-ext/src/engine/mod.rs
+in: must_wait
+find: && abandoned + stopping.len() + LET_GO.load(Ordering::SeqCst) >= MAX_ABANDONED
+replace: && false
+packages: cineris-ext
+caught-by:
+    cineris-ext::it left_running::a_call_waits_while_threads_being_stopped_would_reach_the_cap
+
+[break] braces-a-glob-cannot-read-are-let-through
+rule: A manifest glob whose braces cannot be read is refused when the manifest is read, as the compiler refuses it.
+file: crates/cineris-ext/src/manifest.rs
+in: check_glob
+find: let alternatives = cineris_policy::glob::brace_alternatives(glob).map_err(|error| {
+replace: let alternatives = cineris_policy::glob::brace_alternatives(glob).or_else(|_| Ok(vec![String::from("x")])).map_err(|error: cineris_policy::glob::GlobError| {
+packages: cineris-ext
+caught-by:
+    cineris-ext::it manifest::no_alternative_of_a_globs_braces_leaves_the_workspace
+
+[break] the-systems-lookups-have-more-places
+rule: The system's resolver holds the process's lookups to eight places.
+file: crates/cineris-llm/src/fetch.rs
+find: static LOOKUPS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(LOOKUPS_LIMIT);
+replace: static LOOKUPS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(LOOKUPS_LIMIT * 64);
+packages: cineris-llm
+caught-by:
+    cineris-llm fetch::tests::the_systems_lookups_take_the_processs_places
+
+[break] the-systems-lookups-take-no-place
+rule: The system's resolver takes its places from the process's own count.
+file: crates/cineris-llm/src/fetch.rs
+in: SystemResolver::resolve
+find: Box::pin(on_the_pool(&LOOKUPS, host.to_owned(), |host| {
+replace: Box::pin(on_the_pool(Box::leak(Box::new(tokio::sync::Semaphore::new(LOOKUPS_LIMIT))), host.to_owned(), |host| {
+packages: cineris-llm
+caught-by:
+    cineris-llm fetch::tests::the_systems_lookups_take_the_processs_places

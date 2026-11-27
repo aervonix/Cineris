@@ -182,6 +182,12 @@ fn no_alternative_of_a_globs_braces_leaves_the_workspace() {
         "{src,c:x}",
         "{//server/share/**,src}",
         "{,src/**}",
+        // Braces that cannot be read: refused, as the compiler refuses
+        // them, so that the text is never let through unchecked (the
+        // review of the step 28 fixes' third pull request).
+        "/etc/**}",
+        "../x/}",
+        "{src/**",
     ] {
         let text = refused(&manifest(&format!("read = [{bad:?}]")));
         assert!(text.contains("capabilities.read"), "{bad}: {text}");

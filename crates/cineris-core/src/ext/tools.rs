@@ -392,16 +392,24 @@ impl LoadedExtension {
         // request).
         let mut again = true;
         let result = loop {
-            let runtime = match self
-                .runtime(&cineris_ext::engine::StartWatch::default())
-                .await
-            {
-                Ok(runtime) => runtime,
-                Err(Refused {
+            // The start, its wait for a thread of the extension being
+            // stopped included, ends at the call's cancel: dropped, it lets
+            // go of the session's slot (the review of the step 28 fixes'
+            // third pull request).
+            let started = cx
+                .cancel
+                .race(self.runtime(&cineris_ext::engine::StartWatch::default()))
+                .await;
+            let runtime = match started {
+                None => {
+                    return ToolResult::interrupted(format!("`{full_name}` was interrupted."));
+                }
+                Some(Ok(runtime)) => runtime,
+                Some(Err(Refused {
                     why,
                     stand: Refusal::Plain,
-                }) => return ToolResult::error(why),
-                Err(Refused { why, stand }) => {
+                })) => return ToolResult::error(why),
+                Some(Err(Refused { why, stand })) => {
                     return ToolResult::error(format!("{why}; {}", self.remedy(stand)));
                 }
             };
@@ -492,16 +500,40 @@ impl LoadedExtension {
         let asked = self.parts.clock.monotonic();
         let full_name = format!("{}/command.{command}", self.name());
         let shown = format!("/{}:{command}", self.name());
-        let runtime = match self
-            .runtime(&cineris_ext::engine::StartWatch::default())
-            .await
-        {
-            Ok(runtime) => runtime,
-            Err(Refused {
+        // The start, its wait for a thread of the extension being stopped
+        // included, is within the command's time and ends at its cancel:
+        // dropped, it lets go of the session's slot (the review of the step
+        // 28 fixes' third pull request).
+        let watch = cineris_ext::engine::StartWatch::default();
+        let starting = cx.cancel.race(self.runtime(&watch));
+        let mut out_of_time = self.parts.timer.sleep(time);
+        let mut starting = std::pin::pin!(starting);
+        let started = std::future::poll_fn(|context| {
+            if let std::task::Poll::Ready(started) = starting.as_mut().poll(context) {
+                return std::task::Poll::Ready(Some(started));
+            }
+            if out_of_time.as_mut().poll(context).is_ready() {
+                return std::task::Poll::Ready(None);
+            }
+            std::task::Poll::Pending
+        })
+        .await;
+        let runtime = match started {
+            None => {
+                return Err(CommandFailed::Other(format!(
+                    "`{shown}` did not end within its {} s",
+                    time.as_secs()
+                )));
+            }
+            Some(None) => {
+                return Err(CommandFailed::Other(format!("`{shown}` was interrupted")));
+            }
+            Some(Some(Ok(runtime))) => runtime,
+            Some(Some(Err(Refused {
                 why,
                 stand: Refusal::Plain,
-            }) => return Err(CommandFailed::Other(why)),
-            Err(Refused { why, stand }) => {
+            }))) => return Err(CommandFailed::Other(why)),
+            Some(Some(Err(Refused { why, stand }))) => {
                 return Err(CommandFailed::Other(format!(
                     "{why}; {}",
                     self.remedy(stand)

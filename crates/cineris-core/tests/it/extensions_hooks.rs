@@ -1400,7 +1400,7 @@ fn a_removed_extensions_gates_hold_until_it_is_turned_off() {
 }
 
 /// An extension approved and found as approved whose capabilities do not
-/// compile for the workspace (a glob whose `{` is not closed) is not
+/// compile for the workspace (a glob whose `[` is not closed) is not
 /// loaded, and its gates are held from what it registered, failing (the
 /// early review of the script hooks, M1).
 fn an_extension_that_cannot_be_loaded_holds_its_gates() {
@@ -1410,7 +1410,7 @@ fn an_extension_that_cannot_be_loaded_holds_its_gates() {
     );
     approved(
         &world,
-        "hooks = [\"tool.before\", \"tool.after\"]\nread = [\"src/{a\"]",
+        "hooks = [\"tool.before\", \"tool.after\"]\nread = [\"src/[a\"]",
         GATES,
     );
     let core = world.core();
