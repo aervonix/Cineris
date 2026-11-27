@@ -74,6 +74,8 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [a-supervisor-lowering-a-wait](a-supervisor-lowering-a-wait.md): A client that is not a `user` is refused every tighten-only key in `session/new`'s overrides, a shorter value too; taking a lower one needs a comparison with a second load. Owner: step 37.
 - [a-test-of-the-map-turned-off-that-can-miss-its-break-under-load](a-test-of-the-map-turned-off-that-can-miss-its-break-under-load.md): The test that a session with the map turned off starts no background pass can miss its break under load: with the break, the pass it should see may not have reached its gate before the session closes. Owner: the maintainers, a small-fix session.
 - [an-exec-argument-is-not-checked-against-the-code-pages-best-fit](an-exec-argument-is-not-checked-against-the-code-pages-best-fit.md): An extension's program is refused an argument with one of a list of characters a Windows code page's best fit turns into `"`, `\` or `-`; an argument is not converted as Windows converts it, so a character the list does not name gets through. Owner: step 32 (hardening pass).
+- [an-extensions-progress-is-shown-only-when-its-tool-call-ends](an-extensions-progress-is-shown-only-when-its-tool-call-ends.md): An extension's `cineris.progress` lines are added to its tool's output only when the call ends, and a hook's or a command's are kept nowhere. Owner: step 30.
+- [an-extensions-tool-running-alone-has-no-end-to-end-test](an-extensions-tool-running-alone-has-no-end-to-end-test.md): An extension's tool runs alone by its spec and by its plan, and no test runs one beside another call, so a break of the plan's alone is caught by nothing. Owner: step 30.
 - [an-msys-program-reads-a-doubled-backslash-as-one](an-msys-program-reads-a-doubled-backslash-as-one.md): On Windows an MSYS2 or Cygwin program reads two backslashes inside a quoted argument as one, where the C runtime reads two: an extension's argument such as `\\server\share` reaches such a program as `\server\share`. Owner: step 32 (hardening pass).
 - [log-level-from-configuration-in-headless-mode](log-level-from-configuration-in-headless-mode.md): A headless run starts the log before configuration is read, so `log.level` is ignored there (the interactive half is done). Owner: step 32.
 - [memory-a-pass-leaves-resident](memory-a-pass-leaves-resident.md): The allocator keeps what the index's pass freed: on real code 22.8 MB resident after a cold pass on Linux, from 8.7 MB, and the idle TUI at 30.5 MB in a glibc build with 20,000 files (12.3 MB in the musl build that ships), against 25 MB. Owner: step 33.
@@ -85,6 +87,11 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [the-top-of-a-tree-past-the-listing-cap](the-top-of-a-tree-past-the-listing-cap.md): A listing cut at 100,000 entries holds the first directories of a depth-first walk, not the top of the tree. Owner: a later index step, or step 33.
 - [two-hundred-turns-of-reasoning-pass-the-inline-budget](two-hundred-turns-of-reasoning-pass-the-inline-budget.md): After 200 turns that each reason 16 KiB, the inline presenter's process holds 48.4 MB, against a budget of 40 MB, though the interface keeps at most 1.6 MB of the reasoning. Owner: a small step after the step 25 fixes.
 - [what-start-up-opens-traced](what-start-up-opens-traced.md): The blocking check that start-up opens no file outside an allow-list does not exist; the index's part is checked with a held gate. Owner: the next start-up step, or step 33.
+
+### cineris-ext
+
+- [an-extensions-out-of-memory-is-told-by-its-text](an-extensions-out-of-memory-is-told-by-its-text.md): The script engine tells that a runtime ran out of memory from the text of the error, not from its allocator. Owner: step 32.
+- [threads-left-running-past-the-cap-by-calls-already-running](threads-left-running-past-the-cap-by-calls-already-running.md): A call or a start of an extension already running when the count of threads left running reaches four can still leave one more, since a native loop of the script engine cannot be stopped. Owner: step 32.
 
 ### cineris-index
 
