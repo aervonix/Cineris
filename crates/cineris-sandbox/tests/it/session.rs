@@ -231,7 +231,7 @@ fn through(test: &str, interpreters: usize) -> (Option<i32>, String) {
 }
 
 /// A service's host's start, after a harness began, through three
-/// interpreters and through 63, is under a session's command; through 64
+/// interpreters is under a session's command; through 64
 /// (`cmd /c` nested 64 times between WMI's host and the subcommand, or a
 /// batch file that calls itself), more than the walk reads, it is not
 /// known, which refuses: before the review of step 28 (finding 2) the walk
@@ -243,14 +243,10 @@ fn through(test: &str, interpreters: usize) -> (Option<i32>, String) {
 #[test]
 fn sys_a_services_start_through_more_interpreters_than_the_bound_is_refused() {
     let test = "sys_a_services_start_through_more_interpreters_than_the_bound_is_refused";
-    for interpreters in [3, 63] {
-        let (code, said) = through(&format!("{test}-{interpreters}"), interpreters);
-        assert_eq!(
-            code,
-            Some(11),
-            "through {interpreters} interpreters: {said}"
-        );
-    }
+    // Through 63, at the bound, it is seen too: the unit test holds that
+    // edge, without the 63 processes' start a run here would cost.
+    let (code, said) = through(&format!("{test}-3"), 3);
+    assert_eq!(code, Some(11), "through 3 interpreters: {said}");
     let (code, said) = through(&format!("{test}-64"), 64);
     assert_eq!(code, Some(12), "through 64 interpreters: {said}");
     assert!(said.contains("more than 64"), "{said}");
