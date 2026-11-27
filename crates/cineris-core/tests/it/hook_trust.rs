@@ -667,6 +667,7 @@ fn sys_a_projects_hook_run_going_on_stops_when_its_trust_is_taken_away() {
         let (front, asked) = open_answering(&world, &core, yes()).await;
         assert!(asked.is_empty(), "{asked:?}");
         let started = std::cell::Cell::new(None);
+        let revoked = std::cell::Cell::new(false);
         let mut turn = std::pin::pin!(front.turn("read it"));
         let mut untrust = std::pin::pin!(async {
             // The loop's wait for it, and its run's own time: its program
@@ -683,6 +684,9 @@ fn sys_a_projects_hook_run_going_on_stops_when_its_trust_is_taken_away() {
             }
             started.set(stuck.started());
             assert!(trust_store(&world).revoke(&project_key(&world)).unwrap());
+            revoked.set(true);
+            // The reload takes the project's hooks away as soon as it has
+            // judged the trust, before it is done: the turn may end first.
             let reloaded = front
                 .op(Op::ConfigReload(ConfigReloadParams {
                     changed_only: true,
@@ -699,7 +703,10 @@ fn sys_a_projects_hook_run_going_on_stops_when_its_trust_is_taken_away() {
             turn.as_mut().poll(context)
         })
         .await;
-        assert!(untrusted, "the trust was taken away while it ran");
+        assert!(revoked.get(), "the trust was taken away while it ran");
+        if !untrusted {
+            untrust.await;
+        }
         assert_eq!(ended.outcome, TurnOutcome::Completed, "{ended:?}");
         let (_, outcome, text) = front.results().last().cloned().expect("the read");
         assert_eq!(outcome, "denied", "{text}");
