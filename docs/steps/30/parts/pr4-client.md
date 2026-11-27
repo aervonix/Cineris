@@ -2,6 +2,8 @@
 
 The fourth of step 30's pull requests: our own client of MCP in `cineris-mcp`, both eras over standard I/O, behind `Client` ([answered.md](../answered.md), points 0, 1, 3.5 and 3.7, and the table's answers), and fake servers of both eras for any crate's tests. Streamable HTTP is pull request 6, which plugs into the transport described below; the lifecycle (pull request 5) uses this client.
 
+**Nothing calls it yet.** This pull request merges first, before the process, the registry and the approvals (pull requests 1 to 3): no session, command or code path of the shipped binary reaches the client until the lifecycle wires it in behind those gates. `cineris-core` links `cineris-mcp` (feature `mcp`, as before) and uses nothing of it.
+
 ## What was built
 
 - **JSON-RPC** (`jsonrpc`): requests, notifications, results and errors read by hand from `serde_json::Value`, with no derived types. An id is a string or an integer, never null; an error with no id is a message of its own; a line holding an array is a batch, read only from a `2025-03-26` server (another's is counted and left). An answer whose id is one of ours written as a string of its digits is matched.
