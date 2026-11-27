@@ -29,11 +29,13 @@ pub enum Ready {
     Timeout,
 }
 
-/// Which keyboard reporting was turned on, and whether the alternate screen
-/// is, so that putting the terminal back turns them off: [`KEYBOARD`],
-/// [`WIN32`] and [`ALTERNATE`] as bits.
+/// Which keyboard reporting was turned on, which screens hold the keyboard
+/// protocol's flags, and whether the alternate screen is on, so that putting
+/// the terminal back turns them off: [`KEYBOARD`], [`WIN32`], [`ALTERNATE`]
+/// and [`MAIN_KEYBOARD`] as bits.
 static PROTOCOLS: AtomicU8 = AtomicU8::new(0);
-/// The enhanced keyboard protocol.
+/// The enhanced keyboard protocol: while the alternate screen is shown, its
+/// flags are pushed there.
 const KEYBOARD: u8 = 1;
 /// Windows Terminal's win32 input mode.
 const WIN32: u8 = 2;
@@ -41,37 +43,46 @@ const WIN32: u8 = 2;
 /// shown (since step 23). Mouse reporting is on only with it (since step
 /// 25), so its restore turns that off too.
 const ALTERNATE: u8 = 4;
+/// The main screen's stack of keyboard flags holds the program's push
+/// (since the fixes of step 25's review). Apart from [`KEYBOARD`]: the full
+/// screen pushes on the alternate screen before the main screen has had the
+/// flags, and a pop there would take the entry of the shell or of the
+/// program the terminal runs under.
+const MAIN_KEYBOARD: u8 = 8;
 
 /// What puts the terminal's own state back after a panic, a signal or a
-/// console event, when the presenter could not finish: ends a frame that was
-/// cut short, resets the style, leaves the alternate screen if it is on (the
-/// main screen comes back as it was), erases the live region from its first
-/// row down (the cursor is moved up the region's rows above it first, by
-/// [`restore`], so that a message printed next is not mixed into it), turns
-/// off what was turned on, and turns automatic wrap back on. With the
-/// alternate screen on it turns mouse reporting off first (modes 1006 and
-/// 1000), which is on only with it (since step 25), and pops the keyboard
-/// protocol's flags before it leaves the alternate screen as well as after:
-/// each screen has a stack of its own (since the fixes of step 25's
-/// review). A pop of a stack that holds nothing does nothing. The raw-mode
-/// or console-mode half is the system's. One for each set of keyboard
-/// reporting and screen that may be on, indexed by [`PROTOCOLS`].
-const RESTORE: [&[u8]; 8] = [
-    b"\x1b[?2026l\x1b[0m\r\x1b[J\x1b[?1004l\x1b[?2004l\x1b[?7h\x1b[?25h",
-    b"\x1b[?2026l\x1b[0m\r\x1b[J\x1b[<u\x1b[?1004l\x1b[?2004l\x1b[?7h\x1b[?25h",
-    b"\x1b[?2026l\x1b[0m\r\x1b[J\x1b[?9001l\x1b[?1004l\x1b[?2004l\x1b[?7h\x1b[?25h",
-    b"\x1b[?2026l\x1b[0m\r\x1b[J\x1b[<u\x1b[?9001l\x1b[?1004l\x1b[?2004l\x1b[?7h\x1b[?25h",
-    b"\x1b[?2026l\x1b[0m\x1b[?1006l\x1b[?1000l\x1b[?1049l\r\x1b[J\x1b[?1004l\x1b[?2004l\x1b[?7h\x1b[?25h",
-    b"\x1b[?2026l\x1b[0m\x1b[?1006l\x1b[?1000l\x1b[<u\x1b[?1049l\r\x1b[J\x1b[<u\x1b[?1004l\x1b[?2004l\x1b[?7h\x1b[?25h",
-    b"\x1b[?2026l\x1b[0m\x1b[?1006l\x1b[?1000l\x1b[?1049l\r\x1b[J\x1b[?9001l\x1b[?1004l\x1b[?2004l\x1b[?7h\x1b[?25h",
-    b"\x1b[?2026l\x1b[0m\x1b[?1006l\x1b[?1000l\x1b[<u\x1b[?1049l\r\x1b[J\x1b[<u\x1b[?9001l\x1b[?1004l\x1b[?2004l\x1b[?7h\x1b[?25h",
-];
+/// console event, when the presenter could not finish, put together by
+/// [`restore`] from these parts, in this order: it ends a frame that was cut
+/// short and resets the style ([`RESTORE_BEGIN`]); with the alternate
+/// screen on, it turns mouse reporting off (modes 1006 and 1000, on only
+/// with it since step 25), pops the keyboard protocol's flags if they are
+/// on (the alternate screen's stack is its own) and leaves the alternate
+/// screen, so that the main screen comes back as it was; it erases the live
+/// region from its first row down ([`ERASE`]; the cursor is moved up the
+/// region's rows above it first, so that a message printed next is not
+/// mixed into it); it pops the main screen's flags only if the program
+/// pushed there ([`MAIN_KEYBOARD`]); it turns the win32 input mode off if
+/// it was on, and the rest off, with automatic wrap back on
+/// ([`RESTORE_END`]). The raw-mode or console-mode half is the system's.
+const RESTORE_BEGIN: &[u8] = b"\x1b[?2026l\x1b[0m";
+/// Mouse reporting off, the SGR form first.
+const RESTORE_MOUSE_OFF: &[u8] = b"\x1b[?1006l\x1b[?1000l";
+/// One level of the keyboard protocol's flags popped, on the screen shown.
+const RESTORE_KEYBOARD_POP: &[u8] = b"\x1b[<u";
+/// The alternate screen left.
+const RESTORE_ALTERNATE_OFF: &[u8] = b"\x1b[?1049l";
+/// The win32 input mode off.
+const RESTORE_WIN32_OFF: &[u8] = b"\x1b[?9001l";
+/// Focus reports and bracketed paste off, automatic wrap on, the cursor
+/// shown.
+const RESTORE_END: &[u8] = b"\x1b[?1004l\x1b[?2004l\x1b[?7h\x1b[?25h";
 
 /// The restore sequence for the terminal's state now, without the move up
-/// to the live region's first row ([`restore`] adds it). Async-signal-safe:
-/// one atomic load.
-pub(crate) fn restore_sequence() -> &'static [u8] {
-    RESTORE[usize::from(PROTOCOLS.load(Ordering::SeqCst) & 7)]
+/// to the live region's first row ([`restore`] adds it): for tests.
+#[cfg(test)]
+pub(crate) fn restore_sequence() -> Vec<u8> {
+    let mut buffer = [0u8; RESTORE_MOST];
+    restore(&mut buffer, 0).to_vec()
 }
 
 /// The most one wait for input reads, in bytes: one `read` of the terminal
@@ -149,10 +160,10 @@ pub(crate) fn rows_to_move_up() -> u16 {
 /// Room for the longest restore sequence with its move up.
 pub(crate) const RESTORE_MOST: usize = 128;
 
-/// The restore sequence for the terminal's state now, written into
-/// `buffer`: [`restore_sequence`], with a move up of `rows` before its
-/// erase, to the live region's first row. Async-signal-safe: atomic loads,
-/// and copies into a buffer on the caller's stack.
+/// The restore sequence for the terminal's state now ([`RESTORE_BEGIN`]
+/// says what it is), written into `buffer`, with a move up of `rows` before
+/// its erase, to the live region's first row. Async-signal-safe: one atomic
+/// load, and copies into a buffer on the caller's stack.
 pub(crate) fn restore(buffer: &mut [u8; RESTORE_MOST], rows: u16) -> &[u8] {
     fn push(buffer: &mut [u8; RESTORE_MOST], length: &mut usize, bytes: &[u8]) {
         for &byte in bytes {
@@ -162,13 +173,17 @@ pub(crate) fn restore(buffer: &mut [u8; RESTORE_MOST], rows: u16) -> &[u8] {
             }
         }
     }
-    let sequence = restore_sequence();
-    let at = sequence
-        .windows(ERASE.len())
-        .position(|window| window == ERASE)
-        .unwrap_or(sequence.len());
+    let bits = PROTOCOLS.load(Ordering::SeqCst);
     let mut length = 0;
-    push(buffer, &mut length, &sequence[..at]);
+    push(buffer, &mut length, RESTORE_BEGIN);
+    if bits & ALTERNATE != 0 {
+        push(buffer, &mut length, RESTORE_MOUSE_OFF);
+        // The alternate screen's flags, before it is left.
+        if bits & KEYBOARD != 0 {
+            push(buffer, &mut length, RESTORE_KEYBOARD_POP);
+        }
+        push(buffer, &mut length, RESTORE_ALTERNATE_OFF);
+    }
     if rows > 0 {
         // `ESC [ n A`, its number written out by hand: nothing here may
         // allocate.
@@ -187,7 +202,15 @@ pub(crate) fn restore(buffer: &mut [u8; RESTORE_MOST], rows: u16) -> &[u8] {
         }
         push(buffer, &mut length, b"A");
     }
-    push(buffer, &mut length, &sequence[at..]);
+    push(buffer, &mut length, ERASE);
+    // The main screen's flags, only where the program pushed them.
+    if bits & MAIN_KEYBOARD != 0 {
+        push(buffer, &mut length, RESTORE_KEYBOARD_POP);
+    }
+    if bits & WIN32 != 0 {
+        push(buffer, &mut length, RESTORE_WIN32_OFF);
+    }
+    push(buffer, &mut length, RESTORE_END);
     &buffer[..length]
 }
 
@@ -202,6 +225,12 @@ fn set(bit: u8, on: bool) {
 /// Records whether the enhanced keyboard protocol is on.
 pub(crate) fn set_keyboard(on: bool) {
     set(KEYBOARD, on);
+}
+
+/// Records whether the main screen's stack holds the program's keyboard
+/// flags.
+pub(crate) fn set_main_keyboard(on: bool) {
+    set(MAIN_KEYBOARD, on);
 }
 
 /// Records whether the win32 input mode is on.
@@ -354,8 +383,10 @@ mod tests {
         let has = |sequence: &[u8], part: &[u8]| sequence.windows(part.len()).any(|w| w == part);
         for (keyboard, win32) in [(false, false), (true, false), (false, true), (true, true)] {
             set_keyboard(keyboard);
+            set_main_keyboard(keyboard);
             set_win32(win32);
             let sequence = restore_sequence();
+            let sequence = sequence.as_slice();
             assert_eq!(has(sequence, b"\x1b[<u"), keyboard);
             assert_eq!(has(sequence, b"\x1b[?9001l"), win32);
             for needed in [
@@ -370,73 +401,84 @@ mod tests {
             }
         }
         set_keyboard(false);
+        set_main_keyboard(false);
         set_win32(false);
     }
 
     /// Every restore leaves the terminal, as one with a stack of keyboard
     /// flags per screen follows it (kitty, ghostty, the test kit's
-    /// `VTerm`), with no flags pushed on either screen, the mouse off and
-    /// the alternate screen left, whatever was on: the flags pushed on the
-    /// main screen and on the alternate one, or only on the alternate one
-    /// (a reply that came while it was shown), and with the win32 input
-    /// mode on too (the fixes of step 25's review; `RESTORE[5..=7]`'s mouse
-    /// off had no test).
+    /// `VTerm`), with none of the program's flags on either screen and the
+    /// entry of the shell it runs under still there, the mouse off and the
+    /// alternate screen left, whatever was on: the flags pushed on the main
+    /// screen and on the alternate one, only on the alternate one (a reply
+    /// that came while it was shown), or nowhere (a push the terminal
+    /// refused), and the win32 input mode on or off (the fixes of step 25's
+    /// review; the mouse off under the keyboard protocol and the win32 input
+    /// mode had no test, and the second round found the main screen popped
+    /// where the program never pushed).
     #[test]
     fn the_restore_leaves_no_keyboard_flags_and_no_mouse_on_either_screen() {
         use cineris_testkit::vterm::VTerm;
 
-        for bits in 0..8 {
-            let (keyboard, win32, alternate) = (
-                bits & KEYBOARD != 0,
-                bits & WIN32 != 0,
-                bits & ALTERNATE != 0,
-            );
-            // Where the flags were pushed: on the main screen and on the
-            // alternate one shown after it, or only on the alternate one.
-            for on_main in [true, false] {
-                if !on_main && !(keyboard && alternate) {
-                    continue;
-                }
-                let mut term = VTerm::new(40, 10);
-                let mut state = b"\x1b[?2004h\x1b[?1004h\x1b[?7l".to_vec();
-                if keyboard && on_main {
-                    state.extend_from_slice(b"\x1b[>3u");
-                }
-                if win32 {
-                    state.extend_from_slice(b"\x1b[?9001h");
-                }
-                if alternate {
-                    state.extend_from_slice(b"\x1b[?1049h\x1b[?1000h\x1b[?1006h");
-                    if keyboard {
-                        state.extend_from_slice(b"\x1b[>3u");
+        for keyboard in [false, true] {
+            for win32 in [false, true] {
+                for alternate in [false, true] {
+                    for on_main in [false, true] {
+                        if on_main && !keyboard {
+                            continue;
+                        }
+                        // The shell's own entry, pushed before the program.
+                        let mut state = b"\x1b[>1u\x1b[?2004h\x1b[?1004h\x1b[?7l".to_vec();
+                        if on_main {
+                            state.extend_from_slice(b"\x1b[>3u");
+                        }
+                        if win32 {
+                            state.extend_from_slice(b"\x1b[?9001h");
+                        }
+                        if alternate {
+                            state.extend_from_slice(b"\x1b[?1049h\x1b[?1000h\x1b[?1006h");
+                            if keyboard {
+                                state.extend_from_slice(b"\x1b[>3u");
+                            }
+                        }
+                        let mut term = VTerm::new(40, 10);
+                        term.feed(&state);
+                        let bits = [
+                            (keyboard, KEYBOARD),
+                            (win32, WIN32),
+                            (alternate, ALTERNATE),
+                            (on_main, MAIN_KEYBOARD),
+                        ]
+                        .iter()
+                        .filter(|(on, _)| *on)
+                        .fold(0, |bits, (_, bit)| bits | bit);
+                        PROTOCOLS.store(bits, Ordering::SeqCst);
+                        let mut buffer = [0u8; RESTORE_MOST];
+                        term.feed(restore(&mut buffer, 2));
+                        let case = format!(
+                            "keyboard {keyboard}, win32 {win32}, alternate {alternate}, pushed \
+                             on the main screen {on_main}: {:?}",
+                            String::from_utf8_lossy(&restore_sequence())
+                        );
+                        let modes = term.modes();
+                        assert!(!modes.alternate, "the alternate screen is shown; {case}");
+                        assert!(
+                            !modes.mouse && !modes.mouse_sgr,
+                            "the mouse is reported; {case}"
+                        );
+                        assert!(!modes.win32_input, "the win32 input mode is on; {case}");
+                        assert_eq!(
+                            term.main_keyboard(),
+                            [1],
+                            "the main screen's flags, the shell's first; {case}"
+                        );
+                        assert!(
+                            term.alternate_keyboard().is_empty(),
+                            "the alternate screen's flags {:?}; {case}",
+                            term.alternate_keyboard()
+                        );
                     }
                 }
-                term.feed(&state);
-                PROTOCOLS.store(bits, Ordering::SeqCst);
-                let mut buffer = [0u8; RESTORE_MOST];
-                term.feed(restore(&mut buffer, 2));
-                let case = format!(
-                    "keyboard {keyboard}, win32 {win32}, alternate {alternate}, pushed on the \
-                     main screen {on_main}: {:?}",
-                    String::from_utf8_lossy(restore_sequence())
-                );
-                let modes = term.modes();
-                assert!(!modes.alternate, "the alternate screen is shown; {case}");
-                assert!(
-                    !modes.mouse && !modes.mouse_sgr,
-                    "the mouse is reported; {case}"
-                );
-                assert!(!modes.win32_input, "the win32 input mode is on; {case}");
-                assert!(
-                    term.main_keyboard().is_empty(),
-                    "the main screen's flags {:?}; {case}",
-                    term.main_keyboard()
-                );
-                assert!(
-                    term.alternate_keyboard().is_empty(),
-                    "the alternate screen's flags {:?}; {case}",
-                    term.alternate_keyboard()
-                );
             }
         }
         PROTOCOLS.store(0, Ordering::SeqCst);
@@ -445,7 +487,7 @@ mod tests {
     #[test]
     fn the_restore_moves_up_to_the_live_regions_first_row_before_it_erases() {
         let mut buffer = [0u8; RESTORE_MOST];
-        assert_eq!(restore(&mut buffer, 0), restore_sequence());
+        assert_eq!(restore(&mut buffer, 0), restore_sequence().as_slice());
         for (rows, up) in [
             (1, &b"\x1b[1A"[..]),
             (12, b"\x1b[12A"),

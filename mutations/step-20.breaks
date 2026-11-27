@@ -272,8 +272,10 @@ caught-by:
 [break] autowrap-left-off-after-a-panic
 rule: Putting the terminal back after a panic or a signal turns automatic wrap back on.
 file: crates/cineris-term/src/sys/mod.rs
-find: b"\x1b[?2026l\x1b[0m\r\x1b[J\x1b[?1004l\x1b[?2004l\x1b[?7h\x1b[?25h"
-replace: b"\x1b[?2026l\x1b[0m\r\x1b[J\x1b[?1004l\x1b[?2004l\x1b[?25h"
+# The restore is put together from parts since the second round of the
+# fixes of step 25's review; automatic wrap is in its last.
+in-string: \x1b[?2004l\x1b[?7h
+replace: \x1b[?2004l
 caught-by:
     sys::tests::the_restore_sequence_turns_off_what_was_turned_on
 
