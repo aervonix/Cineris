@@ -24,3 +24,17 @@ The job A/B of the third-party crates (`try` 45979975138, two rounds): a cold bu
 ## The layout
 
 `main` at `0ce319cc` built and run in one place against the same tests built into a nextest archive, extracted and run from it, six rounds on one runner, the first two cold (`try` 45974262733, `ab --job --from-archive head --keep-build`): tier 2 48.2 → 44.9 s cold and 45.3 → 43.8 s warm, tier 1 22.8 → 21.1 and 20.1 → 19.3 s, tier 3 87.0 → 80.3 and 73.7 → 73.4 s, the extraction 1.0 s. The spread of one side's own rounds in tier 2 is 5.4 s.
+
+## The final tree, both trees on one runner
+
+`try --final` (run 45994804608): the branch at `4ee0d01` against `main` at `f844b31c` on one Windows runner at 8 ms a process start, the median of five rounds a side; the tests on Linux 22.04; the binary's size.
+
+| Tier | The branch | `main` | Change | Budget |
+|---|---|---|---|---|
+| 1, unit | 22.3 s (3,648 tests) | 22.6 s (3,641) | −0.3 s | 25 s |
+| 2, integration | **46.8 s** (1,859 tests) | 50.5 s (1,859) | **−3.8 s** | 40 s |
+| 3, system | 86.5 s (270 tests) | 86.8 s (270) | −0.2 s | 90 s |
+
+Tier 2 in each round, `main` then the branch: 50.9 / 47.2, 50.8 / 47.1, 50.6 / 46.9, 52.2 / 48.2, 51.5 / 47.7 s. By crate: `cineris-tui` 5.88 → 3.98 s, `cineris-core` 22.06 → 21.43 s, `cineris-knowledge` 1.60 → 1.10 s, `cineris-ext` 1.04 → 0.69 s, every other crate within 0.1 s.
+
+On Linux 22.04 (5 ms): tier 1 13.3 s, tier 2 30.9 s, tier 3 40.6 s, each under its budget. The `dist` binary on Linux: 17,583,160 bytes, the same as `main`'s, with none of the test hooks.
