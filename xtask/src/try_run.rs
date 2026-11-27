@@ -38,12 +38,15 @@ COMMAND is one of:
                                    them, with the tier report; with --count,
                                    `stress` with that many repeats
   test --job [--setup-base FILE] [--setup-head FILE] [--keep-build] [-p CRATE]...
+             [--from-archive base|head]
                                    with --against: `ab --job`, the whole job
                                    (build, then the tests) of both trees,
                                    --count rounds (2 when not given; an even
                                    number, each side first as often), each
                                    side with its own setup script, and the
-                                   median of each phase
+                                   median of each phase; --from-archive runs
+                                   one side from an archive of its tests, as
+                                   the Windows test jobs do
   final                            what --final runs (each job is told its
                                    part with --part ab|tests|size)
   stress -p CRATE... [ARGS]...     the tests many times over (--count repeats)
@@ -616,7 +619,7 @@ impl Inputs {
 /// command, and why: they are options of another command, or something a
 /// `try` input says. Passed on, each would reach nextest after the build and
 /// fail the job with no test run.
-const NOT_FOR_NEXTEST: [(&str, &str); 27] = [
+const NOT_FOR_NEXTEST: [(&str, &str); 28] = [
     (
         "--job",
         "it makes an A/B a job A/B (`ab --job`): it goes with the `against` input",
@@ -631,6 +634,10 @@ const NOT_FOR_NEXTEST: [(&str, &str); 27] = [
     ),
     (
         "--keep-build",
+        "it is an option of a job A/B (`ab --job`): it goes with `--job` and the `against` input",
+    ),
+    (
+        "--from-archive",
         "it is an option of a job A/B (`ab --job`): it goes with `--job` and the `against` input",
     ),
     (
@@ -1298,6 +1305,9 @@ impl Inputs {
         if job.keep_build {
             command.push("--keep-build".to_owned());
         }
+        if let Some(side) = job.from_archive {
+            command.extend(["--from-archive".to_owned(), side]);
+        }
         let (packages, others) = packages_and_others(rest)?;
         for package in packages {
             command.extend(["-p".to_owned(), package]);
@@ -1352,6 +1362,8 @@ struct JobWords {
     setup_base: Option<String>,
     setup_head: Option<String>,
     keep_build: bool,
+    /// The side run from an archive of its tests, as `ab --job` takes it.
+    from_archive: Option<String>,
 }
 
 /// `--job` and the options that go with it, out of `words` (before a `--` of
@@ -1373,6 +1385,15 @@ fn job_words(words: &[String]) -> Result<(Option<JobWords>, Vec<String>)> {
             "--keep-build" => {
                 options.push(word.clone());
                 job.keep_build = true;
+            }
+            "--from-archive" => {
+                let side = iter
+                    .next()
+                    .ok_or_else(|| format!("`{word}` needs a side, base or head"))?;
+                options.push(word.clone());
+                if job.from_archive.replace(side.clone()).is_some() {
+                    return Err(format!("`{word}` is given twice"));
+                }
             }
             "--setup-base" | "--setup-head" => {
                 let file = iter
@@ -3769,6 +3790,29 @@ mod tests {
             "ab --job --base ../ab-base --label main --minutes 200 --setup-base a.sh \
              --setup-head b.sh"
         );
+        // The layout's A/B: one side from an archive, as `ab --job` takes it
+        // (which checks the side's name and refuses it with -p).
+        assert_eq!(
+            try_command(&[
+                "--command",
+                "test --job --from-archive head --keep-build",
+                "--against",
+                "main",
+                "--count",
+                "4",
+            ])
+            .unwrap(),
+            "ab --job --base ../ab-base --label main --minutes 200 --count 4 --keep-build \
+             --from-archive head"
+        );
+        let error = try_command(&[
+            "--command",
+            "test --job --from-archive head -p cineris-base",
+            "--against",
+            "main",
+        ])
+        .unwrap_err();
+        assert!(error.contains("no -p"), "{error}");
         for (arguments, said) in [
             (
                 &["--command", "test --job"][..],
