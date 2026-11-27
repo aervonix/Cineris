@@ -20,9 +20,9 @@ use cineris_base::path::{AbsPath, PathStyle};
 use cineris_base::{CancelToken, FakeClock};
 use cineris_ext::capability::Capabilities;
 use cineris_ext::engine::{
-    A_CALL_IS_STARTED, A_MAIN_MODULE_IS_EVALUATED, A_THREAD_ENDS, CallContext, CallError,
-    EVALUATION_TIME, GRACE, Limit, LoadError, MAX_ABANDONED, ScriptRuntime, Source, Target,
-    abandoned_threads, is_disabled, threads_being_stopped,
+    A_CALL_IS_STARTED, A_MAIN_MODULE_IS_EVALUATED, A_THREAD_ENDS, AFTER_A_CALLS_END_IS_TOLD,
+    CallContext, CallError, EVALUATION_TIME, GRACE, Limit, LoadError, MAX_ABANDONED, ScriptRuntime,
+    Source, Target, abandoned_threads, is_disabled, threads_being_stopped,
 };
 use cineris_ext::folder::Snapshot;
 use cineris_ext::manifest::Manifest;
@@ -490,4 +490,85 @@ fn a_call_waits_while_threads_being_stopped_would_reach_the_cap() {
     assert!(!runtimes[last].was_abandoned());
     started.release();
     assert_eq!(started.timed_out(), 0, "a held thread went on by itself");
+}
+
+/// A thread told to stop that comes back within its grace (its call's end
+/// told) counts no more, even before it has ended: a start of its extension
+/// made while it is still ending does not wait for it, so a grace that the
+/// session's clock runs through meanwhile, moved for another wait, does not
+/// leave it running (the review of the step 28 fixes' third pull request: a
+/// stress run on Windows, where the thread's real end came after the
+/// test's clock had moved, left an interrupted command's thread running and
+/// disabled its extension). The thread is held after it told its call's
+/// end, before it ends.
+#[test]
+fn a_thread_that_came_back_counts_no_more_while_it_ends() {
+    let timer = timer();
+    let snapshot = extension(
+        "",
+        "cineris.tool({ name: 't', description: 'a tool', run: () => { \
+         cineris.notify('spinning'); for (;;) {} } });",
+    );
+    let capabilities = capabilities(&snapshot);
+    let runtime = start(&snapshot, &timer).unwrap();
+    let host = FakeHost::new();
+    let told = Hold::new(AFTER_A_CALLS_END_IS_TOLD);
+    let cancel = CancelToken::new();
+    let before = abandoned_threads();
+    let (result, ()) = block_on(join(
+        runtime.call(
+            Target::Tool("t".to_owned()),
+            json!({}),
+            CallContext {
+                host: &host,
+                capabilities: &capabilities,
+                time: TIME,
+                timer: &timer,
+                clock: timer.clock(),
+                cancel: &cancel,
+                asked: None,
+            },
+        ),
+        async {
+            while !host.asked().iter().any(|asked| asked == "notify spinning") {
+                yield_once().await;
+            }
+            cancel.cancel();
+        },
+    ));
+    assert_eq!(result, Err(CallError::Cancelled));
+    // The thread told its call's end, and is held before it ends.
+    told.reach();
+    assert!(!runtime.was_abandoned());
+    assert_eq!(
+        threads_being_stopped(),
+        0,
+        "a thread that came back still counts"
+    );
+    // The start is polled first; the clock then moves a grace, as a test's
+    // or a slow machine's would while the thread ends.
+    let (next, ()) = block_on(join(starting(&snapshot, &timer), async {
+        timer.advance(GRACE);
+    }));
+    assert!(
+        next.is_ok(),
+        "a thread that stopped as told was left running while it ended: {next:?}"
+    );
+    assert_eq!(abandoned_threads(), before);
+    told.release();
+    assert_eq!(told.timed_out(), 0, "the held thread went on by itself");
+}
+
+/// Lets the other futures of a join run once.
+async fn yield_once() {
+    let mut yielded = false;
+    std::future::poll_fn(|context| {
+        if yielded {
+            return Poll::Ready(());
+        }
+        yielded = true;
+        context.waker().wake_by_ref();
+        Poll::Pending
+    })
+    .await;
 }
