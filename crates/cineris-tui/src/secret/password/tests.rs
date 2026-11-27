@@ -859,4 +859,8 @@ fn at_a_terminal_a_yes_or_no_is_a_line_typed_after_the_question() {
         let (answer, _) = confirmed(&[], &[Step::Typed(typed), ENTER]);
         assert_eq!(answer, expected, "{typed:?}");
     }
+    // A line that comes as one burst, given as a paste: its line break
+    // answers.
+    let (answer, _) = confirmed(&[], &[Step::Typed(b"\x1b[200~yes\r\x1b[201~")]);
+    assert_eq!(answer, Some(true));
 }

@@ -838,6 +838,7 @@ pub fn confirm_on<D: Device>(
     let question = cineris_term::sanitize(question);
     terminal.write_frame(format!("{question} [y/N] ").as_bytes())?;
     let mut line = String::new();
+    let yes = |line: &str| matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes");
     let answer = loop {
         if terminal.ending().is_some() {
             break None;
@@ -845,42 +846,59 @@ pub fn confirm_on<D: Device>(
         let Some(event) = terminal.next(None)? else {
             continue;
         };
+        // What the event answers, once it is done with: `Some(None)` for no
+        // answer at all.
+        let mut answered: Option<Option<bool>> = None;
+        let mut echo = String::new();
         match &event {
-            Event::Key(key) if is_ctrl_c(*key) => break None,
+            Event::Key(key) if is_ctrl_c(*key) => answered = Some(None),
             Event::Key(Key {
                 code: KeyCode::Enter,
                 ..
-            }) => {
-                break Some(matches!(
-                    line.trim().to_ascii_lowercase().as_str(),
-                    "y" | "yes"
-                ));
-            }
+            }) => answered = Some(Some(yes(&line))),
             Event::Key(Key {
                 code: KeyCode::Esc, ..
-            }) => break Some(false),
+            }) => answered = Some(Some(false)),
             Event::Key(Key {
                 code: KeyCode::Backspace,
                 ..
             }) => {
                 if line.pop().is_some() {
-                    terminal.write_frame(b"\x08 \x08")?;
+                    echo.push_str("\x08 \x08");
                 }
             }
             Event::Key(Key {
                 code: KeyCode::Char(typed),
                 mods,
-            }) if (*mods == Mods::NONE || *mods == Mods::SHIFT)
-                && !typed.is_control()
-                && line.chars().count() < CONFIRM_MOST =>
-            {
-                line.push(*typed);
-                let mut bytes = [0; 4];
-                terminal.write_frame(typed.encode_utf8(&mut bytes).as_bytes())?;
+            }) if *mods == Mods::NONE || *mods == Mods::SHIFT => {
+                if !typed.is_control() && line.chars().count() < CONFIRM_MOST {
+                    line.push(*typed);
+                    echo.push(*typed);
+                }
+            }
+            // Typed quickly, a line can come as one burst a terminal with
+            // no bracketed paste gives as a paste: its line break answers.
+            Event::Paste(text) => {
+                for typed in text.chars() {
+                    if typed == '\r' || typed == '\n' {
+                        answered = Some(Some(yes(&line)));
+                        break;
+                    }
+                    if !typed.is_control() && line.chars().count() < CONFIRM_MOST {
+                        line.push(typed);
+                        echo.push(typed);
+                    }
+                }
             }
             _ => {}
         }
         forget(event);
+        if !echo.is_empty() {
+            terminal.write_frame(echo.as_bytes())?;
+        }
+        if let Some(answer) = answered {
+            break answer;
+        }
     };
     terminal.write_frame(b"\r\n")?;
     Ok(answer)
