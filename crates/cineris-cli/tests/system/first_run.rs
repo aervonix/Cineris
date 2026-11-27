@@ -341,11 +341,12 @@ fn sys_auth_login_never_echoes_a_key_typed_before_its_row() {
 /// step 25, finding 17).
 #[test]
 fn sys_auth_login_at_a_terminal_honours_the_terminal_settings() {
-    let phases = cineris_testkit::Phases::new(
-        "sys_auth_login_at_a_terminal_honours_the_terminal_settings",
+    let phases =
+        cineris_testkit::Phases::new("sys_auth_login_at_a_terminal_honours_the_terminal_settings");
+    let machine = Machine::with_config(
+        "auth_login_terminal_settings",
+        "terminal.keyboard = false\n",
     );
-    let machine =
-        Machine::with_config("auth_login_terminal_settings", "terminal.keyboard = false\n");
     let mut session = machine.tui(&["auth", "login", "anthropic"]);
     phases.mark("the key");
     wait_all(

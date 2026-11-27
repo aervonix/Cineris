@@ -1059,10 +1059,11 @@ fn named_not_shown(
 /// core is then given rather than reading it again. Anything said before
 /// the key is read is said once the terminal is put back.
 fn login_at_terminal(context: &Context, provider: &str) -> Result<Done, Done> {
-    let loaded = cineris_config::load(&LoadOptions::new(context.env.clone())).map_err(|failure| {
-        context.say(&failure.render(&context.env));
-        exit::USAGE
-    })?;
+    let loaded =
+        cineris_config::load(&LoadOptions::new(context.env.clone())).map_err(|failure| {
+            context.say(&failure.render(&context.env));
+            exit::USAGE
+        })?;
     let overrides = crate::interactive::overrides(&loaded.settings.terminal);
     let terminal = cineris_tui::secret::KeyTerminal::enter(overrides);
     let core = match context.start_core(&Common::default(), Some(loaded)) {
