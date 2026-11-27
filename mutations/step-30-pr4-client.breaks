@@ -250,8 +250,9 @@ in: Start::agree
 find: link = self.again(link, "it showed itself modern once it was sent `initialize`").await?;
 replace:
 caught-by:
-    cineris-mcp::it probe::a_slow_modern_server_that_exits_on_refusing_initialize_is_usable_after_its_start
     cineris-mcp::it probe::a_modern_server_whose_first_answer_was_lost_is_started_again_once_it_refuses_initialize
+    cineris-mcp::it probe::a_modern_server_whose_late_answer_comes_while_initialize_waits_is_started_again
+    cineris-mcp::it start::a_late_modern_error_while_initialize_waits_starts_the_server_again
     cineris-mcp::it probe::a_modern_server_slower_than_the_probe_to_start_is_found_by_its_late_answer
 
 [break] a-late-discovery-is-not-heard
