@@ -415,6 +415,9 @@ mod tests {
             ]
         );
         assert!(output.is_error);
+
+        let sent_false = call_output(json!({"content": [], "isError": false}), Era::Modern);
+        assert!(!sent_false.is_error, "`isError: false` sent explicitly");
     }
 
     #[test]

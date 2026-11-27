@@ -120,13 +120,13 @@ impl Start<'_> {
             match initialize(&first.rpc).await {
                 Ok(agreed) => return Ok((first, agreed)),
                 // Refused: the server changed; what it speaks is asked.
-                Err(Declined::Answered(_)) => {}
+                Err(Declined::Answered(_)) => return self.probe(first, true).await,
                 // It exited: started again, and sent `initialize` alone.
                 Err(Declined::Stopped(_)) => return self.initialize_again(first).await,
                 Err(Declined::Failed(error)) => return Err(error),
             }
         }
-        self.probe(first).await
+        self.probe(first, false).await
     }
 
     /// The server started again, and sent `initialize` alone.
@@ -136,34 +136,52 @@ impl Start<'_> {
         Ok((link, agreed))
     }
 
-    /// Asks the server what it speaks, and acts on its answer.
-    async fn probe(&self, link: Link) -> Result<(Link, Agreed), ClientError> {
+    /// Asks the server what it speaks, and acts on its answer. After a
+    /// known legacy server refused `initialize` (`refused`), a process that
+    /// exits on the probe is started again and asked once more, since a
+    /// modern server may exit on refusing it.
+    async fn probe(&self, link: Link, refused: bool) -> Result<(Link, Agreed), ClientError> {
         let preferred = wire::MODERN_VERSIONS[0];
-        let mut limit = Limit::new(
-            self.timer,
-            "answer server/discover",
-            self.options.probe_timeout,
-        );
-        // Sent by hand, not by `Rpc::ask`, so that an answer after the
-        // probe's time is still heard while `initialize` waits. Never
-        // cancelled: a legacy server would not know the request it named.
-        let transport = Arc::clone(link.rpc.transport());
-        let id = link.rpc.next_id();
-        let message = jsonrpc::request(id, "server/discover", discover_params(preferred));
-        let mut probe = transport.request(id, message);
-        match bounded(&mut probe, Some(&mut limit), None).await {
-            Ok(answered) => {
-                drop(probe);
-                match probed(answered, preferred) {
-                    // An error that is not a modern one: legacy.
-                    Probe::Legacy => self.legacy(link, None).await,
-                    Probe::Exited(_) => self.initialize_again(link).await,
-                    other => self.decided(link, other).await,
+        let mut link = link;
+        let mut refused = refused;
+        loop {
+            let mut limit = Limit::new(
+                self.timer,
+                "answer server/discover",
+                self.options.probe_timeout,
+            );
+            // Sent by hand, not by `Rpc::ask`, so that an answer after the
+            // probe's time is still heard while `initialize` waits. Never
+            // cancelled: a legacy server would not know the request it
+            // named.
+            let transport = Arc::clone(link.rpc.transport());
+            let id = link.rpc.next_id();
+            let message = jsonrpc::request(id, "server/discover", discover_params(preferred));
+            let mut probe = transport.request(id, message);
+            return match bounded(&mut probe, Some(&mut limit), None).await {
+                Ok(answered) => {
+                    drop(probe);
+                    match probed(answered, preferred) {
+                        // An error that is not a modern one: legacy.
+                        Probe::Legacy => self.legacy(link, None).await,
+                        // A `-32022` naming only legacy revisions: a
+                        // server of the legacy era that says so.
+                        Probe::Unsupported(supported) if only_legacy(&supported) => {
+                            self.legacy(link, None).await
+                        }
+                        Probe::Exited(_) if refused => {
+                            link = self.again(link)?;
+                            refused = false;
+                            continue;
+                        }
+                        Probe::Exited(_) => self.initialize_again(link).await,
+                        other => self.decided(link, other).await,
+                    }
                 }
-            }
-            // Silent: legacy, unless its answer comes while `initialize`
-            // waits.
-            Err(_) => self.legacy(link, Some(probe)).await,
+                // Silent: legacy, unless its answer comes while `initialize`
+                // waits.
+                Err(_) => self.legacy(link, Some(probe)).await,
+            };
         }
     }
 
@@ -204,11 +222,12 @@ impl Start<'_> {
                             probe_done = true;
                             // A legacy server's late error, or an end that
                             // the handshake meets too, is left.
-                            if let modern @ (Probe::Modern(_)
-                            | Probe::Unsupported(_)
-                            | Probe::Refused(_)) = probed(answered, preferred)
-                            {
-                                return Poll::Ready(Err(modern));
+                            match probed(answered, preferred) {
+                                Probe::Unsupported(supported) if only_legacy(&supported) => {}
+                                modern @ (Probe::Modern(_)
+                                | Probe::Unsupported(_)
+                                | Probe::Refused(_)) => return Poll::Ready(Err(modern)),
+                                _ => {}
                             }
                         }
                         handshake.as_mut().poll(context).map(Ok)
@@ -274,6 +293,25 @@ impl Start<'_> {
             ))),
         }
     }
+}
+
+/// Whether a `-32022`'s list of revisions names only legacy ones (every one
+/// dated before the first modern revision) and one of them is a revision
+/// the client speaks: a server of the legacy era that says so, as `rmcp`'s
+/// servers narrowed to the legacy revisions do. A list naming any modern
+/// revision is a modern server's.
+fn only_legacy(supported: &[String]) -> bool {
+    let first_modern = wire::MODERN_VERSIONS
+        .iter()
+        .copied()
+        .min()
+        .unwrap_or("2026-07-28");
+    supported
+        .iter()
+        .all(|version| version.as_str() < first_modern)
+        && supported
+            .iter()
+            .any(|version| wire::LEGACY_VERSIONS.contains(&version.as_str()))
 }
 
 /// What the client reports for a refused handshake.
