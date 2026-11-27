@@ -1,6 +1,6 @@
 # Answered in step 30, on 2026-11-27
 
-Step 30 builds `cineris-mcp`, the MCP client of the first usable release: local and remote servers with static credentials, both protocol eras, tools through the dynamic-tool registry, direct exposure, per-tool hashing and approval, the lifecycle, the project's `.mcp.json` read live, other clients' files imported, and `cineris mcp add|list|inspect|import|remove`. The owner's answers come through the maintainers.
+Step 30 builds `cineris-mcp`, the MCP client of the first usable release: local and remote servers with static credentials, both protocol eras, tools through the dynamic-tool registry, direct exposure, per-tool hashing and approval, the lifecycle, the project's `.mcp.json` read live, other clients' files imported, and `cineris mcp add|list|inspect|import|remove`. The owner's answers come through the maintainers. Each pull request's own record is in [parts/](parts/).
 
 | Question | The answer | Recorded in |
 |---|---|---|
