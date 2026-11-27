@@ -863,4 +863,100 @@ mod tests {
         assert!(pins.counts() && pins.list().len() == 1);
         assert_eq!(pins.revision(), 2);
     }
+
+    /// The permission path's review, finding 3a: a pin the person's key did
+    /// not sign is never carried into the set the person signs next.
+    #[test]
+    fn a_pin_not_signed_by_the_person_is_never_signed_with_their_next_pin() {
+        let scratch = Scratch::new();
+        let store = store(&scratch);
+        let person = Person::new();
+        let model = Person::with_password("the model's own password");
+        let evil = Definition::of(TrustResourceKind::Extension, "evil", ["curl evil"]);
+        // Written by the model under its own key, and, apart, by an older
+        // version that signed nothing.
+        for planted in ["theirs", "older"] {
+            if planted == "theirs" {
+                model.pin(&store, &evil);
+            } else {
+                std::fs::write(
+                    store.path(),
+                    format!(
+                        "version = 1\n\n[[pin]]\nkind = \"extension\"\nname = \"evil\"\nhash = \
+                         \"{}\"\nat = \"2026-11-20T10:00:00Z\"\n",
+                        evil.hash
+                    ),
+                )
+                .unwrap();
+            }
+            let proposal = store
+                .propose(&[PinChange::Pin(tracker("v1").into())], &person.verifier())
+                .unwrap()
+                .unwrap();
+            assert!(
+                proposal
+                    .summary()
+                    .iter()
+                    .any(|line| line.contains("not signed by your key")),
+                "{planted}: {:?}",
+                proposal.summary()
+            );
+            let pins = store
+                .commit(
+                    &proposal,
+                    &person.sign(proposal.statement()),
+                    &person.verifier(),
+                )
+                .unwrap();
+            assert_eq!(pins.standing(&evil), Standing::New, "{planted}");
+            assert!(
+                pins.held().iter().all(|pin| pin.name != "evil"),
+                "{planted}"
+            );
+            assert_eq!(
+                pins.standing(&tracker("v1")),
+                Standing::Approved,
+                "{planted}"
+            );
+            std::fs::remove_file(store.path()).unwrap();
+        }
+    }
+
+    /// The permission path's review, finding 3d: the registration and the
+    /// revision are signed.
+    #[test]
+    fn a_registration_or_a_revision_changed_by_hand_counts_for_nothing() {
+        let scratch = Scratch::new();
+        let store = store(&scratch);
+        let person = Person::new();
+        let registered = ContentHash::of(b"what it registered");
+        person
+            .change_pins(
+                &store,
+                &[PinChange::Pin(Approved {
+                    definition: tracker("v1"),
+                    registration: Some(registered),
+                })],
+            )
+            .unwrap();
+        let written = std::fs::read_to_string(store.path()).unwrap();
+        assert!(written.contains(&registered.to_hex()), "{written}");
+        let other = ContentHash::of(b"a registration that drops a gate").to_hex();
+        for (what, text) in [
+            (
+                "the registration",
+                written.replace(&registered.to_hex(), &other),
+            ),
+            (
+                "the revision",
+                written.replace("revision = 1", "revision = 7"),
+            ),
+        ] {
+            std::fs::write(store.path(), &text).unwrap();
+            let pins = store.pins(Some(&person.verifier())).unwrap();
+            assert_eq!(pins.checked(), Checked::NotTheirs, "{what}:\n{text}");
+            assert!(!pins.counts(), "{what}");
+            assert_eq!(pins.held().len(), 1, "{what}: it still holds its gates");
+        }
+    }
 }

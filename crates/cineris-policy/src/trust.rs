@@ -1323,6 +1323,44 @@ impl TrustStore {
                 "it is version 1, which has no `git` or `declined_rules`".to_owned(),
             ));
         }
+        // A file this build wrote has one entry for each project, one pin
+        // for each kind and name in an entry, and one refusal for each
+        // project: with two, the order would decide which stands (the
+        // permission path's review, finding 5).
+        for (index, project) in file.projects.iter().enumerate() {
+            if file.projects[..index]
+                .iter()
+                .any(|earlier| earlier.key == project.key)
+            {
+                return Err(self.not_understood(format!(
+                    "it holds the project `{}` twice",
+                    project.key.as_str().escape_debug()
+                )));
+            }
+            for (at, pin) in project.pinned.iter().enumerate() {
+                if project.pinned[..at]
+                    .iter()
+                    .any(|earlier| earlier.kind == pin.kind && earlier.name == pin.name)
+                {
+                    return Err(self.not_understood(format!(
+                        "it pins the {} `{}` of one project twice",
+                        pin.kind.escape_debug(),
+                        pin.name.escape_debug()
+                    )));
+                }
+            }
+        }
+        for (index, refused) in file.refused.iter().enumerate() {
+            if file.refused[..index]
+                .iter()
+                .any(|earlier| earlier.key == refused.key)
+            {
+                return Err(self.not_understood(format!(
+                    "it refuses the project `{}` twice",
+                    refused.key.as_str().escape_debug()
+                )));
+            }
+        }
         // Nor has a version before 3 a revision, a signature or a pin's
         // registration.
         if file.version < VERSION
@@ -2076,5 +2114,44 @@ mod tests {
             pins[0].hash = "XYZ".to_owned();
         }
         assert!(crate::signed::statement_of(&bad).is_err());
+    }
+
+    /// The permission path's review, finding 5: two entries of one project,
+    /// two pins of one kind and name in an entry, or two refusals of one
+    /// project refuse the whole file, as in `pins.toml`.
+    #[test]
+    fn a_project_held_twice_refuses_the_whole_file() {
+        let scratch = crate::store_lock::tests::Scratch::new();
+        let store = store_in(&scratch);
+        let key = ProjectKey::new("k");
+        let person = Person::new();
+        person.trust(&store, &key, "~/app", &[hook("gate", &["x"])], false);
+        let written = std::fs::read_to_string(store.path()).unwrap();
+        let entry_at = written.find("[[project]]").unwrap();
+        let twice = format!(
+            "{}[[project]]\nkey = \"k\"\ntrusted_at = \"2026-11-27T10:00:00Z\"\n\n{}",
+            &written[..entry_at],
+            &written[entry_at..]
+        );
+        let pin_at = written.find("[[project.pinned]]").unwrap();
+        let pinned_twice = format!("{}\n{}", written, &written[pin_at..]);
+        let refused_twice = format!(
+            "{written}\n[[refused]]\nkey = \"no\"\nrefused_at = \"2026-11-27T10:00:00Z\"\n\n\
+             [[refused]]\nkey = \"no\"\nrefused_at = \"2026-11-27T10:00:00Z\"\n"
+        );
+        for (what, text) in [
+            ("a project twice", twice),
+            ("a pin twice", pinned_twice),
+            ("a refusal twice", refused_twice),
+        ] {
+            std::fs::write(store.path(), &text).unwrap();
+            assert!(
+                matches!(
+                    store.project(&key, Some(&person.verifier())),
+                    Err(TrustError::NotUnderstood { .. })
+                ),
+                "{what}:\n{text}"
+            );
+        }
     }
 }

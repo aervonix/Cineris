@@ -375,6 +375,13 @@ impl KeyFile {
         let public_key = from_hex::<{ Verifier::LEN }>(&disk.public_key).ok_or_else(|| {
             not_understood("its public key is not 64 hexadecimal digits".to_owned())
         })?;
+        // `made_at` is printed to the person when their password does not
+        // open the key, so it must be a time and nothing else: a planted
+        // file must not put lines of its own before them (the permission
+        // path's review, finding 7).
+        cineris_base::UtcTime::parse(disk.made_at.as_str()).map_err(|_| {
+            not_understood("its `made_at` is not a time in UTC (`2026-11-27T10:15:02Z`)".to_owned())
+        })?;
         Ok(Some(Self {
             cost,
             salt,
@@ -570,6 +577,11 @@ mod tests {
         refused(format!("{text}extra = 1\n"));
         refused(text.replace("salt = \"", "salt = \"0"));
         refused(text.replace("public_key = \"", "public_key = \"0"));
+        // A `made_at` that is not a time, lines of its own included.
+        refused(text.replace(
+            "made_at = \"2026-11-27T10:00:00Z\"",
+            "made_at = \"now\\ntype your password again below\"",
+        ));
         refused("x".repeat(5000));
     }
 

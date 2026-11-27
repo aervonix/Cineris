@@ -1,0 +1,119 @@
+# The signed approvals step, part: the signed stores and the person's key
+# (docs/steps/signed-approvals/answered.md). An approval counts only signed
+# by the key the person's password makes, over exactly what it approves;
+# what is not signed by it is never carried into what the person signs next;
+# the key file is read strictly. Added after the permission path's review,
+# finding 3f: these rules had no break of their own.
+
+# ------------------------------------------------- what counts
+
+[break] any-signature-counts
+rule: An entry counts only when its signature is the session's key's over exactly the entry.
+file: crates/cineris-policy/src/trust.rs
+find: if verifier.verify(statement, signature) {
+replace: if true {
+caught-by:
+    cineris-policy trust::tests::a_project_counts_only_with_a_signature_by_the_sessions_key
+    cineris-policy trust::tests::an_entry_changed_by_hand_or_copied_to_another_project_counts_for_nothing
+
+[break] an-unsigned-project-entry-is-trusted
+rule: A project is trusted, and its pins approve, only while its entry is signed by the session's key.
+file: crates/cineris-policy/src/trust.rs
+find: .filter(|_| self.checked == Checked::Signed)
+replace: .filter(|_| true)
+caught-by:
+    cineris-policy trust::tests::a_project_counts_only_with_a_signature_by_the_sessions_key
+    cineris-policy trust::tests::a_store_of_an_older_version_is_read_as_unsigned_and_keeps_its_refusals
+
+[break] unsigned-pins-are-listed
+rule: The user's pins count only while their set is signed by the session's key.
+file: crates/cineris-policy/src/trust/pins.rs
+find: if self.counts() { &self.pins } else { &[] }
+replace: if true { &self.pins } else { &[] }
+caught-by:
+    cineris-policy trust::pins::tests::a_registration_or_a_revision_changed_by_hand_counts_for_nothing
+    cineris-policy trust::pins::tests::a_pin_not_signed_by_the_person_is_never_signed_with_their_next_pin
+
+# ------------------------------------------------- what the person signs
+
+[break] unsigned-pins-are-laundered
+rule: A change to the user's pins carries over only the pins the person's key signed: one written by another program, or by an older version, is dropped, never signed with the person's next pin.
+file: crates/cineris-policy/src/trust/pins.rs
+find: let counts = matches!(checked, Checked::Signed | Checked::Empty);
+replace: let counts = true;
+caught-by:
+    cineris-policy trust::pins::tests::a_pin_not_signed_by_the_person_is_never_signed_with_their_next_pin
+
+[break] a-pin-commit-takes-any-signature
+rule: A change to the user's pins is written only with the person's signature over exactly what it writes.
+file: crates/cineris-policy/src/trust/pins.rs
+find: if !verifier.verify(&proposal.statement, signature) {
+replace: if false {
+caught-by:
+    cineris-policy trust::pins::tests::a_signature_over_anything_else_writes_nothing
+
+[break] a-trust-commit-takes-any-signature
+rule: A change to a project's trust is written only with the person's signature over exactly what it writes.
+file: crates/cineris-policy/src/trust.rs
+find: if !verifier.verify(&proposal.statement, signature) {
+replace: if false {
+caught-by:
+    cineris-policy trust::tests::an_approval_needs_a_trusted_project_and_its_entry_as_it_was
+
+[break] the-root-is-not-signed
+rule: A project's root, what a person is shown of it, is signed with its trust.
+file: crates/cineris-policy/src/signed.rs
+find: .text(root)
+replace: .text("")
+caught-by:
+    cineris-policy trust::tests::an_entry_changed_by_hand_or_copied_to_another_project_counts_for_nothing
+
+[break] git-is-not-signed
+rule: Whether git may read a trusted repository's configuration is signed with the project's trust.
+file: crates/cineris-policy/src/signed.rs
+find: .flag(git_trusted)
+replace: .flag(false)
+caught-by:
+    cineris-policy trust::tests::an_entry_changed_by_hand_or_copied_to_another_project_counts_for_nothing
+
+[break] the-registration-is-not-signed
+rule: The hash of what an extension registered when it was approved is signed with its pin.
+file: crates/cineris-policy/src/signed.rs
+find: .bytes(pin.registration.as_ref().map_or(&[][..], |hash| &hash[..]));
+replace: .bytes(&[]);
+caught-by:
+    cineris-policy trust::pins::tests::a_registration_or_a_revision_changed_by_hand_counts_for_nothing
+
+# ------------------------------------------------- reading strictly
+
+[break] an-older-store-that-says-it-signed-is-read
+rule: A store of a version before signing that holds a revision, a signature or a registration is not one a build wrote, and is refused whole.
+file: crates/cineris-policy/src/trust.rs
+find: project.revision != 0
+replace: false
+caught-by:
+    cineris-policy trust::tests::a_store_of_an_older_version_is_read_as_unsigned_and_keeps_its_refusals
+
+[break] a-project-held-twice-is-read
+rule: A trust store with two entries of one project is refused whole: the order must not decide which stands.
+file: crates/cineris-policy/src/trust.rs
+find: .any(|earlier| earlier.key == project.key)
+replace: .any(|earlier| false && earlier.key == project.key)
+caught-by:
+    cineris-policy trust::tests::a_project_held_twice_refuses_the_whole_file
+
+[break] a-short-password-is-taken
+rule: A password chosen has at least twelve characters.
+file: crates/cineris-policy/src/signed/key.rs
+find: if chars < MIN_PASSWORD_CHARS {
+replace: if chars < 1 {
+caught-by:
+    cineris-policy signed::key::tests::a_password_shorter_than_twelve_characters_is_refused
+
+[break] the-key-files-time-is-not-read
+rule: The key file's `made_at`, printed to the person at the password prompt, is a time in UTC, or the file is refused.
+file: crates/cineris-policy/src/signed/key.rs
+find: cineris_base::UtcTime::parse(disk.made_at.as_str()).map_err(|_| {
+replace: Ok::<(), ()>(()).map_err(|_| {
+caught-by:
+    cineris-policy signed::key::tests::a_key_file_is_written_and_read_back_strictly

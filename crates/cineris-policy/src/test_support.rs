@@ -264,7 +264,7 @@ impl Person {
     ///
     /// # Panics
     ///
-    /// When `password` has fewer than eight characters.
+    /// When `password` has fewer than twelve characters.
     #[must_use]
     pub fn with_password(password: &str) -> Self {
         let salt = cineris_base::ContentHash::of(password.as_bytes());
