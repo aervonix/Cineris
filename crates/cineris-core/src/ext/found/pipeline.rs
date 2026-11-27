@@ -1026,6 +1026,13 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
     // A project's found, under `--trust-project`, that its entry pins and
     // that does not count: by name, with its folder as shown.
     let mut uncounted_found: Vec<(String, String)> = Vec::new();
+    // The user's found that their pins hold unsigned beside a signed set,
+    // and a project's found whose name a folder of the user's takes while
+    // the user's own extension of it is not pinned with a signature that
+    // counts: by name, with its folder as shown. Each holds its gates (the
+    // full review of the signed approvals).
+    let mut held_found: Vec<(String, String)> = Vec::new();
+    let mut taken_held: Vec<(String, String)> = Vec::new();
     let pins_file = inputs.state.as_ref().map(|state| {
         let file = state.pins_file();
         with_paths_shown(
@@ -1106,15 +1113,52 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
                         continue;
                     }
                 };
-                pins.standing(&definition)
+                let standing = pins.standing(&definition);
+                // Held unsigned beside the signed pins: approved earlier and
+                // not signed by the person's key. Not loaded, whatever its
+                // hash, and its gates held below at the hash held (the full
+                // review of the signed approvals).
+                if standing != Standing::Approved
+                    && pins
+                        .unsigned_of(&TrustResourceKind::Extension, &listed.manifest.name)
+                        .is_some()
+                {
+                    because(
+                        &mut decided.told,
+                        format!(
+                            "Your extension `{name}` (`{}`) is not loaded: {}. `cineris ext add \
+                             {}` shows it, to approve it.",
+                            listed.shown,
+                            crate::person::HELD_UNSIGNED,
+                            listed.shown
+                        ),
+                        true,
+                    );
+                    held_found.push((listed.manifest.name.clone(), listed.shown.clone()));
+                    continue;
+                }
+                standing
             }
             Source::Project => {
                 if users.takes(&listed.manifest.name) {
+                    // Only the user's own extension of the name, pinned with
+                    // a signature that counts, lets the project's go; any
+                    // other folder of the name keeps it from loading, and its
+                    // gates hold (the full review of the signed approvals).
+                    let owned = users.owns(
+                        &listed.manifest.name,
+                        pins.get_or_insert_with(|| user_pins(inputs, &mut decided.told))
+                            .as_ref()
+                            .ok(),
+                    );
                     because(
                         &mut decided.told,
-                        taken(&listed, &name, &mine, users.cut()),
+                        taken(&listed, &name, &mine, users.cut(), owned),
                         true,
                     );
+                    if !owned {
+                        taken_held.push((listed.manifest.name.clone(), listed.shown.clone()));
+                    }
                     continue;
                 }
                 let standing = project_standing(
@@ -1160,15 +1204,24 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
                         .iter()
                         .any(|(pinned, _)| *pinned == listed.manifest.name)
                 {
+                    // An entry that does not count is told of once, as the
+                    // session opens; one held beside a signed entry is told
+                    // here, with its way out.
+                    let held = uncounted.beside_signed();
                     because(
                         &mut decided.told,
                         format!(
-                            "This project's extension `{name}` (`{}`) is not loaded: this \
-                             project's trust does not count in this session ({}).",
+                            "This project's extension `{name}` (`{}`) is not loaded: {}.{}",
                             listed.shown,
-                            crate::person::uncounted(uncounted.checked)
+                            uncounted.why(),
+                            if held {
+                                " The project's trust question lists it, to approve it, when a \
+                                 session opens, and `cineris permissions trust` shows it."
+                            } else {
+                                ""
+                            }
                         ),
-                        false,
+                        held,
                     );
                     uncounted_found.push((listed.manifest.name.clone(), listed.shown.clone()));
                     continue;
@@ -1212,6 +1265,11 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
                 .into_iter()
                 .map(|(source, name, shown)| (source, name, shown, Unstood::Unreadable)),
         )
+        .chain(
+            taken_held
+                .into_iter()
+                .map(|(name, shown)| (Source::Project, name, shown, Unstood::Taken)),
+        )
         .chain(not_found(
             inputs,
             &seen,
@@ -1220,9 +1278,18 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
             &mut decided.told,
         ))
     {
+        // Only the user's word lets a gate go: their configuration turning
+        // their own off, or their own extension of a project's name, pinned
+        // with a signature that counts (the full review of the signed
+        // approvals: any folder of the name did).
         let released = match source {
             Source::User => inputs.disabled.contains(&name),
-            Source::Project => users.takes(&name),
+            Source::Project => users.owns(
+                &name,
+                pins.get_or_insert_with(|| user_pins(inputs, &mut decided.told))
+                    .as_ref()
+                    .ok(),
+            ),
         };
         if released
             || pending
@@ -1270,16 +1337,23 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
     // each holds its gates, at the hash pinned, whether the project is not
     // trusted, and none of it is looked at (the signed approvals step), or
     // trusted for the run by `--trust-project`, which approves none of them
-    // (the review of the permission path). One whose name the user's folder
-    // takes holds nothing, as when it counts; nor does one that stands
-    // approved now, which is loaded.
+    // (the review of the permission path); and those a signed entry holds
+    // unsigned beside its pins (the full review of the signed approvals).
+    // One whose name the user's own extension takes, pinned with a
+    // signature that counts, holds nothing, as when it counts; nor does one
+    // that stands approved now, which is loaded.
     if let Some(uncounted) = &inputs.uncounted {
         for (name, hash) in &uncounted.extensions {
             let approved = standing_approved.iter().any(|(listed, _)| {
                 listed.source == Source::Project && listed.manifest.name == *name
             });
             if approved
-                || users.takes(name)
+                || users.owns(
+                    name,
+                    pins.get_or_insert_with(|| user_pins(inputs, &mut decided.told))
+                        .as_ref()
+                        .ok(),
+                )
                 || pending
                     .iter()
                     .any(|held| held.0 == Source::Project && held.1 == *name)
@@ -1296,7 +1370,41 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
                 name.clone(),
                 shown,
                 *hash,
-                Unstood::ProjectUncounted(uncounted.checked),
+                if uncounted.beside_signed() {
+                    Unstood::Held
+                } else {
+                    Unstood::ProjectUncounted(uncounted.checked)
+                },
+            ));
+        }
+    }
+    // The user's pins held unsigned beside a signed set: each holds its
+    // gates at the hash held, found or gone, and approves nothing. One their
+    // configuration turns off holds nothing, as when it counts.
+    if let Some(Ok(pins)) = &pins {
+        for pin in pins
+            .unsigned()
+            .iter()
+            .filter(|pin| pin.kind == TrustResourceKind::Extension)
+        {
+            if inputs.disabled.contains(&pin.name)
+                || pending
+                    .iter()
+                    .any(|held| held.0 == Source::User && held.1 == pin.name)
+            {
+                continue;
+            }
+            let shown = held_found
+                .iter()
+                .find(|(found, _)| *found == pin.name)
+                .map(|(_, shown)| shown.clone())
+                .unwrap_or_default();
+            pending.push((
+                Source::User,
+                pin.name.clone(),
+                shown,
+                pin.hash,
+                Unstood::Held,
             ));
         }
     }
@@ -1520,6 +1628,15 @@ enum Unstood {
     /// Pinned by a project's entry that does not count (how it stands): the
     /// project is not trusted, and nothing of it is looked at.
     ProjectUncounted(Checked),
+    /// Held unsigned beside a set of pins, or a project's entry, that
+    /// counts: approved earlier and not signed by the person's key, kept only
+    /// for its gates (the full review of the signed approvals).
+    Held,
+    /// A project's whose name a folder of the user's takes, while the
+    /// user's own extension of the name is not pinned with a signature that
+    /// counts: not used, and holding its gates as an approved one not loaded
+    /// does (the full review of the signed approvals).
+    Taken,
     /// A project's, found while the trust store, `file` as shown, cannot be
     /// read: the events its manifest lets it hook.
     TrustUnreadable(Vec<Event>, String),
@@ -1547,6 +1664,8 @@ fn gate(
         Unstood::PinsUnused(_, _, Some(checked)) | Unstood::ProjectUncounted(checked) => {
             Stand::Uncounted(*checked)
         }
+        Unstood::Held => Stand::Held,
+        Unstood::Taken => Stand::Taken,
         _ => Stand::Unapproved { trust_project },
     };
     let out = way_out(source, name, shown, stand);
@@ -1597,6 +1716,21 @@ fn gate(
                 crate::person::uncounted(*checked)
             ),
             "",
+            both(),
+        ),
+        Unstood::Held => (
+            "is not loaded: it was approved earlier and is not signed by the person's key, so \
+             it is kept only for its gates"
+                .to_owned(),
+            "was approved earlier and is not signed by your key, so it is kept only for its gates",
+            both(),
+        ),
+        Unstood::Taken => (
+            "is not used: a folder of the user's own extensions has its name, and the user's \
+             own extension of that name is not approved with their key"
+                .to_owned(),
+            "is not used: a folder of your own extensions has its name, and your own extension \
+             of that name is not approved with your key (said above)",
             both(),
         ),
         Unstood::TrustUnreadable(events, _) => (
@@ -1832,11 +1966,13 @@ fn project_trust(inputs: &Inputs) -> ProjectTrust {
 }
 
 /// What the session is told of a project's extension whose name a folder
-/// of the user's takes.
-fn taken(found: &Listed, name: &str, mine: &[(String, String)], cut: bool) -> String {
+/// of the user's takes: `owned`, the user's own extension of the name is
+/// pinned with a signature that counts, and the project's holds nothing;
+/// otherwise its gates hold (the full review of the signed approvals).
+fn taken(found: &Listed, name: &str, mine: &[(String, String)], cut: bool, owned: bool) -> String {
     let folded = found.manifest.name.to_ascii_lowercase();
     let shown = &found.shown;
-    match mine.iter().find(|(user, _)| *user == folded) {
+    let said = match mine.iter().find(|(user, _)| *user == folded) {
         None if cut => format!(
             "This project's extension `{name}` (`{shown}`) is not used: your own folder of \
              extensions could not be listed whole (said above), so any name may be yours."
@@ -1850,6 +1986,14 @@ fn taken(found: &Listed, name: &str, mine: &[(String, String)], cut: bool) -> St
              extensions has its name, though it was left out (said above), and the name is \
              yours."
         ),
+    };
+    if owned {
+        said
+    } else {
+        format!(
+            "{said} Your own extension of that name is not approved with your key, so the \
+             gates this project's extension holds, if it is approved, still hold."
+        )
     }
 }
 

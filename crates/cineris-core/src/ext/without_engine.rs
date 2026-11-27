@@ -62,6 +62,7 @@ use cineris_ext::registration::HookDef;
 use cineris_ext::source::Source;
 use cineris_protocol::methods::TrustResourceKind;
 
+use super::found::UserNames;
 use super::hook_points::loop_event;
 use super::hooks::named;
 use super::manage::{ExtensionListed, ExtensionStanding, Judging, judged, toml_key};
@@ -189,9 +190,8 @@ pub(crate) fn uncounted_gates(
     for (name, hash) in &uncounted.extensions {
         let code = in_code(name);
         let why = format!(
-            "the extension `{code}` is not loaded: this project's trust does not count in this \
-             session ({}), so its gate refuses it: {}",
-            crate::person::uncounted(uncounted.checked),
+            "the extension `{code}` is not loaded: {}, so its gate refuses it: {}",
+            uncounted.why(),
             way_out(Source::Project, name)
         );
         let cached = cache
@@ -292,7 +292,36 @@ fn gates(
             .map(|manifest| manifest.capabilities.hooks.clone())
             .unwrap_or_default()
     };
+    // What the cache keeps at `hash` of the extension's name, or both gates
+    // where it keeps nothing: what was approved is known nowhere else.
+    let at_hash = |hash: ContentHash| match judging
+        .cache
+        .and_then(|cache| cache.get(&hash))
+        .filter(|entry| entry.name == one.name)
+    {
+        Some(entry) => registered(&one.name, &entry.registration.hooks),
+        None => on_every_call(&one.name, &[Event::PromptSubmit, Event::ToolBefore]),
+    };
     match &one.standing {
+        // A project's whose name a folder of the user's takes, while the
+        // user's own extension of it is not pinned with a signature that
+        // counts: its gates hold, as an approved one's not loaded do (the
+        // full review of the signed approvals).
+        ExtensionStanding::NotUsed(_)
+            if one.source == Source::Project
+                && !super::manage::owns(judging, &UserNames::of(judging.user), &one.name) =>
+        {
+            pin_of(judging, Source::Project, &one.name).map(at_hash)
+        }
+        // Held unsigned beside the user's pins that count: at the hash held.
+        // A project's are held with its entry's (`uncounted_gates`).
+        ExtensionStanding::Held if one.source == Source::User => judging
+            .pins
+            .as_ref()
+            .ok()?
+            .unsigned_of(&TrustResourceKind::Extension, &one.name)
+            .map(|pin| at_hash(pin.hash)),
+        ExtensionStanding::Held => None,
         ExtensionStanding::TurnedOff
         | ExtensionStanding::NotApproved
         | ExtensionStanding::NotUsed(_)

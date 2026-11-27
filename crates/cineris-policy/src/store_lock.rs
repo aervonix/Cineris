@@ -79,6 +79,23 @@ pub(crate) mod tests {
         }
     }
 
+    /// Makes `at` a link to the file `to`: `Err` with why where links cannot
+    /// be made (a Windows account without the right), and a panic there on
+    /// a CI runner, which can.
+    pub(crate) fn link(to: &Path, at: &Path) -> Result<(), String> {
+        #[cfg(unix)]
+        let made = std::os::unix::fs::symlink(to, at);
+        #[cfg(windows)]
+        let made = std::os::windows::fs::symlink_file(to, at);
+        match made {
+            Ok(()) => Ok(()),
+            Err(error) if std::env::var_os("GITHUB_ACTIONS").is_some() => {
+                panic!("the CI runner cannot make a link: {error}")
+            }
+            Err(error) => Err(format!("cannot make a link here ({error})")),
+        }
+    }
+
     /// Whether the lock of the store at `file` is held: a second open of the
     /// lock file cannot take it. Both Linux (`flock`) and Windows
     /// (`LockFileEx`) keep two opens of one file apart, in one process too.

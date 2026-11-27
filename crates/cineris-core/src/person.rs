@@ -19,13 +19,20 @@
 //!   refused ([`KeyRefusal::NotTheOpenKey`]).
 //! - **A reset deletes nothing.** It takes the signature off every
 //!   approval and makes a new key: what was approved asks again, and what
-//!   it pins still holds its gates until the person's next yes over it. A
-//!   reset run by something other than the person (past guard B) can only
-//!   make the person's password fail to open their approvals: it lifts no
-//!   gate. Nor can another program keep the person from a reset: a store it
-//!   made unreadable, or whose lock it holds, is left as it is and said,
-//!   and a folder or link at a lock's or the key file's name is moved aside
-//!   ([`Core::reset_approvals`]).
+//!   it pins still holds its gates; the person's next yes over it carries
+//!   it as held, and only a yes that names it lets its gates go. A reset
+//!   run by something other than the person (past guard B) can only make
+//!   the person's password fail to open their approvals: it lifts no gate.
+//! - **What another program can do to a reset** ([`Core::reset_approvals`]):
+//!   a store it made unreadable, or whose lock it holds, is left as it is
+//!   and said; a folder or link at a lock's or the key file's name, and the
+//!   key file's lock still held after the wait, are moved aside; and the
+//!   state directory is made owner-writable first (`0700` on Unix). So on
+//!   Linux none of the ways the reviews found keeps the person from a reset
+//!   (a full disk aside). **On Windows a program
+//!   that holds the key file, or the key file's lock, open without sharing
+//!   deletion (`FILE_SHARE_DELETE`) blocks the rename that moves it aside
+//!   until it exits:** the reset then changes nothing, and says why.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, PoisonError, RwLock};
@@ -35,6 +42,7 @@ use cineris_base::private::{LOCK_WAIT, hold_lock_within, lock_path};
 use cineris_base::{Clock, Rng, SystemRng};
 use cineris_policy::signed::{
     Cost, KEY_FILE, KeyError, KeyFile, MIN_PASSWORD_CHARS, PersonKey, Verifier, fresh_salt,
+    password_chars,
 };
 use cineris_policy::{Checked, PinStore, TrustStore};
 use cineris_protocol::ids::Timestamp;
@@ -142,6 +150,13 @@ pub(crate) fn uncounted(checked: Checked) -> &'static str {
     }
 }
 
+/// Why a pin held unsigned beside approvals that count approves nothing,
+/// in words that follow a colon: what earlier pins named that the person's
+/// key did not sign, carried forward by their signed change for its gates
+/// (the full review of the signed approvals).
+pub(crate) const HELD_UNSIGNED: &str = "it was approved earlier and is not signed by your key, \
+                                        so it is kept only for its gates, and approves nothing";
+
 /// What the session is told, once, of a project whose entry in the trust
 /// store does not count (`checked`): it is not trusted, and what its entry
 /// pins holds its gates.
@@ -204,6 +219,8 @@ pub struct ApprovalsHeld {
     /// extension and hook command by its kind (`extension`, `hook`), its
     /// name and the hash it was approved at. Not what counts: what a
     /// listing can say was approved before, for the password to confirm.
+    /// Never what the entry holds unsigned beside its signed pins, which
+    /// approves nothing (the full review of the signed approvals).
     pub project_pins: Vec<(String, String, cineris_base::ContentHash)>,
 }
 
@@ -226,14 +243,17 @@ pub enum HeldKey {
 
 impl ApprovalsHeld {
     /// Whether a session opened in the project asked about has approvals to
-    /// use: a key is set up, and the user's pins or the project's entry
-    /// carry a signature. It decides only whether the person is asked for
-    /// their password when the session opens: it opens nothing, and nothing
-    /// it says counts until the typed password's key checks it.
+    /// use: the user's pins or the project's entry carry a signature, and a
+    /// key is set up, or its file cannot be read (the full review of the
+    /// signed approvals: the person is then asked, and the unlock's refusal
+    /// names the key file and the reset, rather than the session opening
+    /// silently without what they approved). It decides only whether the
+    /// person is asked for their password when the session opens: it opens
+    /// nothing, and nothing it says counts until the typed password's key
+    /// checks it.
     #[must_use]
     pub fn to_use(&self) -> bool {
-        matches!(self.key, HeldKey::Made { .. })
-            && (self.pins_carry_signature || self.project_carries)
+        !matches!(self.key, HeldKey::None) && (self.pins_carry_signature || self.project_carries)
     }
 }
 
@@ -278,8 +298,10 @@ impl Core {
             let entry = TrustStore::new(state.trust_file(), Arc::clone(&self.inner.options.clock))
                 .project(&project.key, None)
                 .map_err(|failure| KeyRefusal::Failed(failure.to_string()))?;
+            // The entry's own pins alone: its held list approves nothing,
+            // and is never shown as approved before.
             for kind in [TrustResourceKind::Extension, TrustResourceKind::Hook] {
-                for (name, hash) in entry.held(&kind) {
+                for (name, hash) in entry.named(&kind) {
                     project_pins.push((kind.as_str().to_owned(), name, hash));
                 }
             }
@@ -396,13 +418,18 @@ impl Core {
     /// signature off every approval made with the old one: see the [module
     /// documentation](self). Refusals of projects are kept.
     ///
-    /// Another program cannot keep the person from it (the reviews of the
-    /// permission path and of the system's layer: a forgotten password's only
-    /// way out is the reset), in this order:
+    /// Another program cannot keep the person from it, but on Windows by
+    /// holding the key file or its lock open without sharing deletion (the
+    /// reviews of the permission path and of the system's layer, and the
+    /// full review: a forgotten password's only way out is the reset), in
+    /// this order:
     ///
-    /// 1. A folder or a link at a lock's name is moved aside, and the key
-    ///    file's lock is taken, [`LOCK_WAIT`] at most: held past it, nothing
-    ///    changes.
+    /// 1. The state directory is made owner-writable (`0700` on Unix). A
+    ///    folder or a link at a lock's name is moved aside, and the key
+    ///    file's lock is taken, [`LOCK_WAIT`] at most: held past it, the
+    ///    lock file is moved aside too and a fresh one locked. Only when that
+    ///    cannot be done (on Windows, a program holding it open without
+    ///    sharing deletion) does nothing change.
     /// 2. The new key file is written under a new name beside the key
     ///    file's, which shows that it can be: if it cannot, nothing changes.
     /// 3. The signatures are taken off the stores. A store that cannot be
@@ -417,9 +444,10 @@ impl Core {
     ///
     /// # Errors
     ///
-    /// [`KeyRefusal::TooShort`] (nothing changed); the key file's lock held
-    /// past [`LOCK_WAIT`], or the new key file not written (nothing
-    /// changed); or what stands at the key file's name could not be moved
+    /// [`KeyRefusal::TooShort`], or a password that is not text (nothing
+    /// changed); the key file's lock held past [`LOCK_WAIT`] and not moved
+    /// aside, or the new key file not written (nothing changed); or what
+    /// stands at the key file's name could not be moved
     /// aside, or the new one put in its place (the stores' signatures taken
     /// off: everything asks again, and the old key opens nothing that
     /// counts).
@@ -470,9 +498,10 @@ impl Core {
         let state = self
             .state_dir()
             .ok_or_else(|| KeyRefusal::Failed("no state directory is known".to_owned()))?;
-        // Checked before anything changes, so that a password too short
-        // changes nothing.
-        if String::from_utf8_lossy(password).chars().count() < MIN_PASSWORD_CHARS {
+        // Checked before anything changes, so that a password too short, or
+        // not text, changes nothing; counted where it lies, with no copy
+        // that would not be wiped (the full review, L10).
+        if password_chars(password)? < MIN_PASSWORD_CHARS {
             return Err(KeyRefusal::TooShort);
         }
         let home = self.inner.options.env.home();
@@ -480,6 +509,11 @@ impl Core {
             crate::ext::found::with_paths_shown(&text, &[file], home.as_deref())
         };
         let key_file = state.root().join(KEY_FILE);
+        // The state directory made owner-writable, as it is made: another
+        // program that took its write away would keep the new key, and the
+        // locks, from being written (the full review of the signed
+        // approvals, M2).
+        owner_writable(state.root());
         // What stands at a lock's name and is not a file (a folder, a link)
         // would keep the reset from taking it: moved aside. A lock file
         // holds nothing; one another process holds is waited for.
@@ -489,16 +523,29 @@ impl Core {
                 set_aside(&lock).map_err(|failure| KeyRefusal::Failed(shown(failure, &lock)))?;
             }
         }
-        // The key file's lock, held to the end: without it no new key can be
-        // put in place, and a reset that cannot finish changes nothing.
-        let _key_lock = hold_lock_within(&key_file, wait).map_err(|failure| {
+        let not_set = |failure: String| {
             KeyRefusal::Failed(shown(
                 format!(
                     "the key of your approvals could not be set, so nothing was changed: {failure}"
                 ),
                 &key_file,
             ))
-        })?;
+        };
+        // The key file's lock, held to the end: without it no new key can be
+        // put in place, and a reset that cannot finish changes nothing. One
+        // still held after the wait is treated as a folder at its name is:
+        // moved aside, and a fresh one locked (the full review, M2: a program
+        // left holding it blocked every reset). The reset is the person's
+        // act, and the rename that puts the new key in place is atomic, so
+        // a writer that still holds the old lock cannot interleave with it.
+        let _key_lock = match hold_lock_within(&key_file, wait) {
+            Ok(lock) => lock,
+            Err(_) => {
+                let lock = lock_path(&key_file);
+                set_aside(&lock).map_err(|failure| not_set(shown(failure, &lock)))?;
+                hold_lock_within(&key_file, wait).map_err(|failure| not_set(failure.to_string()))?
+            }
+        };
         let clock = Arc::clone(&self.inner.options.clock);
         // The new key, written under a new name first: a key that cannot be
         // written changes nothing (the review of the system's layer: a
@@ -603,6 +650,32 @@ fn free_within(file: &Path, wait: Duration) -> Result<(), String> {
     hold_lock_within(file, wait)
         .map(drop)
         .map_err(|failure| failure.to_string())
+}
+
+/// Makes the state directory `dir` owner-writable, best effort, at a reset:
+/// `0700` on Unix, as it is made. Elsewhere, and where it is not there, it
+/// is left as it is; a directory that stays unwritable fails the reset's
+/// next step, which says why.
+fn owner_writable(dir: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "one look and one change of mode, at a reset the person asked for"
+        )]
+        let found = std::fs::symlink_metadata(dir);
+        // A link at its name is not followed: the directory is the user's.
+        if found.is_ok_and(|found| found.is_dir() && found.permissions().mode() & 0o700 != 0o700) {
+            #[allow(
+                clippy::disallowed_methods,
+                reason = "one change of mode, at a reset the person asked for"
+            )]
+            let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = dir;
 }
 
 /// Whether `path` is a regular file, or nothing: a link is not followed.

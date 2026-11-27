@@ -89,7 +89,7 @@ use cineris_ext::discover::{self, Discovered, Found, LeftOut, Root, Seen};
 use cineris_ext::folder::Snapshot;
 use cineris_ext::manifest::{HostPattern, Manifest};
 use cineris_ext::source::Source;
-use cineris_policy::{Definition, ProjectTrust, Standing};
+use cineris_policy::{Definition, ProjectTrust, Standing, UserPins};
 use cineris_protocol::methods::{TrustResource, TrustResourceKind};
 
 use super::watched::Watched;
@@ -344,23 +344,55 @@ pub(crate) fn start(pending: Pending) -> Arc<Extensions> {
 /// each extension its entry pins, signed or not, holds its gates, failing,
 /// as an approved one that changed does: from what the registration cache
 /// keeps at the hash pinned, or both gates where it keeps nothing.
+///
+/// Since the full review of the signed approvals, also an entry that counts
+/// and holds extensions unsigned beside its signed pins (its held list:
+/// what earlier pins named, carried forward by a signed change made over an
+/// entry that did not count): those hold their gates the same way, and
+/// approve nothing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Uncounted {
-    /// How the entry stands with the session's key.
+    /// How the entry stands with the session's key: `Signed` for an entry
+    /// that counts, whose held list alone is here.
     pub(crate) checked: cineris_policy::Checked,
-    /// The extensions it pins, each with the hash pinned.
+    /// The extensions it pins and that do not count, each with the hash
+    /// pinned.
     pub(crate) extensions: Vec<(String, ContentHash)>,
 }
 
 impl Uncounted {
     /// The project's entry as `stored` holds it, when it is there and does
-    /// not count; `None` otherwise: a project with no entry holds nothing,
-    /// since no repository gates a session by itself.
+    /// not count, or counts and holds extensions unsigned; `None`
+    /// otherwise: a project with no entry holds nothing, since no
+    /// repository gates a session by itself.
     pub(crate) fn of(stored: &ProjectTrust) -> Option<Self> {
-        (stored.has_entry() && !stored.is_trusted()).then(|| Self {
+        let extensions = stored.unsigned(&TrustResourceKind::Extension);
+        let counts = stored.is_trusted();
+        (stored.has_entry() && (!counts || !extensions.is_empty())).then(|| Self {
             checked: stored.checked(),
-            extensions: stored.held(&TrustResourceKind::Extension),
+            extensions,
         })
+    }
+
+    /// Whether the entry counts, and what is here is its held list: each
+    /// approved earlier and not signed by the person's key.
+    pub(crate) fn beside_signed(&self) -> bool {
+        matches!(
+            self.checked,
+            cineris_policy::Checked::Signed | cineris_policy::Checked::Empty
+        )
+    }
+
+    /// Why an extension here is not loaded, in words that follow a colon.
+    pub(crate) fn why(&self) -> String {
+        if self.beside_signed() {
+            crate::person::HELD_UNSIGNED.to_owned()
+        } else {
+            format!(
+                "this project's trust does not count in this session ({})",
+                crate::person::uncounted(self.checked)
+            )
+        }
     }
 }
 
@@ -584,9 +616,28 @@ impl UserNames {
         self.cut
     }
 
-    /// Whether `name` is the user's.
+    /// Whether `name` may be the user's: a folder of theirs has it, or their
+    /// folder could not be listed whole. A project's extension of the name
+    /// is not loaded.
     pub(crate) fn takes(&self, name: &str) -> bool {
         self.cut || self.names.contains(&name.to_ascii_lowercase())
+    }
+
+    /// Whether the user's own extension of `name` takes the name from a
+    /// project's, letting the project's extension's gates go: a folder of
+    /// theirs has the name, listed (never by the cut alone), and the user's
+    /// own extension of that name is pinned in `pins`, which count (the full
+    /// review of the signed approvals: a folder any program of the user's can
+    /// make released a project's gate). Otherwise a project's extension the
+    /// name is taken from holds its gates, as an approved one not loaded
+    /// does.
+    pub(crate) fn owns(&self, name: &str, pins: Option<&UserPins>) -> bool {
+        self.names.contains(&name.to_ascii_lowercase())
+            && pins.is_some_and(|pins| {
+                pins.list().iter().any(|pin| {
+                    pin.kind == TrustResourceKind::Extension && pin.name.eq_ignore_ascii_case(name)
+                })
+            })
     }
 }
 
@@ -938,6 +989,27 @@ mod tests {
         assert!(
             past.takes("other"),
             "past the bound every name is the user's"
+        );
+        // A name is the user's to let a project's gates go only when their
+        // own extension of it is pinned with a signature that counts; past
+        // the bound, by the cut alone, never (the full review of the signed
+        // approvals: the cut made every project's gate lapse).
+        let person = cineris_policy::test_support::Person::new();
+        let clock: SharedClock =
+            Arc::new(cineris_base::FakeClock::starting_at("2026-11-27T10:00:00Z").unwrap());
+        let store = cineris_policy::PinStore::new(dir.join("state/pins.toml"), clock);
+        let unsigned = store.pins(Some(&person.verifier())).unwrap();
+        assert!(!within.owns("probe", Some(&unsigned)), "nothing pinned");
+        let probe = Definition::of(TrustResourceKind::Extension, "probe", ["x"]);
+        let other = Definition::of(TrustResourceKind::Extension, "other", ["x"]);
+        let pins = person.pin_all(&store, &[probe, other]);
+        assert!(within.owns("probe", Some(&pins)) && within.owns("Probe", Some(&pins)));
+        assert!(!within.owns("probe", None), "the pins could not be read");
+        assert!(!past.owns("other", Some(&pins)), "the cut takes no name");
+        let keyless = store.pins(None).unwrap();
+        assert!(
+            !within.owns("probe", Some(&keyless)),
+            "the pins do not count"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -279,6 +279,7 @@ file: crates/cineris-core/src/ext/without_engine.rs
 in: gates
 find: None => on_every_call(&one.name, &[Event::PromptSubmit, Event::ToolBefore])
 replace: None => on_every_call(&one.name, &manifest_events())
+occurrence: 2
 caught-by:
     cineris-core ext::without_engine::tests::an_approved_extensions_gates_hold_without_the_script_engine
 

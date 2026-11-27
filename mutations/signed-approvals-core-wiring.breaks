@@ -23,8 +23,8 @@ caught-by:
 rule: A project's entry in the trust store that is there and does not count holds the gates of the extensions it pins, the project not trusted.
 file: crates/cineris-core/src/ext/found.rs
 in: Uncounted::of
-find: (stored.has_entry() && !stored.is_trusted()).then(
-replace: (stored.has_entry() && stored.is_trusted()).then(
+find: (stored.has_entry() && (!counts || !extensions.is_empty())).then(
+replace: (stored.has_entry() && (counts && !extensions.is_empty())).then(
 caught-by:
     cineris-core::it signed::a_project_trusted_with_another_key_or_copied_from_another_is_not_trusted
 
@@ -32,8 +32,8 @@ caught-by:
 rule: A project's entry in the trust store that is there and does not count holds each project hook command it pins on its event, failing, the project not trusted.
 file: crates/cineris-core/src/ext/hooks.rs
 in: in_session
-find: stored.has_entry() && !stored.is_trusted()
-replace: stored.has_entry() && stored.is_trusted()
+find: let pinned = stored.unsigned(&TrustResourceKind::Hook);
+replace: let pinned: Vec<(String, cineris_base::ContentHash)> = stored.unsigned(&TrustResourceKind::Hook).into_iter().filter(|_| stored.is_trusted()).collect();
 caught-by:
     cineris-core ext::hooks::tests::a_hook_an_entry_that_does_not_count_pins_holds_its_event
     cineris-core::it signed::a_projects_pinned_hook_holds_its_gate_without_the_key
@@ -44,7 +44,7 @@ caught-by:
 rule: A project whose entry does not count only because the person has not opened their approvals is not asked about as a new project.
 file: crates/cineris-core/src/assemble.rs
 in: look
-find: let unopened = verifier.is_none() && stored.has_entry() && !stored.is_trusted();
+find: let unopened = stored.checked() == cineris_policy::Checked::NoKey;
 replace: let unopened = false;
 caught-by:
     cineris-core::it signed::a_projects_pinned_hook_holds_its_gate_without_the_key
@@ -76,6 +76,6 @@ rule: A signed yes whose project entry changed while the question was open write
 file: crates/cineris-core/src/assemble.rs
 in: kept_answer
 find: Err(cineris_policy::TrustError::Moved { .. }) => Ok(Answered::AskAgain),
-replace: Err(cineris_policy::TrustError::Moved { .. }) => Ok(Answered::Trust(unsigned_yes(trust))),
+replace: Err(cineris_policy::TrustError::Moved { .. }) => Ok(Answered::Trust(Box::new(unsigned_yes(trust)))),
 caught-by:
     cineris-core::it trusting::a_yes_after_the_projects_trust_changed_meanwhile_is_not_used

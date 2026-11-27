@@ -528,6 +528,117 @@ fn a_session_without_the_engine_holds_what_an_uncounted_entry_pins() {
     }
 }
 
+/// The full review of the signed approvals, in a build without the script
+/// engine: a pin held unsigned beside the user's pins that count holds its
+/// gates at the hash held, found or gone, and approves nothing; a project's
+/// extension whose name a folder of the user's takes, while the user's own
+/// of that name is not pinned with their key, holds its gates as an
+/// approved one not loaded does. Pinned with their key, the name is
+/// theirs, and the project's extension holds nothing.
+#[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test writes a held entry into the pins it made, on its own thread"
+)]
+fn a_held_pin_and_a_name_the_users_key_does_not_own_hold_their_gates() {
+    let scratch = cineris_testkit::Scratch::outside("cineris-core-unit", "without_engine_held");
+    let clock: SharedClock = Arc::new(FakeClock::starting_at("2026-11-27T10:00:00Z").unwrap());
+    let file = RegistrationCache::new(scratch.join("registered.json"));
+    let mine = found(Source::User, "mine", &["tool.before"]);
+    let theirs = found(Source::Project, "taken", &["tool.before"]);
+    for (one, tool) in [(&mine, "edit"), (&theirs, "write")] {
+        file.put(
+            &one.snapshot.hash(),
+            Entry::new(
+                &one.manifest,
+                registration(vec![hook("tool.before", &[tool], false)]),
+                None,
+            ),
+        )
+        .unwrap();
+    }
+    let cache = file.load().cache;
+    let users_taken = found(Source::User, "taken", &[]);
+    let users_taken_pin = definition(&users_taken);
+    let user = discovered(
+        Source::User,
+        vec![found(Source::User, "mine", &["tool.before"]), users_taken],
+    );
+    let project = discovered(
+        Source::Project,
+        vec![found(Source::Project, "taken", &["tool.before"])],
+    );
+    let person = cineris_policy::test_support::Person::new();
+    let pins = PinStore::new(scratch.join("state/pins.toml"), Arc::clone(&clock));
+    person.pin(
+        &pins,
+        &Definition::of(TrustResourceKind::Hook, "elsewhere", ["x"]),
+    );
+    let mut text = std::fs::read_to_string(pins.path()).unwrap();
+    for (name, hash) in [
+        ("mine", mine.snapshot.hash()),
+        ("gone", ContentHash::of(b"not cached")),
+    ] {
+        text.push_str(&format!(
+            "\n[[held]]\nkind = \"extension\"\nname = \"{name}\"\nhash = \"{hash}\"\nat = \
+             \"2026-11-20T10:00:00Z\"\n"
+        ));
+    }
+    std::fs::write(pins.path(), text).unwrap();
+    let trust = TrustStore::new(scratch.join("state/trust.toml"), Arc::clone(&clock));
+    let key = ProjectKey::new("p_1");
+    person.trust(&trust, &key, "~/work", &[definition(&theirs)], false);
+    let stored = trust.project(&key, Some(&person.verifier())).unwrap();
+    let judge = |read: &cineris_policy::UserPins| {
+        let mut holding = holding(&Judging {
+            user: Some(&user),
+            project: Some(&project),
+            project_trusted: true,
+            pins: Ok(read),
+            pins_held: &[],
+            trust: Ok(&stored),
+            for_the_run: &[],
+            disabled: &[],
+            cache: Some(&cache),
+            confined: false,
+        });
+        holding.held.sort_by(|one, other| one.hook.cmp(&other.hook));
+        holding
+    };
+    let read = pins.pins(Some(&person.verifier())).unwrap();
+    assert!(read.counts());
+    let holding = judge(&read);
+    assert_eq!(
+        held(&holding),
+        [
+            ("gone/hook.prompt.submit", LoopEvent::PromptSubmit, None),
+            ("gone/hook.tool.before", LoopEvent::ToolBefore, None),
+            (
+                "mine/hook.tool.before",
+                LoopEvent::ToolBefore,
+                Some(vec!["edit".to_owned()])
+            ),
+            (
+                "taken/hook.tool.before",
+                LoopEvent::ToolBefore,
+                Some(vec!["write".to_owned()])
+            ),
+        ]
+    );
+    // The user's own `taken`, pinned with their key: the name is theirs.
+    let read = person.pin(&pins, &users_taken_pin);
+    let holding = judge(&read);
+    assert!(
+        holding
+            .held
+            .iter()
+            .all(|gate| !gate.extension.starts_with("taken")),
+        "{:?}",
+        held(&holding)
+    );
+    assert_eq!(holding.held.len(), 3, "{:?}", held(&holding));
+}
+
 /// The manifest of an extension `name` that may hook `hooks`, as a file.
 fn manifest_file(name: &str, hooks: &str) -> String {
     format!(

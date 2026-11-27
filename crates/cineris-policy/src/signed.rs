@@ -37,7 +37,10 @@ use serde::{Deserialize, Serialize};
 
 mod key;
 
-pub use key::{Cost, KEY_FILE, KeyError, KeyFile, MIN_PASSWORD_CHARS, PersonKey, Salt, fresh_salt};
+pub use key::{
+    Cost, KEY_FILE, KeyError, KeyFile, MIN_PASSWORD_CHARS, PersonKey, Salt, fresh_salt,
+    password_chars,
+};
 
 /// The label every statement starts with: what these bytes are, and which
 /// version of the form they are in.

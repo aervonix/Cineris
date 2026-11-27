@@ -1,0 +1,267 @@
+# The signed approvals step, part: fixes from the full review (stores and
+# core) (docs/steps/signed-approvals/parts/full-review-fixes-core.md). Pins
+# that do not count are carried forward as held, never signed and never
+# dropped by a signed change, and a held entry grants nothing; a project
+# left unsigned by a reset is asked about again; nothing another program of
+# the user's does on Linux blocks a reset; a folder of the user's takes a
+# project's name only by the user's key; the stores write through no link;
+# a password is counted with no copy.
+
+# ---------------------------------------- the user's pins: held, never dropped
+
+[break] pins-that-do-not-count-are-dropped
+rule: A change proposed over pins that do not count moves them into the held list, never drops them: their gates hold.
+file: crates/cineris-policy/src/trust/pins.rs
+in: PinStore::propose
+find: file.pins.iter().chain(&file.held).cloned().collect()
+replace: Vec::new()
+packages: cineris-policy,cineris-core
+caught-by:
+    cineris-policy trust::pins::tests::a_pin_not_signed_by_the_person_is_never_signed_with_their_next_pin
+    cineris-policy trust::pins::tests::a_held_pin_is_approved_again_or_let_go_only_by_the_persons_yes
+    cineris-core::it signed::an_unrelated_yes_keeps_the_gate_of_a_pin_it_did_not_show
+
+[break] a-pin-approved-again-stays-held
+rule: A pin approved again leaves the held list for the signed set.
+file: crates/cineris-policy/src/trust/pins.rs
+in: PinStore::propose
+find: held.retain(|old| !old.is_of(&pin.kind, &pin.name));
+replace: held.retain(|_| true);
+caught-by:
+    cineris-policy trust::pins::tests::a_held_pin_is_approved_again_or_let_go_only_by_the_persons_yes
+
+[break] an-unpin-leaves-the-held-pin
+rule: A signed unpin of a name takes it out of the held list too: the person's yes naming it is what lets its gates go.
+file: crates/cineris-policy/src/trust/pins.rs
+in: PinStore::propose
+find: held.retain(|pin| !pin.is_of(kind, name));
+replace: held.retain(|_| true);
+caught-by:
+    cineris-policy trust::pins::tests::a_held_pin_is_approved_again_or_let_go_only_by_the_persons_yes
+
+[break] held-pins-are-not-said
+rule: A proposal's summary names each pin it carries as held, for the front end to say.
+file: crates/cineris-policy/src/trust/pins.rs
+in: PinStore::propose
+find: summary.extend(held.iter().map(|pin| held_line(&pin.kind, &pin.name)));
+replace: summary.extend(held.iter().take(0).map(|pin| held_line(&pin.kind, &pin.name)));
+packages: cineris-policy,cineris-core
+caught-by:
+    cineris-policy trust::pins::tests::a_pin_not_signed_by_the_person_is_never_signed_with_their_next_pin
+    cineris-core::it signed::an_unrelated_yes_keeps_the_gate_of_a_pin_it_did_not_show
+
+[break] held-pins-hold-no-gate
+rule: Beside pins that count, the held list's pins hold their gates, found or gone.
+file: crates/cineris-policy/src/trust/pins.rs
+in: UserPins::unsigned
+find: &self.kept
+replace: &[]
+packages: cineris-policy,cineris-core
+caught-by:
+    cineris-policy trust::pins::tests::a_held_pin_is_approved_again_or_let_go_only_by_the_persons_yes
+    cineris-core::it signed::an_unrelated_yes_keeps_the_gate_of_a_pin_it_did_not_show
+    cineris-core ext::without_engine::tests::a_held_pin_and_a_name_the_users_key_does_not_own_hold_their_gates
+
+[break] a-held-pin-approves
+rule: Nothing reads a held pin as a grant: it is no pin to standing, get or list.
+file: crates/cineris-policy/src/trust/pins.rs
+in: UserPins::get
+find: self.list().iter().find(|pin| pin.is_of(kind, name))
+replace: self.held().iter().find(|pin| pin.is_of(kind, name))
+packages: cineris-policy,cineris-core
+caught-by:
+    cineris-policy trust::pins::tests::a_held_entry_written_by_another_program_only_holds_a_gate
+    cineris-core::it signed::a_held_entry_alone_approves_loads_and_adds_prompt_text_for_nothing
+
+[break] a-name-signed-and-held-is-read
+rule: A pin store with a name both signed and held, or held twice, is refused whole.
+file: crates/cineris-policy/src/trust/pins.rs
+in: PinStore::read
+find: let every: Vec<&UserPin> = file.pins.iter().chain(&file.held).collect();
+replace: let every: Vec<&UserPin> = file.pins.iter().collect();
+caught-by:
+    cineris-policy trust::pins::tests::a_held_list_is_read_strictly
+
+# ---------------------------------------- a project's trust: held, never dropped
+
+[break] an-uncounted-entrys-pins-are-dropped-by-a-trust
+rule: A trust proposed over an entry that does not count carries what it pinned as held, never drops it.
+file: crates/cineris-policy/src/trust.rs
+in: TrustStore::propose
+find: (Some(project), None) => project.pinned.iter().chain(&project.held).collect()
+replace: (Some(_), None) => Vec::new()
+packages: cineris-policy,cineris-core
+caught-by:
+    cineris-policy trust::tests::an_entry_that_does_not_count_is_carried_as_held_by_the_next_trust
+    cineris-core::it signed::a_trust_that_leaves_an_extension_out_keeps_the_gate_an_unsigned_entry_pinned
+
+[break] an-approval-leaves-the-held-pin
+rule: A definition approved again in a trusted project leaves its held list for the signed pins.
+file: crates/cineris-policy/src/trust.rs
+in: TrustStore::propose
+find: take_out(&mut next.held, &pin.kind, &pin.name);
+replace: let _ = &pin;
+caught-by:
+    cineris-policy trust::tests::an_entry_that_does_not_count_is_carried_as_held_by_the_next_trust
+
+[break] a-drop-leaves-the-held-pin
+rule: A signed drop of a name takes it out of the entry's held list too.
+file: crates/cineris-policy/src/trust.rs
+in: TrustStore::propose
+find: } else if take_out(&mut next.held, kind.as_str(), name) {
+replace: } else if false && take_out(&mut next.held, kind.as_str(), name) {
+caught-by:
+    cineris-policy trust::tests::an_entry_that_does_not_count_is_carried_as_held_by_the_next_trust
+
+[break] held-trust-pins-are-not-said
+rule: A proposal of a project's trust names each pin it carries as held, for the front end to say.
+file: crates/cineris-policy/src/trust.rs
+in: TrustStore::propose
+find: summary.extend(next.held.iter().map(|pin| held_line(&pin.kind, &pin.name)));
+replace: summary.extend(next.held.iter().take(0).map(|pin| held_line(&pin.kind, &pin.name)));
+packages: cineris-policy,cineris-core
+caught-by:
+    cineris-policy trust::tests::an_entry_that_does_not_count_is_carried_as_held_by_the_next_trust
+    cineris-core::it signed::a_trust_that_leaves_an_extension_out_keeps_the_gate_an_unsigned_entry_pinned
+
+[break] held-project-pins-hold-no-gate
+rule: Beside a signed entry, the entry's held list holds its gates.
+file: crates/cineris-policy/src/trust.rs
+in: ProjectTrust::unsigned
+find: (Some(_), Some(project)) => pins_of_kind(&project.held, kind)
+replace: (Some(_), Some(_)) => Vec::new()
+packages: cineris-policy,cineris-core
+caught-by:
+    cineris-policy trust::tests::an_entry_that_does_not_count_is_carried_as_held_by_the_next_trust
+    cineris-policy trust::tests::a_held_entry_written_by_another_program_only_holds_a_gate
+    cineris-core::it signed::a_trust_that_leaves_an_extension_out_keeps_the_gate_an_unsigned_entry_pinned
+
+[break] a-held-project-pin-approves
+rule: Nothing reads a project's held pin as a grant: it is no pin to a definition's standing.
+file: crates/cineris-policy/src/trust.rs
+in: ProjectTrust::standing
+find: let pinned = project.pinned.iter().find(
+replace: let pinned = project.pinned.iter().chain(&project.held).find(
+packages: cineris-policy,cineris-core
+caught-by:
+    cineris-policy trust::tests::a_held_entry_written_by_another_program_only_holds_a_gate
+    cineris-core::it signed::a_held_entry_alone_approves_loads_and_adds_prompt_text_for_nothing
+
+[break] a-held-project-pin-is-shown-as-approved-before
+rule: What a listing says was approved before is the entry's own pins, never its held list.
+file: crates/cineris-core/src/person.rs
+in: Core::approvals_held
+find: for (name, hash) in entry.named(&kind) {
+replace: for (name, hash) in entry.held(&kind) {
+caught-by:
+    cineris-core::it signed::a_held_entry_alone_approves_loads_and_adds_prompt_text_for_nothing
+
+# ---------------------------------------- asked again after a reset or an upgrade
+
+[break] an-unsigned-entry-is-not-asked-again
+rule: Only an entry that carries a signature, while the approvals are closed, keeps the trust question from being put; one a reset or an older version left unsigned is asked about again.
+file: crates/cineris-core/src/assemble.rs
+in: look
+find: let unopened = stored.checked() == cineris_policy::Checked::NoKey;
+replace: let unopened = verifier.is_none() && stored.has_entry() && !stored.is_trusted();
+caught-by:
+    cineris-core::it signed::a_project_whose_signature_a_reset_took_off_is_asked_about_again
+
+[break] an-unreadable-key-file-asks-for-no-password
+rule: With something that carries a signature, a key file that cannot be read still has the person asked for their password, so that the refusal names the key file and the reset.
+file: crates/cineris-core/src/person.rs
+in: ApprovalsHeld::to_use
+find: !matches!(self.key, HeldKey::None)
+replace: matches!(self.key, HeldKey::Made { .. })
+caught-by:
+    cineris-core::it signed::what_carries_a_signature_is_counted_and_nothing_is_opened
+
+# ---------------------------------------- the reset
+
+[break] reset-stops-at-a-held-key-lock
+rule: The key file's lock still held after the reset's wait is moved aside, and a fresh one locked.
+file: crates/cineris-core/src/person.rs
+in: Core::reset_approvals_within
+find: set_aside(&lock).map_err(|failure| not_set(shown(failure, &lock)))?;
+replace: let _ = &lock;
+caught-by:
+    cineris-core::it signed::a_held_lock_is_waited_for_no_longer_than_the_wait
+
+[break] reset-leaves-the-state-directory-unwritable
+rule: A reset makes its own state directory owner-writable before it writes the new key.
+file: crates/cineris-core/src/person.rs
+in: Core::reset_approvals_within
+find: owner_writable(state.root());
+replace: let _ = state.root();
+os: linux
+caught-by:
+    cineris-core::it signed::a_state_directory_without_its_write_does_not_block_a_reset
+
+[break] a-password-is-counted-from-a-copy
+rule: A password that is not text is refused, never counted from a lossy copy.
+file: crates/cineris-policy/src/signed/key.rs
+in: password_chars
+find: .map_err(|_| KeyError::PasswordNotText)
+replace: .or_else(|_| Ok(String::from_utf8_lossy(password).chars().count()))
+packages: cineris-policy,cineris-core
+caught-by:
+    cineris-policy signed::key::tests::a_password_shorter_than_twelve_characters_is_refused
+    cineris-core::it signed::a_reset_writes_the_standard_cost
+
+# ---------------------------------------- a name the user's folder takes
+
+[break] any-folder-takes-a-projects-name
+rule: A folder of the user's that takes a project's extension's name lets the project's gates go only while the user's own extension of the name is pinned with a signature that counts.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: decide
+find: Source::Project => users.owns(
+replace: Source::Project => users.takes(&name) || users.owns(
+caught-by:
+    cineris-core::it signed::a_folder_of_the_users_that_takes_a_projects_name_releases_no_gate
+
+[break] the-cut-takes-every-name-from-a-project
+rule: A folder of extensions that cannot be listed whole takes no name from a project's extension: its gates hold.
+file: crates/cineris-core/src/ext/found.rs
+in: UserNames::owns
+find: self.names.contains(&name.to_ascii_lowercase())
+replace: self.takes(name)
+caught-by:
+    cineris-core ext::found::tests::the_users_names_are_taken_within_the_bound_on_places_the_session_watches
+
+[break] an-unsigned-pin-owns-a-name
+rule: Only a pin that counts makes a name the user's against a project's extension.
+file: crates/cineris-core/src/ext/found.rs
+in: UserNames::owns
+find: pins.list().iter().any(|pin| {
+replace: pins.held().iter().any(|pin| {
+caught-by:
+    cineris-core ext::found::tests::the_users_names_are_taken_within_the_bound_on_places_the_session_watches
+
+[break] without-engine-a-taken-name-holds-no-gate
+rule: In a build without the script engine, a project's extension whose name a folder of the user's takes, while the user's own of it is not pinned with their key, holds its gates.
+file: crates/cineris-core/src/ext/without_engine.rs
+in: gates
+find: && !super::manage::owns(judging, &UserNames::of(judging.user), &one.name) =>
+replace: && false =>
+caught-by:
+    cineris-core ext::without_engine::tests::a_held_pin_and_a_name_the_users_key_does_not_own_hold_their_gates
+
+# ---------------------------------------- no link written through
+
+[break] the-trust-store-writes-through-a-link
+rule: The trust store is not written through a link put at its name.
+file: crates/cineris-policy/src/trust.rs
+in: TrustStore::write
+find: follow_links: false
+replace: follow_links: true
+caught-by:
+    cineris-policy trust::tests::a_link_put_at_the_stores_name_after_its_read_is_not_written_through
+
+[break] the-approval-store-writes-through-a-link
+rule: The stored approvals are not written through a link put at their name.
+file: crates/cineris-policy/src/approvals.rs
+in: ApprovalStore::write
+find: follow_links: false
+replace: follow_links: true
+caught-by:
+    cineris-policy approvals::tests::a_link_put_at_the_stores_name_after_its_read_is_not_written_through

@@ -73,6 +73,12 @@ pub enum ExtensionStanding {
     Gone,
     /// Its folder was found and could not be taken, as the text says.
     LeftOut(String),
+    /// Held unsigned beside approvals that count: approved earlier and not
+    /// signed by the person's key, kept only for its gates (the full review
+    /// of the signed approvals). Not loaded, found or not, and its gating
+    /// hooks hold, failing, until it is approved again or its approval is
+    /// taken away.
+    Held,
 }
 
 impl ExtensionStanding {
@@ -102,6 +108,10 @@ impl ExtensionStanding {
                            failing, until you turn it off or remove it"
                 .to_owned(),
             Self::LeftOut(why) => format!("left out: {why}"),
+            Self::Held => "approved earlier and not signed by your key: not loaded, and its \
+                           gating hooks hold, failing, until you approve it again or take its \
+                           approval away"
+                .to_owned(),
         }
     }
 }
@@ -275,10 +285,25 @@ pub(crate) fn judged(judging: &Judging<'_>) -> Vec<ExtensionListed> {
                 Source::User if judging.disabled.contains(&name) => ExtensionStanding::TurnedOff,
                 Source::User => match &judging.pins {
                     Err(why) => ExtensionStanding::Unjudged(why.clone()),
-                    Ok(pins) => of_policy(pins.standing(&definition)),
+                    Ok(pins) => held_or(
+                        pins.standing(&definition),
+                        pins.unsigned_of(&TrustResourceKind::Extension, &name)
+                            .is_some(),
+                    ),
                 },
+                Source::Project if users.takes(&name) && owns(judging, &users, &name) => {
+                    ExtensionStanding::NotUsed(
+                        "a folder of your own extensions has its name, and the name is yours"
+                            .to_owned(),
+                    )
+                }
+                // The name is not the user's by their key: not used, and its
+                // gates held, as an approved one not loaded holds them (the
+                // full review of the signed approvals).
                 Source::Project if users.takes(&name) => ExtensionStanding::NotUsed(
-                    "a folder of your own extensions has its name, and the name is yours"
+                    "a folder of your own extensions has its name, and your own extension of \
+                     that name is not approved with your key: its gating hooks hold, failing, \
+                     if it is approved"
                         .to_owned(),
                 ),
                 Source::Project if !judging.project_trusted => ExtensionStanding::ProjectNotTrusted,
@@ -290,7 +315,13 @@ pub(crate) fn judged(judging: &Judging<'_>) -> Vec<ExtensionListed> {
                 }
                 Source::Project => match &judging.trust {
                     Err(why) => ExtensionStanding::Unjudged(why.clone()),
-                    Ok(trust) => of_policy(trust.standing(&definition)),
+                    Ok(trust) => held_or(
+                        trust.standing(&definition),
+                        trust
+                            .unsigned(&TrustResourceKind::Extension)
+                            .iter()
+                            .any(|(held, _)| *held == name),
+                    ),
                 },
             };
             let hash = found.snapshot.hash();
@@ -358,6 +389,35 @@ pub(crate) fn judged(judging: &Judging<'_>) -> Vec<ExtensionListed> {
             },
             _ => Vec::new(),
         };
+        // Held unsigned beside the user's pins that count, and found
+        // nowhere: held, its gates held at the hash held (the full review of
+        // the signed approvals). Never shown as a pin.
+        if let (Source::User, Ok(pins)) = (source, &judging.pins) {
+            for pin in pins
+                .unsigned()
+                .iter()
+                .filter(|pin| pin.kind == TrustResourceKind::Extension)
+            {
+                if seen.contains(&pin.name) {
+                    continue;
+                }
+                out.push(ExtensionListed {
+                    source,
+                    registered: None,
+                    folder: None,
+                    hash: None,
+                    standing: if judging.disabled.contains(&pin.name) {
+                        ExtensionStanding::TurnedOff
+                    } else {
+                        ExtensionStanding::Held
+                    },
+                    pin: None,
+                    words: None,
+                    name: pin.name.clone(),
+                });
+                seen.push(pin.name.clone());
+            }
+        }
         for (name, hash, at) in pinned {
             if seen.contains(&name) {
                 continue;
@@ -389,6 +449,25 @@ fn of_policy(standing: cineris_policy::Standing) -> ExtensionStanding {
         cineris_policy::Standing::Changed => ExtensionStanding::Changed,
         _ => ExtensionStanding::NotApproved,
     }
+}
+
+/// `standing` as a listing says it, or held where its name is held unsigned
+/// (`held`) and nothing signed approves it as it is now: a held pin never
+/// approves (the full review of the signed approvals).
+fn held_or(standing: cineris_policy::Standing, held: bool) -> ExtensionStanding {
+    if held && standing != cineris_policy::Standing::Approved {
+        ExtensionStanding::Held
+    } else {
+        of_policy(standing)
+    }
+}
+
+/// Whether the user's own extension of `name` takes the name from a
+/// project's, letting its gates go: a folder of theirs has it, and their
+/// own extension of it is pinned with a signature that counts
+/// ([`UserNames::owns`]).
+pub(crate) fn owns(judging: &Judging<'_>, users: &UserNames, name: &str) -> bool {
+    users.owns(name, judging.pins.as_ref().ok().copied())
 }
 
 /// Why `name` cannot be the folder of an extension of the user's: it must
@@ -510,6 +589,11 @@ pub struct Added {
     /// What was at its place before, set aside and not removed: where it is,
     /// under `~`, and why (the new folder is in place all the same).
     pub left_aside: Option<String>,
+    /// What the person's signed change of their pins did, one line each:
+    /// the proposal's summary, the pins carried as held among it (approved
+    /// earlier and not signed by their key, kept for their gates). Empty
+    /// when nothing changed. For the front end to say.
+    pub summary: Vec<String>,
 }
 
 /// The gates an extension of the user's holds, which turning it off lets
@@ -567,12 +651,16 @@ pub struct Removal {
 }
 
 /// What [`Core::remove_extension`] did.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Removed {
-    /// A pin was taken away.
+    /// A pin was taken away, signed or held.
     pub unpinned: bool,
     /// The folder was deleted (a link, unlinked).
     pub deleted: bool,
+    /// What the person's signed change of their pins did, one line each:
+    /// the proposal's summary, the pins carried as held among it. Empty when
+    /// nothing was signed. For the front end to say.
+    pub summary: Vec<String>,
 }
 
 /// Whether `target`, resolved, is a name directly in `root`, resolved: the
@@ -1269,7 +1357,7 @@ impl Core {
             },
             registration: None,
         });
-        signed_pins(&self.pin_store()?, &[pin], key).map_err(|failure| {
+        let (_, summary) = signed_pins(&self.pin_store()?, &[pin], key).map_err(|failure| {
             failed(format!(
                 "The extension `{code}` was written to `{}` and not pinned, so it is not loaded: \
                  {failure}",
@@ -1299,6 +1387,7 @@ impl Core {
             registered,
             not_cached,
             left_aside,
+            summary,
         })
     }
 
@@ -1588,7 +1677,7 @@ impl Core {
                 format!("`{code}` was not removed, and nothing was deleted: {refusal}."),
             ));
         }
-        let unpinned = if removal.pin.is_some() {
+        let (unpinned, summary) = if removal.pin.is_some() {
             let Some(key) = key else {
                 return Err(error(
                     ErrorKind::Usage,
@@ -1603,18 +1692,23 @@ impl Core {
                 kind: TrustResourceKind::Extension,
                 name: removal.name.clone(),
             };
-            let pins = signed_pins(&self.pin_store()?, &[unpin], key).map_err(|failure| {
-                failed(format!(
-                    "`{code}` was not removed, and nothing was deleted: its pin could not be \
-                     taken away: {failure}"
-                ))
-            })?;
+            let (pins, summary) =
+                signed_pins(&self.pin_store()?, &[unpin], key).map_err(|failure| {
+                    failed(format!(
+                        "`{code}` was not removed, and nothing was deleted: its pin could not be \
+                         taken away: {failure}"
+                    ))
+                })?;
             self.open_approvals(key)
                 .map_err(|refusal| failed(refusal.to_string()))?;
-            pins.get(&TrustResourceKind::Extension, &removal.name)
-                .is_none()
+            // Neither signed nor held any more: its gates are let go.
+            let gone = pins
+                .held()
+                .iter()
+                .all(|pin| !(pin.kind == TrustResourceKind::Extension && pin.name == removal.name));
+            (gone, summary)
         } else {
-            false
+            (false, Vec::new())
         };
         let mut deleted = false;
         if delete && std::fs::symlink_metadata(&removal.target).is_ok() {
@@ -1632,7 +1726,11 @@ impl Core {
                 ))
             })?;
         }
-        Ok(Removed { unpinned, deleted })
+        Ok(Removed {
+            unpinned,
+            deleted,
+            summary,
+        })
     }
 }
 
@@ -1852,16 +1950,21 @@ pub(crate) fn pins_judged(
 
 /// Makes `changes` to the user's pins in `store` as the person's yes does:
 /// proposed against the pins as they stand with `key`, signed with it, and
-/// committed. With nothing to change, the pins as they are.
+/// committed. Gives the pins after, and the proposal's summary for the
+/// front end to say (the pins it carries as held among it). With nothing to
+/// change, the pins as they are, and no summary.
 fn signed_pins(
     store: &PinStore,
     changes: &[PinChange],
     key: &PersonKey,
-) -> Result<UserPins, PinError> {
+) -> Result<(UserPins, Vec<String>), PinError> {
     let verifier = key.verifier();
     match store.propose(changes, &verifier)? {
-        Some(proposal) => store.commit(&proposal, &key.sign(proposal.statement()), &verifier),
-        None => store.pins(Some(&verifier)),
+        Some(proposal) => Ok((
+            store.commit(&proposal, &key.sign(proposal.statement()), &verifier)?,
+            proposal.summary().to_vec(),
+        )),
+        None => Ok((store.pins(Some(&verifier))?, Vec::new())),
     }
 }
 
@@ -1882,9 +1985,10 @@ pub(crate) fn component_state(
             ComponentState::Starting,
             Some("approved as it is found now, and loaded at the session's next turn".to_owned()),
         ),
-        (ExtensionStanding::Changed | ExtensionStanding::NotApproved, ..) => {
-            (ComponentState::NeedsApproval, Some(standing.words()))
-        }
+        (
+            ExtensionStanding::Changed | ExtensionStanding::NotApproved | ExtensionStanding::Held,
+            ..,
+        ) => (ComponentState::NeedsApproval, Some(standing.words())),
         (
             ExtensionStanding::TurnedOff
             | ExtensionStanding::NotUsed(_)
@@ -1943,6 +2047,10 @@ fn wire_standing(standing: &ExtensionStanding) -> cineris_protocol::methods::Ext
         ExtensionStanding::ProjectNotTrusted => Wire::ProjectNotTrusted,
         ExtensionStanding::Gone => Wire::Gone,
         ExtensionStanding::LeftOut(_) => Wire::LeftOut,
+        // The protocol has no word of its own for it: it is said as one
+        // whose approval does not stand as it was given, its gating hooks
+        // holding, and the status's text says which.
+        ExtensionStanding::Held => Wire::Changed,
     }
 }
 

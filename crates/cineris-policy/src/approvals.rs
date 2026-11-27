@@ -306,8 +306,12 @@ impl ApprovalStore {
         let text = toml::to_string(file).map_err(|error| {
             self.not_understood(format!("it could not be written out: {error}"))
         })?;
+        // A link at the store's name is not written through, as the pin
+        // store's is not (the full review of the signed approvals, L8): the
+        // write is refused, and what the link names is left as it is.
         let options = AtomicWriteOptions {
             owner_only: true,
+            follow_links: false,
             ..AtomicWriteOptions::default()
         };
         write_atomic(&self.file, text.as_bytes(), &options, &*self.clock)?;
@@ -461,5 +465,49 @@ mod tests {
         refused(store.add(&[allow("ls *")]).map(drop));
         refused(store.remove(&[ApprovalId::new("ap_1")]).map(drop));
         assert_eq!(store.load().unwrap().len(), 1);
+    }
+
+    /// The full review of the signed approvals, L8: a link put at the
+    /// store's name after it was read, before it is written, is not written
+    /// through, as at the pin store's.
+    #[test]
+    fn a_link_put_at_the_stores_name_after_its_read_is_not_written_through() {
+        use cineris_base::FakeClock;
+
+        use crate::store_lock::tests::Scratch;
+
+        let scratch = Scratch::new();
+        let file = scratch.0.join("approvals").join("k.toml");
+        let clock: SharedClock =
+            std::sync::Arc::new(FakeClock::starting_at("2026-11-13T10:00:00Z").unwrap());
+        let store = ApprovalStore::new(&file, clock);
+        store.add(&[allow("make *")]).unwrap();
+        let named = scratch.0.join("elsewhere.toml");
+        std::fs::write(&named, "the user's own file").unwrap();
+        let mut skipped = None;
+        let written = store.update(|file_read| {
+            std::fs::remove_file(&file).unwrap();
+            match crate::store_lock::tests::link(&named, &file) {
+                Ok(()) => {}
+                Err(why) => skipped = Some(why),
+            }
+            file_read.approvals.clear();
+            ((), true)
+        });
+        if let Some(why) = skipped {
+            println!("skipped: {why}");
+            return;
+        }
+        assert!(
+            matches!(
+                written,
+                Err(ApprovalError::Write(AtomicWriteError::IsALink { .. }))
+            ),
+            "{written:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&named).unwrap(),
+            "the user's own file"
+        );
     }
 }

@@ -32,8 +32,8 @@ caught-by:
 rule: In a project trusted for the run, a hook the entry pins, where the entry does not count, is on its event, failing.
 file: crates/cineris-core/src/ext/hooks.rs
 in: in_session
-find: let uncounted = stored.filter(|entry| entry.has_entry() && !entry.is_trusted());
-replace: let uncounted = stored.filter(|_| false);
+find: .map(|stored| stored.unsigned(&TrustResourceKind::Hook))
+replace: .map(|stored| stored.unsigned(&TrustResourceKind::Hook)).filter(|_| false)
 caught-by:
     cineris-core ext::hooks::tests::under_trust_project_a_hook_an_entry_that_does_not_count_pins_holds_its_event
     cineris-core::it signed::under_trust_project_without_the_key_a_pinned_hooks_gate_holds

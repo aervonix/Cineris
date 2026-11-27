@@ -40,6 +40,11 @@
 //! kind = "hook"
 //! name = "format"
 //! hash = "5e884898da28…"
+//!
+//! [[project.held]]      # not signed: kept only for its gates
+//! kind = "extension"
+//! name = "gate"
+//! hash = "0b7c…"
 //! ```
 //!
 //! - **Each project's trust is signed whole** (version 3, since the signed
@@ -67,6 +72,21 @@
 //!   [`ProjectTrust::held`]: a session holds the gates of what it names. And
 //!   a whole entry taken away leaves the project untrusted, as never trusted:
 //!   asked about again.
+//! - **Pins that do not count are carried forward as restrictions, never
+//!   signed and never dropped by a signed change** (the full review of the
+//!   signed approvals: a yes over an entry that did not count, after a
+//!   reset, an upgrade or one write by the model, replaced it with only what
+//!   the yes showed, and the gates of the rest lapsed). A trust proposed
+//!   over an entry that does not count moves what it pinned into the
+//!   entry's `[[project.held]]`, an unsigned list beside its signed pins:
+//!   what earlier pins named, kept only for their gates. Nothing reads it as
+//!   a grant: [`ProjectTrust::standing`], [`ProjectTrust::pinned_of`] and
+//!   [`ProjectTrust::registration`] count only the signed pins, and the
+//!   statement signs only them. A definition approved again moves from the
+//!   list to the signed pins; a signed drop of a name takes it out of both.
+//!   Another program can only add to the list, which holds a gate until the
+//!   person's signed change lets it go (a denial), or take the whole entry
+//!   away, the stated residual.
 //! - **The revision** goes up by one at each signed change of the entry.
 //!   An earlier entry, signed whole, still checks: putting a whole earlier
 //!   entry back is the stated rollback (`docs/security.md`, section 3).
@@ -471,6 +491,11 @@ struct Project {
     signature: Option<Signature>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pinned: Vec<Pin>,
+    /// What earlier pins of the entry named that the person's key did not
+    /// sign, kept only for their gates (version 3, since the full review of
+    /// the signed approvals). Not signed, and never read as approving.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    held: Vec<Pin>,
 }
 
 fn is_zero(value: &u64) -> bool {
@@ -663,19 +688,52 @@ impl ProjectTrust {
     #[must_use]
     pub fn pinned_of(&self, kind: &TrustResourceKind) -> Vec<(String, ContentHash)> {
         self.signed()
-            .map(|project| pins_of_kind(project, kind))
+            .map(|project| pins_of_kind(&project.pinned, kind))
             .unwrap_or_default()
     }
 
     /// The names of the project's `kind` that its entry pins, signed or
-    /// not, each with its hash: what restricts. A session holds the gates of
-    /// each as it holds those of an approved thing that is not loaded,
-    /// whatever the entry's signature (the signed approvals step).
+    /// not, its held list's included, each with its hash: what restricts. A
+    /// session holds the gates of each as it holds those of an approved
+    /// thing that is not loaded, whatever the entry's signature (the signed
+    /// approvals step). Never what approves: [`standing`](Self::standing)
+    /// and [`pinned_of`](Self::pinned_of) are.
     #[must_use]
     pub fn held(&self, kind: &TrustResourceKind) -> Vec<(String, ContentHash)> {
         self.project
             .as_ref()
-            .map(|project| pins_of_kind(project, kind))
+            .map(|project| {
+                let mut held = pins_of_kind(&project.pinned, kind);
+                held.extend(pins_of_kind(&project.held, kind));
+                held
+            })
+            .unwrap_or_default()
+    }
+
+    /// The names of the project's `kind` whose pins hold gates and approve
+    /// nothing, each with its hash: the entry's held list, beside a signed
+    /// entry; everything [`held`](Self::held) gives, beside an entry that
+    /// does not count; nothing with no entry. A session holds the gates of
+    /// each, whatever it finds at its name.
+    #[must_use]
+    pub fn unsigned(&self, kind: &TrustResourceKind) -> Vec<(String, ContentHash)> {
+        match (&self.project, self.signed()) {
+            (Some(_), Some(project)) => pins_of_kind(&project.held, kind),
+            (Some(_), None) => self.held(kind),
+            (None, _) => Vec::new(),
+        }
+    }
+
+    /// The names of the project's `kind` that its entry's signed part pins,
+    /// whether or not the signature checks, each with its hash: what a
+    /// listing can say was approved before, for the person's password to
+    /// confirm. Never the held list, which approves nothing even with a
+    /// signature beside it.
+    #[must_use]
+    pub fn named(&self, kind: &TrustResourceKind) -> Vec<(String, ContentHash)> {
+        self.project
+            .as_ref()
+            .map(|project| pins_of_kind(&project.pinned, kind))
             .unwrap_or_default()
     }
 
@@ -739,13 +797,29 @@ impl ProjectTrust {
     }
 }
 
-fn pins_of_kind(project: &Project, kind: &TrustResourceKind) -> Vec<(String, ContentHash)> {
-    project
-        .pinned
-        .iter()
+fn pins_of_kind(pins: &[Pin], kind: &TrustResourceKind) -> Vec<(String, ContentHash)> {
+    pins.iter()
         .filter(|pin| pin.kind == kind.as_str())
         .map(|pin| (pin.name.clone(), pin.hash))
         .collect()
+}
+
+/// The line of a proposal's summary that says a pin is carried as held,
+/// holding its gates and approving nothing.
+fn held_line(kind: &str, name: &str) -> String {
+    format!(
+        "the {} `{}`: approved earlier but not signed by your key; kept, holding its gates, \
+         approving nothing",
+        kind.escape_debug(),
+        name.escape_debug()
+    )
+}
+
+/// Takes the pin of `kind` and `name` out of `pins`: whether it was there.
+fn take_out(pins: &mut Vec<Pin>, kind: &str, name: &str) -> bool {
+    let before = pins.len();
+    pins.retain(|pin| !(pin.kind == kind && pin.name == name));
+    pins.len() != before
 }
 
 /// One change to a project's trust, as the person is asked to sign it.
@@ -948,6 +1022,44 @@ impl TrustStore {
                 if git_shown {
                     summary.push("let git read the repository's own configuration".to_owned());
                 }
+                let pinned = pins_of(&approved);
+                let approved_again = |old: &Pin| {
+                    pinned
+                        .iter()
+                        .any(|pin| pin.kind == old.kind && pin.name == old.name)
+                };
+                // An entry that does not count is signed again by nobody:
+                // nothing it pinned or held is dropped by a trust that does
+                // not show it, and what is not approved again is held,
+                // unsigned, for its gates (the full review of the signed
+                // approvals: a "no" to a project's extensions over an entry a
+                // reset had left unsigned let their gates lapse). What the
+                // person's own signed entry pinned and this trust does not
+                // approve again is taken away, and the summary says so.
+                let carried: Vec<&Pin> = match (&base, signed) {
+                    (Some(project), None) => project.pinned.iter().chain(&project.held).collect(),
+                    (Some(project), Some(_)) => {
+                        for old in project.pinned.iter().filter(|old| !approved_again(old)) {
+                            summary.push(format!(
+                                "take away the approval of the {} `{}`",
+                                old.kind.escape_debug(),
+                                old.name.escape_debug()
+                            ));
+                        }
+                        project.held.iter().collect()
+                    }
+                    (None, _) => Vec::new(),
+                };
+                let mut held: Vec<Pin> = Vec::new();
+                for old in carried {
+                    if !approved_again(old)
+                        && !held
+                            .iter()
+                            .any(|pin| pin.kind == old.kind && pin.name == old.name)
+                    {
+                        held.push(old.clone());
+                    }
+                }
                 let next = Project {
                     key: key.clone(),
                     root,
@@ -956,7 +1068,8 @@ impl TrustStore {
                     git: git_shown.then_some(GitAnswer::Trusted),
                     declined_rules: None,
                     signature: None,
-                    pinned: pins_of(&approved),
+                    pinned,
+                    held,
                 };
                 (next, lift_refusal, false)
             }
@@ -974,8 +1087,9 @@ impl TrustStore {
                 next.revision = revision;
                 next.signature = None;
                 for pin in pins_of(&approved) {
-                    next.pinned
-                        .retain(|old| !(old.kind == pin.kind && old.name == pin.name));
+                    // Approved again, a held pin is signed, and held no more.
+                    take_out(&mut next.held, &pin.kind, &pin.name);
+                    take_out(&mut next.pinned, &pin.kind, &pin.name);
                     next.pinned.push(pin);
                 }
                 summary.extend(approved.iter().map(approve_line));
@@ -1000,13 +1114,18 @@ impl TrustStore {
                 let mut next = project.clone();
                 next.revision = revision;
                 next.signature = None;
+                // The person's yes naming a pin is what lets its gates go,
+                // signed or held.
                 for (kind, name) in &pins {
-                    let before = next.pinned.len();
-                    next.pinned
-                        .retain(|pin| !(pin.kind == kind.as_str() && pin.name == *name));
-                    if next.pinned.len() != before {
+                    if take_out(&mut next.pinned, kind.as_str(), name) {
                         summary.push(format!(
                             "take away the approval of the {kind} `{}`",
+                            name.escape_debug()
+                        ));
+                    } else if take_out(&mut next.held, kind.as_str(), name) {
+                        summary.push(format!(
+                            "let go of the {kind} `{}`, approved earlier but not signed by your \
+                             key: the gates it held no longer hold",
                             name.escape_debug()
                         ));
                     }
@@ -1017,6 +1136,7 @@ impl TrustStore {
                 (next, false, false)
             }
         };
+        summary.extend(next.held.iter().map(|pin| held_line(&pin.kind, &pin.name)));
         Ok(Some(TrustProposal {
             key: key.clone(),
             base,
@@ -1231,7 +1351,7 @@ impl TrustStore {
             .read()?
             .projects
             .into_iter()
-            .flat_map(|project| project.pinned)
+            .flat_map(|project| project.pinned.into_iter().chain(project.held))
             .filter(|pin| pin.kind == kind.as_str())
             .map(|pin| pin.hash)
             .collect())
@@ -1359,8 +1479,10 @@ impl TrustStore {
                     project.key.as_str().escape_debug()
                 )));
             }
-            for (at, pin) in project.pinned.iter().enumerate() {
-                if project.pinned[..at]
+            // Signed or held: one pin of a kind and name in an entry.
+            let every: Vec<&Pin> = project.pinned.iter().chain(&project.held).collect();
+            for (at, pin) in every.iter().enumerate() {
+                if every[..at]
                     .iter()
                     .any(|earlier| earlier.kind == pin.kind && earlier.name == pin.name)
                 {
@@ -1383,17 +1505,19 @@ impl TrustStore {
                 )));
             }
         }
-        // Nor has a version before 3 a revision, a signature or a pin's
-        // registration.
+        // Nor has a version before 3 a revision, a signature, a pin's
+        // registration or a held list.
         if file.version < VERSION
             && file.projects.iter().any(|project| {
                 project.revision != 0
                     || project.signature.is_some()
+                    || !project.held.is_empty()
                     || project.pinned.iter().any(|pin| pin.registration.is_some())
             })
         {
             return Err(self.not_understood(format!(
-                "it is version {}, which has no `revision`, `signature` or `registration`",
+                "it is version {}, which has no `revision`, `signature`, `registration` or \
+                 `[[project.held]]`",
                 file.version
             )));
         }
@@ -1410,8 +1534,12 @@ impl TrustStore {
         let text = toml::to_string(&file).map_err(|error| {
             self.not_understood(format!("it could not be written out: {error}"))
         })?;
+        // A link at the store's name is not written through, as the pin
+        // store's is not (the full review of the signed approvals, L8): the
+        // write is refused, and what the link names is left as it is.
         let options = AtomicWriteOptions {
             owner_only: true,
+            follow_links: false,
             ..AtomicWriteOptions::default()
         };
         write_atomic(&self.file, text.as_bytes(), &options, &*self.clock)?;
@@ -1486,6 +1614,7 @@ mod tests {
                 declined_rules: None,
                 signature: None,
                 pinned: pins_of(&approved),
+                held: Vec::new(),
             }),
             checked: Checked::Signed,
             refused: false,
@@ -2185,6 +2314,212 @@ mod tests {
             pins[0].hash = "XYZ".to_owned();
         }
         assert!(crate::signed::statement_of(&bad).is_err());
+    }
+
+    /// The full review of the signed approvals, L8: a link put at the
+    /// store's name after it was read, before it is written, is not written
+    /// through, as at the pin store's.
+    #[test]
+    fn a_link_put_at_the_stores_name_after_its_read_is_not_written_through() {
+        let scratch = crate::store_lock::tests::Scratch::new();
+        let store = store_in(&scratch);
+        let key = ProjectKey::new("k");
+        let person = Person::new();
+        person.trust(&store, &key, "~/app", &[], false);
+        let named = scratch.0.join("elsewhere.toml");
+        std::fs::write(&named, "the user's own file").unwrap();
+        let mut skipped = None;
+        let written = store.update(|file| {
+            std::fs::remove_file(store.path()).unwrap();
+            if let Err(why) = crate::store_lock::tests::link(&named, store.path()) {
+                skipped = Some(why);
+            }
+            file.projects.clear();
+            Ok(((), true))
+        });
+        if let Some(why) = skipped {
+            println!("skipped: {why}");
+            return;
+        }
+        assert!(
+            matches!(
+                written,
+                Err(TrustError::Write(AtomicWriteError::IsALink { .. }))
+            ),
+            "{written:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&named).unwrap(),
+            "the user's own file"
+        );
+    }
+
+    /// The full review of the signed approvals: a trust proposed over an
+    /// entry that does not count carries what it pinned as held, never
+    /// signed and never dropped; approving one again signs it and holds it
+    /// no more; a signed drop of a held name lets it go.
+    #[test]
+    fn an_entry_that_does_not_count_is_carried_as_held_by_the_next_trust() {
+        let scratch = crate::store_lock::tests::Scratch::new();
+        let store = store_in(&scratch);
+        let key = ProjectKey::new("k");
+        let person = Person::new();
+        let mine = person.verifier();
+        let gate = Definition::of(TrustResourceKind::Extension, "gate", ["refuse"]);
+        let format = hook("format", &["cargo", "fmt"]);
+        person.trust(
+            &store,
+            &key,
+            "~/app",
+            &[gate.clone(), format.clone()],
+            false,
+        );
+        // A reset's way: the signature taken off.
+        store.strip_signatures().unwrap();
+        // The next trust shows the hook alone: the extension is held.
+        for verifier in [None, Some(&mine)] {
+            let proposal = store
+                .propose(
+                    &key,
+                    TrustChange::Trust {
+                        root: "~/app".to_owned(),
+                        approved: vec![format.clone().into()],
+                        git_shown: false,
+                        lift_refusal: true,
+                    },
+                    verifier,
+                )
+                .unwrap()
+                .unwrap();
+            assert!(
+                proposal.summary().iter().any(|line| line
+                    == "the extension `gate`: approved earlier but not signed by your key; kept, \
+                        holding its gates, approving nothing"),
+                "{:?}",
+                proposal.summary()
+            );
+            let ApprovalProposal::Project { pins, .. } = proposal.view() else {
+                panic!("not a project's");
+            };
+            assert!(pins.iter().all(|pin| pin.name != "gate"), "{pins:?}");
+        }
+        let trust = person.trust(&store, &key, "~/app", std::slice::from_ref(&format), false);
+        assert!(trust.is_trusted());
+        assert_eq!(trust.standing(&gate), Standing::New);
+        assert!(trust.pinned_of(&TrustResourceKind::Extension).is_empty());
+        assert!(trust.named(&TrustResourceKind::Extension).is_empty());
+        assert_eq!(
+            trust.unsigned(&TrustResourceKind::Extension),
+            [("gate".to_owned(), gate.hash)]
+        );
+        assert_eq!(trust.held(&TrustResourceKind::Extension).len(), 1);
+        assert!(trust.unsigned(&TrustResourceKind::Hook).is_empty());
+        assert!(
+            store
+                .pinned_hashes(&TrustResourceKind::Extension)
+                .unwrap()
+                .contains(&gate.hash),
+            "its cache entry is kept for its gates"
+        );
+        let written = std::fs::read_to_string(store.path()).unwrap();
+        assert!(written.contains("[[project.held]]"), "{written}");
+        // Approved again: signed, and held no more.
+        let trust = person.approve(&store, &key, std::slice::from_ref(&gate), false);
+        assert_eq!(trust.standing(&gate), Standing::Approved);
+        assert!(trust.unsigned(&TrustResourceKind::Extension).is_empty());
+        // Held again by a trust that does not show it, then let go by a
+        // signed drop that names it.
+        store.strip_signatures().unwrap();
+        person.trust(&store, &key, "~/app", std::slice::from_ref(&format), false);
+        let drop = store
+            .propose(
+                &key,
+                TrustChange::Drop {
+                    pins: vec![(TrustResourceKind::Extension, "gate".to_owned())],
+                },
+                Some(&mine),
+            )
+            .unwrap()
+            .unwrap();
+        assert!(
+            drop.summary()[0].starts_with("let go of the extension `gate`"),
+            "{:?}",
+            drop.summary()
+        );
+        let trust = store
+            .commit(&drop, &person.sign(drop.statement()), &mine)
+            .unwrap();
+        assert!(trust.held(&TrustResourceKind::Extension).is_empty());
+        assert_eq!(trust.standing(&format), Standing::Approved);
+    }
+
+    /// The maintainers, on the full review: a held entry another program
+    /// adds to a signed entry can only deny. The project stays trusted, the
+    /// entry approves nothing, and it holds its gate.
+    #[test]
+    fn a_held_entry_written_by_another_program_only_holds_a_gate() {
+        let scratch = crate::store_lock::tests::Scratch::new();
+        let store = store_in(&scratch);
+        let key = ProjectKey::new("k");
+        let person = Person::new();
+        let mine = person.verifier();
+        let format = hook("format", &["cargo", "fmt"]);
+        person.trust(&store, &key, "~/app", std::slice::from_ref(&format), false);
+        let planted = hook("planted", &["curl evil"]);
+        let mut text = std::fs::read_to_string(store.path()).unwrap();
+        text.push_str(&format!(
+            "\n[[project.held]]\nkind = \"hook\"\nname = \"planted\"\nhash = \"{}\"\n",
+            planted.hash
+        ));
+        std::fs::write(store.path(), &text).unwrap();
+        let trust = store.project(&key, Some(&mine)).unwrap();
+        assert!(
+            trust.is_trusted(),
+            "the signature is over the signed pins alone"
+        );
+        assert_eq!(trust.standing(&planted), Standing::New);
+        assert_eq!(
+            trust.registration(&TrustResourceKind::Hook, "planted"),
+            None
+        );
+        assert!(
+            trust
+                .pinned_of(&TrustResourceKind::Hook)
+                .iter()
+                .all(|(name, _)| name != "planted")
+        );
+        assert_eq!(
+            trust.unsigned(&TrustResourceKind::Hook),
+            [("planted".to_owned(), planted.hash)]
+        );
+        // A held list in a version before 3, or a name both signed and held,
+        // refuses the whole file.
+        let older: String = text
+            .replace("version = 3", "version = 2")
+            .lines()
+            .filter(|line| !line.starts_with("signature") && !line.starts_with("revision"))
+            .map(|line| format!("{line}\n"))
+            .collect();
+        for (what, text) in [
+            ("version 2", older),
+            (
+                "signed and held",
+                format!(
+                    "{text}\n[[project.held]]\nkind = \"hook\"\nname = \"format\"\nhash = \
+                     \"{}\"\n",
+                    planted.hash
+                ),
+            ),
+        ] {
+            std::fs::write(store.path(), &text).unwrap();
+            assert!(
+                matches!(
+                    store.project(&key, Some(&mine)),
+                    Err(TrustError::NotUnderstood { .. })
+                ),
+                "{what}:\n{text}"
+            );
+        }
     }
 
     /// The permission path's review, finding 5: two entries of one project,

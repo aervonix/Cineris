@@ -122,6 +122,11 @@ pub struct Trusted {
     /// The names of the project's hooks approved with it, as they were
     /// shown (since step 28).
     pub hooks: Vec<String>,
+    /// What the person's signed change of the project's trust did, one line
+    /// each: the proposal's summary, what it carries as held among it
+    /// (approved earlier and not signed by their key, kept for its gates).
+    /// Empty when nothing changed. For the front end to say.
+    pub summary: Vec<String>,
 }
 
 /// One of a project's extensions that `cineris permissions trust` can
@@ -665,6 +670,7 @@ impl Core {
                 lift_refusal: true,
             }
         };
+        let mut summary = Vec::new();
         if let Some(proposal) = store
             .propose(&project.key, change, Some(&verifier))
             .map_err(failed)?
@@ -672,6 +678,7 @@ impl Core {
             store
                 .commit(&proposal, &key.sign(proposal.statement()), &verifier)
                 .map_err(failed)?;
+            summary = proposal.summary().to_vec();
         }
         self.open_approvals(key).map_err(|refusal| {
             error(
@@ -694,6 +701,7 @@ impl Core {
                 .map(|extension| extension.name.clone())
                 .collect(),
             hooks: hooks.iter().map(|hook| hook.name.clone()).collect(),
+            summary,
         })
     }
 

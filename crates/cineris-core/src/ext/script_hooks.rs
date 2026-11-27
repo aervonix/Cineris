@@ -241,6 +241,13 @@ pub(crate) enum Stand<'a> {
     /// the person opened their approvals with (the signed approvals step):
     /// no key, unsigned, or not the person's.
     Uncounted(cineris_policy::Checked),
+    /// Held unsigned beside approvals that count: approved earlier and not
+    /// signed by the person's key, kept only for its gates (the full review
+    /// of the signed approvals).
+    Held,
+    /// A project's whose name a folder of the user's takes, while the
+    /// user's own extension of the name is not approved with their key.
+    Taken,
 }
 
 /// `name` as a key of a TOML table's header: bare when it can be, quoted
@@ -373,6 +380,20 @@ pub(crate) fn way_out(
                                                    `cineris permissions trust` trusts it), or \
                                                    take the project's trust away (`cineris \
                                                    permissions untrust`)"
+            .to_owned(),
+        // Only the person's yes, naming it, lets a held approval's gates go.
+        (Source::User, Stand::Held) => format!(
+            "approve it again as it is now ({add}), which signs it with your key, or take its \
+             approval away ({remove}), which lets its gates go"
+        ),
+        (Source::Project, Stand::Held) => "approve it again as it is now (the project's trust \
+                                           question lists it when a session opens, and \
+                                           `cineris permissions trust` shows it), or take the \
+                                           project's trust away (`cineris permissions untrust`)"
+            .to_owned(),
+        (_, Stand::Taken) => "approve your own extension of that name (`cineris ext add \
+                              <folder>`), or take its folder out of your folder of extensions; \
+                              or take the project's trust away (`cineris permissions untrust`)"
             .to_owned(),
     }
 }

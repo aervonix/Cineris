@@ -36,9 +36,22 @@
 //!
 //! Argon2id of the password and the salt, at the file's cost, gives 32
 //! bytes; HKDF-SHA-256 of them, with a label of its own, gives the Ed25519
-//! seed. Both are wiped when dropped. The key pair is `ring`'s, which does
-//! not wipe its own copy of the private scalar when dropped: a
-//! [`PersonKey`] is made at a yes and dropped as soon as it has signed.
+//! seed. Both are wiped when dropped. What is not wiped:
+//!
+//! - **`ring`'s key pair** does not wipe its own copy of the private scalar
+//!   when dropped: a [`PersonKey`] is made at a yes and dropped as soon as
+//!   it has signed.
+//! - **`ring`'s HKDF pseudo-random key** (`Prk`), made from the Argon2id
+//!   output on the way to the seed, is not wiped either: it lives only
+//!   within [`PersonKey::derive`].
+//! - **Nothing is locked in memory** (`mlock`, `VirtualLock`): the system
+//!   may write a page that holds the password, the Argon2id output or the
+//!   seed to swap. Those are the residual under the harness's memory
+//!   protection (`docs/security.md`, section 3).
+//!
+//! A password chosen is counted in characters where it lies
+//! ([`password_chars`]), with no copy; one that is not UTF-8 is refused as
+//! not text, which the prompt never makes.
 
 #![allow(
     clippy::disallowed_methods,
@@ -246,6 +259,10 @@ pub enum KeyError {
     /// A password chosen with too few characters.
     #[error("a password for your approvals has at least {MIN_PASSWORD_CHARS} characters")]
     PasswordTooShort,
+    /// A password chosen that is not text (UTF-8): the prompt never makes
+    /// one.
+    #[error("a password for your approvals is text, and what was given is not")]
+    PasswordNotText,
     /// Argon2 refused what it was given.
     #[error("the approvals key could not be made: {0}")]
     Derive(String),
@@ -294,8 +311,7 @@ impl KeyFile {
         cost: Cost,
         made_at: Timestamp,
     ) -> Result<(Self, PersonKey), KeyError> {
-        let chars = String::from_utf8_lossy(password).chars().count();
-        if chars < MIN_PASSWORD_CHARS {
+        if password_chars(password)? < MIN_PASSWORD_CHARS {
             return Err(KeyError::PasswordTooShort);
         }
         let key = PersonKey::make(password, &salt, cost)?;
@@ -508,6 +524,20 @@ impl fmt::Debug for PersonKey {
     }
 }
 
+/// How many characters (Unicode scalar values) a password chosen has,
+/// counted where it lies, with no copy made: a copy would not be wiped (the
+/// full review of the signed approvals, L10: a lossy decoding of a password
+/// that is not UTF-8 copied it).
+///
+/// # Errors
+///
+/// [`KeyError::PasswordNotText`] when it is not UTF-8.
+pub fn password_chars(password: &[u8]) -> Result<usize, KeyError> {
+    std::str::from_utf8(password)
+        .map(|text| text.chars().count())
+        .map_err(|_| KeyError::PasswordNotText)
+}
+
 /// HKDF's output length: one Ed25519 seed.
 struct Seed;
 
@@ -548,6 +578,18 @@ mod tests {
             Err(KeyError::PasswordTooShort)
         ));
         assert!(KeyFile::make("éééééééééééé".as_bytes(), salt, cheap(), at()).is_ok());
+        // Not text: refused as such, however long (the full review, L10: it
+        // was decoded into a copy that was never wiped).
+        let not_text = [0xff_u8; 32];
+        assert!(matches!(
+            KeyFile::make(&not_text, salt, cheap(), at()),
+            Err(KeyError::PasswordNotText)
+        ));
+        assert!(matches!(
+            password_chars(&not_text),
+            Err(KeyError::PasswordNotText)
+        ));
+        assert_eq!(password_chars("é1".as_bytes()).unwrap(), 2);
     }
 
     #[test]

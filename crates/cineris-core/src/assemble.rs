@@ -695,10 +695,14 @@ pub(crate) fn look(
     let key = place.root.project_key();
     let verifier = inner.person.verifier();
     // A project whose entry does not count only because the person has not
-    // opened their approvals is not asked about as a new project: it was
-    // trusted, and their password is what is missing (the signed approvals
-    // step). One unsigned, or not theirs, is asked about again.
-    let unopened = verifier.is_none() && stored.has_entry() && !stored.is_trusted();
+    // opened their approvals is not asked about as a new project: it carries
+    // a signature, and their password is what is missing (the signed
+    // approvals step). One unsigned (after a reset, or written by an older
+    // version), or not theirs, is asked about again, with or without their
+    // approvals open: the front end sets them up or opens them at the yes
+    // (the full review of the signed approvals, M1: after a reset or an
+    // upgrade the application never asked again).
+    let unopened = stored.checked() == cineris_policy::Checked::NoKey;
     if stored.is_refused()
         || unopened
         || inner

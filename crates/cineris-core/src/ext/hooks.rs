@@ -270,12 +270,11 @@ pub(crate) fn in_session(
     // unsigned, or not the person's) is not trusted, and none of its hooks
     // runs; each its entry pins, signed or not, holds its event, failing,
     // as an approved hook that changed does (the signed approvals step). The
-    // session is told of the entry once, as it opens.
-    if !trusted
-        && let Some(stored) = stored.filter(|stored| stored.has_entry() && !stored.is_trusted())
-    {
-        let pinned = stored.held(&TrustResourceKind::Hook);
-        let why = crate::person::uncounted(stored.checked());
+    // session is told of the entry once, as it opens. So does each hook an
+    // entry holds unsigned beside its signed pins (the full review of the
+    // signed approvals: what earlier pins named is carried as held).
+    if !trusted && let Some(stored) = stored {
+        let pinned = stored.unsigned(&TrustResourceKind::Hook);
         for hook in &configured.project {
             if pinned.iter().any(|(name, _)| *name == hook.name) {
                 refused.push(Refused {
@@ -284,11 +283,7 @@ pub(crate) fn in_session(
                     event: Some(hook.event),
                     observe: hook.observe,
                     filter: Some(hook.filter.clone()),
-                    reason: format!(
-                        "this project's trust does not count in this session ({why}), so its \
-                         gate holds: the project's trust question asks again when a session \
-                         opens, and `cineris permissions trust` trusts it"
-                    ),
+                    reason: unsigned_reason(stored, false),
                 });
             }
         }
@@ -303,9 +298,10 @@ pub(crate) fn in_session(
         // headless run keeps every gate). The session is told of the entry
         // once, as it opens.
         told.extend(projects.iter().map(Refused::told));
-        let uncounted = stored.filter(|entry| entry.has_entry() && !entry.is_trusted());
-        let held = uncounted
-            .map(|stored| stored.held(&TrustResourceKind::Hook))
+        // What the entry pins and does not count: all it pins where the
+        // entry does not count, its held list beside a signed one.
+        let held = stored
+            .map(|stored| stored.unsigned(&TrustResourceKind::Hook))
             .unwrap_or_default();
         for hook in configured.project {
             let definition = hook.definition();
@@ -323,21 +319,23 @@ pub(crate) fn in_session(
             };
             let name = in_code(&hook.name);
             if standing != Standing::Approved
-                && let Some(stored) = uncounted
+                && let Some(stored) = stored
                 && held.iter().any(|(pinned, _)| *pinned == hook.name)
             {
-                let why = crate::person::uncounted(stored.checked());
+                if stored.is_trusted() {
+                    told.push(format!(
+                        "This project's hook `{name}` was approved earlier and is not signed by \
+                         your key, so it does not run, and its gate holds, failing. `cineris \
+                         permissions trust` shows it, to approve it."
+                    ));
+                }
                 refused.push(Refused {
                     name: hook.name.clone(),
                     source: Source::Project,
                     event: Some(hook.event),
                     observe: hook.observe,
                     filter: Some(hook.filter.clone()),
-                    reason: format!(
-                        "this project's trust does not count in this session ({why}), so its \
-                         gate holds, though the project is trusted for this run: `cineris \
-                         permissions trust` trusts it with your key"
-                    ),
+                    reason: unsigned_reason(stored, true),
                 });
                 continue;
             }
@@ -372,6 +370,33 @@ pub(crate) fn in_session(
         hooks,
         refused,
         told,
+    }
+}
+
+/// Why a project's hook that `stored` pins, and that does not count, holds
+/// its event, failing, with the way out: the entry does not count with the
+/// session's key, or it holds the hook unsigned beside its signed pins (the
+/// full review of the signed approvals). `trusted`: the session trusts the
+/// project, by `--trust-project` where the entry does not count.
+fn unsigned_reason(stored: &ProjectTrust, trusted: bool) -> String {
+    if stored.is_trusted() {
+        return "it was approved earlier and is not signed by your key, so it is kept only for \
+                its gate, which holds: `cineris permissions trust` shows it, to approve it"
+            .to_owned();
+    }
+    let why = crate::person::uncounted(stored.checked());
+    if trusted {
+        format!(
+            "this project's trust does not count in this session ({why}), so its gate holds, \
+             though the project is trusted for this run: `cineris permissions trust` trusts it \
+             with your key"
+        )
+    } else {
+        format!(
+            "this project's trust does not count in this session ({why}), so its gate holds: \
+             the project's trust question asks again when a session opens, and `cineris \
+             permissions trust` trusts it"
+        )
     }
 }
 

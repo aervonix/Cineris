@@ -23,6 +23,12 @@
 //! hash = "5e884898da28…"
 //! registration = "a3b1…"    # what it registered when it was approved
 //! at = "2026-11-20T10:15:02Z"
+//!
+//! [[held]]                  # not signed: kept only for its gates
+//! kind = "extension"
+//! name = "gate"
+//! hash = "0b7c…"
+//! at = "2026-11-18T09:00:00Z"
 //! ```
 //!
 //! - **The pins are signed together** (since the signed approvals step):
@@ -45,6 +51,21 @@
 //!   in the file, signed or not, is in [`UserPins::held`]: the session
 //!   holds the gates of what it names, as it does for one changed or gone.
 //!   Only what a pin allows waits for a signature.
+//! - **Pins that do not count are carried forward as restrictions, never
+//!   signed and never dropped by a signed change** (the full review of the
+//!   signed approvals: a yes to one extension, after a reset, an upgrade or
+//!   one write by the model, signed a set without the pins that held gates,
+//!   and the gates lapsed). A change proposed over a set that does not count
+//!   moves its pins into `[[held]]`, an unsigned list beside the signed
+//!   pins: what earlier pins named, kept only for their gates. Nothing reads
+//!   it as a grant: [`UserPins::standing`], [`UserPins::get`] and
+//!   [`UserPins::list`] count only the signed pins, and the statement signs
+//!   only them. A pin approved again moves from the list to the signed set;
+//!   a signed unpin of a name takes it out of both, the person's yes naming
+//!   it being what lets its gates go. The list is unsigned by design:
+//!   another program can only add to it, which holds a gate the person
+//!   lets go with a signed unpin (a denial), or delete the file, the stated
+//!   residual.
 //! - **The revision** goes up by one at each change, so that a set signed
 //!   once is never the same bytes as a later one. An earlier set, signed
 //!   whole, still checks: putting a whole earlier file back is the stated
@@ -57,7 +78,8 @@
 //!   `trust.toml` is.
 //! - **Read strictly.** A key this build does not know, a value of the
 //!   wrong type, a `version` other than 1 or 2, a hash that is not one, or
-//!   two pins of one kind and name refuse the whole file, and then
+//!   two pins of one kind and name, signed or held, refuse the whole file,
+//!   and then
 //!   **nothing is taken as pinned**: a file that cannot be read in full is
 //!   not read in part (decision 0028's rule,
 //!   `docs/decisions/0028-enforced-values-fail-closed.md`). The error says
@@ -65,9 +87,9 @@
 //!   rather than write over it.
 //! - **Version 1** (step 28's, never signed) is read as unsigned: its pins
 //!   hold their gates, and approve nothing. The person's next change writes
-//!   version 2 with only what they sign; an unsigned pin is never signed in
-//!   bulk, since one written by the model before the upgrade would be
-//!   laundered.
+//!   version 2 with only what they sign, and its pins held; an unsigned pin
+//!   is never signed in bulk, since one written by the model before the
+//!   upgrade would be laundered.
 //! - **A kind this build does not know** is kept as it was written, and
 //!   written back: a later build's pin, which approves nothing this build
 //!   asks about.
@@ -162,23 +184,35 @@ impl UserPin {
 /// project's.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UserPins {
-    /// Every pin in the file, signed or not.
+    /// The file's signed set (`[[pin]]`), whether or not it checks.
     pins: Vec<UserPin>,
+    /// The file's held list (`[[held]]`): never signed.
+    kept: Vec<UserPin>,
+    /// Both, the signed set first: what restricts.
+    every: Vec<UserPin>,
     checked: Checked,
     revision: u64,
 }
 
 impl Default for UserPins {
     fn default() -> Self {
-        Self {
-            pins: Vec::new(),
-            checked: Checked::Empty,
-            revision: 0,
-        }
+        Self::of(File::empty(), Checked::Empty)
     }
 }
 
 impl UserPins {
+    /// What `file` holds, standing as `checked` with the session's key.
+    fn of(file: File, checked: Checked) -> Self {
+        let every = file.pins.iter().chain(&file.held).cloned().collect();
+        Self {
+            pins: file.pins,
+            kept: file.held,
+            every,
+            checked,
+            revision: file.revision,
+        }
+    }
+
     /// Whether the pins count: the set is signed by the session's key, or
     /// there is none.
     #[must_use]
@@ -220,12 +254,34 @@ impl UserPins {
         if self.counts() { &self.pins } else { &[] }
     }
 
-    /// Every pin in the file, signed or not: what restricts. A session holds
-    /// the gates of each as it holds those of an approved thing that is not
-    /// loaded (changed, unreadable or gone), whatever its signature.
+    /// Every pin in the file, signed or not, the held list's included: what
+    /// restricts. A session holds the gates of each as it holds those of an
+    /// approved thing that is not loaded (changed, unreadable or gone),
+    /// whatever its signature. Never what approves: [`list`](Self::list)
+    /// and [`standing`](Self::standing) are.
     #[must_use]
     pub fn held(&self) -> &[UserPin] {
-        &self.pins
+        &self.every
+    }
+
+    /// The pins that hold gates and approve nothing: the held list, beside a
+    /// set that counts; every pin in the file, when the set does not count.
+    /// A session holds the gates of each of these, whatever it finds at its
+    /// name, since nothing the person's key signed approves it.
+    #[must_use]
+    pub fn unsigned(&self) -> &[UserPin] {
+        if self.counts() {
+            &self.kept
+        } else {
+            &self.every
+        }
+    }
+
+    /// The pin of this kind and name among [`unsigned`](Self::unsigned):
+    /// what holds its gates and approves nothing.
+    #[must_use]
+    pub fn unsigned_of(&self, kind: &TrustResourceKind, name: &str) -> Option<&UserPin> {
+        self.unsigned().iter().find(|pin| pin.is_of(kind, name))
     }
 
     /// Whether nothing counts as pinned.
@@ -298,6 +354,11 @@ struct File {
     signature: Option<Signature>,
     #[serde(default, rename = "pin", skip_serializing_if = "Vec::is_empty")]
     pins: Vec<UserPin>,
+    /// What earlier pins named that the person's key did not sign, kept
+    /// only for their gates (since the full review of the signed approvals).
+    /// Not signed, and never read as approving.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    held: Vec<UserPin>,
 }
 
 fn is_zero(value: &u64) -> bool {
@@ -311,6 +372,7 @@ impl File {
             revision: 0,
             signature: None,
             pins: Vec::new(),
+            held: Vec::new(),
         }
     }
 
@@ -379,8 +441,9 @@ impl PinProposal {
     }
 
     /// What changes, one line each, for the person to read before they
-    /// sign: each pin added or taken away, and the pins not signed by their
-    /// key that the change drops.
+    /// sign: each pin added or taken away, and each pin not signed by their
+    /// key that the change carries as held, holding its gates and approving
+    /// nothing.
     #[must_use]
     pub fn summary(&self) -> &[String] {
         &self.summary
@@ -442,19 +505,20 @@ impl PinStore {
     /// caller takes nothing as pinned, and shows the error.
     pub fn pins(&self, verifier: Option<&Verifier>) -> Result<UserPins, PinError> {
         let (file, _) = self.read()?;
-        Ok(UserPins {
-            checked: file.checked(verifier),
-            revision: file.revision,
-            pins: file.pins,
-        })
+        let checked = file.checked(verifier);
+        Ok(UserPins::of(file, checked))
     }
 
     /// Works out `changes`, in order, against the pins as they stand with
     /// `verifier`, the key the person's password just made: what the file
-    /// would then hold, and the statement the person signs for it. Only what counts is carried over: pins not
-    /// signed by the session's key are dropped, and the summary says so.
-    /// `None` when the changes change nothing (an unpin of what is not
-    /// pinned), so that nobody is asked.
+    /// would then hold, and the statement the person signs for it. Only the
+    /// pins that count are signed again. Pins not signed by the session's
+    /// key are never dropped: they are moved into the held list, which keeps
+    /// their gates and approves nothing, and the summary names each (the
+    /// full review of the signed approvals). A pin approved again leaves
+    /// the held list for the signed set; an unpin takes its name out of
+    /// both. `None` when the changes change nothing (an unpin of what is
+    /// neither pinned nor held), so that nobody is asked.
     ///
     /// # Errors
     ///
@@ -467,30 +531,18 @@ impl PinStore {
         let (file, base) = self.read()?;
         let checked = file.checked(Some(verifier));
         let counts = matches!(checked, Checked::Signed | Checked::Empty);
-        let mut pins = if counts {
-            file.pins.clone()
+        // A set that does not count is signed again by nobody: what it
+        // pinned is held, beside what was held already.
+        let (mut pins, mut held) = if counts {
+            (file.pins.clone(), file.held.clone())
         } else {
-            Vec::new()
+            (
+                Vec::new(),
+                file.pins.iter().chain(&file.held).cloned().collect(),
+            )
         };
         let mut summary = Vec::new();
-        if !counts && !file.pins.is_empty() {
-            summary.push(format!(
-                "{} earlier {} not signed by your key {} dropped: {} asked about again",
-                file.pins.len(),
-                if file.pins.len() == 1 {
-                    "approval"
-                } else {
-                    "approvals"
-                },
-                if file.pins.len() == 1 { "is" } else { "are" },
-                if file.pins.len() == 1 {
-                    "it is"
-                } else {
-                    "they are"
-                },
-            ));
-        }
-        let mut changed = !counts && !file.pins.is_empty();
+        let mut changed = false;
         let at = self.clock.now().to_timestamp();
         for change in changes {
             match change {
@@ -508,6 +560,7 @@ impl PinStore {
                         pin.name.escape_debug(),
                         short(&pin.hash)
                     ));
+                    held.retain(|old| !old.is_of(&pin.kind, &pin.name));
                     match pins.iter().position(|old| old.is_of(&pin.kind, &pin.name)) {
                         Some(index) => pins[index] = pin,
                         None => pins.push(pin),
@@ -515,11 +568,19 @@ impl PinStore {
                     changed = true;
                 }
                 PinChange::Unpin { kind, name } => {
-                    let before = pins.len();
+                    let (signed, kept) = (pins.len(), held.len());
                     pins.retain(|pin| !pin.is_of(kind, name));
-                    if pins.len() != before {
+                    held.retain(|pin| !pin.is_of(kind, name));
+                    if pins.len() != signed {
                         summary.push(format!(
                             "take away the approval of the {kind} `{}`",
+                            name.escape_debug()
+                        ));
+                        changed = true;
+                    } else if held.len() != kept {
+                        summary.push(format!(
+                            "let go of the {kind} `{}`, approved earlier but not signed by your \
+                             key: the gates it held no longer hold",
                             name.escape_debug()
                         ));
                         changed = true;
@@ -530,11 +591,13 @@ impl PinStore {
         if !changed {
             return Ok(None);
         }
+        summary.extend(held.iter().map(|pin| held_line(&pin.kind, &pin.name)));
         let next = File {
             version: VERSION,
             revision: file.revision.saturating_add(1),
             signature: None,
             pins,
+            held,
         };
         Ok(Some(PinProposal {
             base,
@@ -583,17 +646,16 @@ impl PinStore {
         };
         cineris_base::hook::point(BEFORE_THE_PINS_ARE_WRITTEN);
         self.write(&next)?;
-        Ok(UserPins {
-            checked: next.checked(Some(verifier)),
-            revision: next.revision,
-            pins: next.pins,
-        })
+        let checked = next.checked(Some(verifier));
+        Ok(UserPins::of(next, checked))
     }
 
     /// Takes the signature off the pins, at a reset of the person's key:
     /// every pin stays, unsigned, so that it approves nothing and asks
-    /// again, and still holds its gates ([`UserPins::held`]) until the
-    /// person's next yes over the pins drops it. Deletes nothing, so that a
+    /// again, and still holds its gates ([`UserPins::held`]): the person's
+    /// next yes over the pins carries it as held, and only a signed unpin of
+    /// its name, or its approval again, lets its gates go. Deletes nothing,
+    /// so that a
     /// reset run by something other than the person lifts no gate. Gives
     /// how many pins there are.
     ///
@@ -660,22 +722,26 @@ impl PinStore {
                 file.version
             )));
         }
-        // Version 1 had no revision, signature or registration: one that
-        // says it has is not one a build wrote.
+        // Version 1 had no revision, signature, registration or held list:
+        // one that says it has is not one a build wrote.
         if file.version == UNSIGNED_VERSION
             && (file.revision != 0
                 || file.signature.is_some()
+                || !file.held.is_empty()
                 || file.pins.iter().any(|pin| pin.registration.is_some()))
         {
             return Err(self.not_understood(
-                "it is version 1, which has no `revision`, `signature` or `registration`"
+                "it is version 1, which has no `revision`, `signature`, `registration` or \
+                 `[[held]]`"
                     .to_owned(),
             ));
         }
-        // A file this build wrote has one pin for each kind and name: one
-        // with two would leave it to the order which of them stands.
-        for (index, pin) in file.pins.iter().enumerate() {
-            if file.pins[..index]
+        // A file this build wrote has one pin for each kind and name, signed
+        // or held: one with two would leave it to the order which of them
+        // stands.
+        let every: Vec<&UserPin> = file.pins.iter().chain(&file.held).collect();
+        for (index, pin) in every.iter().enumerate() {
+            if every[..index]
                 .iter()
                 .any(|earlier| earlier.is_of(&pin.kind, &pin.name))
             {
@@ -710,6 +776,11 @@ impl PinStore {
 /// with what they were shown.
 fn short(hash: &ContentHash) -> String {
     hash.to_hex().chars().take(12).collect()
+}
+
+/// The line of a proposal's summary that says a pin is carried as held.
+fn held_line(kind: &TrustResourceKind, name: &str) -> String {
+    super::held_line(kind.as_str(), name)
 }
 
 #[cfg(test)]
@@ -865,7 +936,9 @@ mod tests {
     }
 
     /// The permission path's review, finding 3a: a pin the person's key did
-    /// not sign is never carried into the set the person signs next.
+    /// not sign is never carried into the set the person signs next. Since
+    /// the full review it is carried as held: never signed, and never
+    /// dropped, so that its gates hold.
     #[test]
     fn a_pin_not_signed_by_the_person_is_never_signed_with_their_next_pin() {
         let scratch = Scratch::new();
@@ -894,13 +967,19 @@ mod tests {
                 .unwrap()
                 .unwrap();
             assert!(
-                proposal
-                    .summary()
-                    .iter()
-                    .any(|line| line.contains("not signed by your key")),
+                proposal.summary().iter().any(|line| line
+                    == "the extension `evil`: approved earlier but not signed by your key; kept, \
+                        holding its gates, approving nothing"),
                 "{planted}: {:?}",
                 proposal.summary()
             );
+            // What the person signs, and what a front end is shown to sign,
+            // name the pin they approved alone.
+            let ApprovalProposal::UserPins { pins: shown, .. } = proposal.view() else {
+                panic!("{planted}: not the user's pins");
+            };
+            assert_eq!(shown.len(), 1, "{planted}: {shown:?}");
+            assert_eq!(shown[0].name, "tracker", "{planted}");
             let pins = store
                 .commit(
                     &proposal,
@@ -908,10 +987,19 @@ mod tests {
                     &person.verifier(),
                 )
                 .unwrap();
+            assert!(pins.counts(), "{planted}");
             assert_eq!(pins.standing(&evil), Standing::New, "{planted}");
             assert!(
-                pins.held().iter().all(|pin| pin.name != "evil"),
-                "{planted}"
+                pins.get(&TrustResourceKind::Extension, "evil").is_none()
+                    && pins.list().iter().all(|pin| pin.name != "evil"),
+                "{planted}: it approves nothing"
+            );
+            assert!(
+                pins.held().iter().any(|pin| pin.name == "evil")
+                    && pins
+                        .unsigned_of(&TrustResourceKind::Extension, "evil")
+                        .is_some_and(|pin| pin.hash == evil.hash),
+                "{planted}: it holds its gates"
             );
             assert_eq!(
                 pins.standing(&tracker("v1")),
@@ -956,7 +1044,148 @@ mod tests {
             let pins = store.pins(Some(&person.verifier())).unwrap();
             assert_eq!(pins.checked(), Checked::NotTheirs, "{what}:\n{text}");
             assert!(!pins.counts(), "{what}");
+            // Listed for nothing and approving nothing (the full review, L3:
+            // a break that listed the unsigned pins was not caught here).
+            assert!(pins.list().is_empty(), "{what}");
+            assert_eq!(pins.standing(&tracker("v1")), Standing::New, "{what}");
             assert_eq!(pins.held().len(), 1, "{what}: it still holds its gates");
+        }
+    }
+
+    /// The full review of the signed approvals: a held pin approved again
+    /// leaves the held list for the signed set, and a signed unpin of a held
+    /// name lets it go, saying so; an unpin of what is neither asks nobody.
+    #[test]
+    fn a_held_pin_is_approved_again_or_let_go_only_by_the_persons_yes() {
+        let scratch = Scratch::new();
+        let store = store(&scratch);
+        let person = Person::new();
+        let gate = Definition::of(TrustResourceKind::Extension, "gate", ["refuse"]);
+        person.pin(&store, &gate);
+        // The signature taken off, as a reset takes it: it counts for
+        // nothing, and the next yes carries it as held.
+        store.strip_signature().unwrap();
+        let pins = person.pin(&store, &tracker("v1"));
+        assert_eq!(pins.standing(&gate), Standing::New);
+        assert_eq!(pins.unsigned().len(), 1);
+        let written = std::fs::read_to_string(store.path()).unwrap();
+        assert!(written.contains("[[held]]"), "{written}");
+        // Approved again: signed, and held no more.
+        let pins = person.pin(&store, &gate);
+        assert_eq!(pins.standing(&gate), Standing::Approved);
+        assert!(pins.unsigned().is_empty() && pins.held().len() == 2);
+        // Held again, then let go by a signed unpin that names it.
+        store.strip_signature().unwrap();
+        person.pin(&store, &tracker("v2"));
+        assert!(
+            store
+                .pins(Some(&person.verifier()))
+                .unwrap()
+                .unsigned_of(&TrustResourceKind::Extension, "gate")
+                .is_some()
+        );
+        let unpin = |name: &str| PinChange::Unpin {
+            kind: TrustResourceKind::Extension,
+            name: name.to_owned(),
+        };
+        let proposal = store
+            .propose(&[unpin("gate")], &person.verifier())
+            .unwrap()
+            .unwrap();
+        assert!(
+            proposal
+                .summary()
+                .iter()
+                .any(|line| line.starts_with("let go of the extension `gate`")),
+            "{:?}",
+            proposal.summary()
+        );
+        let pins = store
+            .commit(
+                &proposal,
+                &person.sign(proposal.statement()),
+                &person.verifier(),
+            )
+            .unwrap();
+        assert!(pins.held().iter().all(|pin| pin.name != "gate"));
+        assert_eq!(pins.standing(&tracker("v2")), Standing::Approved);
+        assert!(
+            store
+                .propose(&[unpin("none")], &person.verifier())
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    /// The maintainers, on the full review: a held entry another program
+    /// adds can only deny. The signed set still counts, the entry approves
+    /// nothing, and it holds its gates until the person's signed unpin.
+    #[test]
+    fn a_held_entry_written_by_another_program_only_holds_a_gate() {
+        let scratch = Scratch::new();
+        let store = store(&scratch);
+        let person = Person::new();
+        person.pin(&store, &tracker("v1"));
+        let planted = Definition::of(TrustResourceKind::Extension, "planted", ["x"]);
+        let mut text = std::fs::read_to_string(store.path()).unwrap();
+        text.push_str(&format!(
+            "\n[[held]]\nkind = \"extension\"\nname = \"planted\"\nhash = \"{}\"\nat = \
+             \"2026-11-20T10:00:00Z\"\n",
+            planted.hash
+        ));
+        std::fs::write(store.path(), &text).unwrap();
+        let pins = store.pins(Some(&person.verifier())).unwrap();
+        assert!(pins.counts(), "the signature is over the signed pins alone");
+        assert_eq!(pins.standing(&tracker("v1")), Standing::Approved);
+        assert_eq!(pins.standing(&planted), Standing::New);
+        assert!(pins.get(&TrustResourceKind::Extension, "planted").is_none());
+        assert!(pins.list().iter().all(|pin| pin.name != "planted"));
+        assert!(
+            pins.unsigned_of(&TrustResourceKind::Extension, "planted")
+                .is_some()
+        );
+        // Without the key the same.
+        let keyless = store.pins(None).unwrap();
+        assert_eq!(keyless.standing(&planted), Standing::New);
+        assert_eq!(keyless.unsigned().len(), 2);
+    }
+
+    /// A held list is read as strictly as the signed set: a name held twice,
+    /// or both signed and held, refuses the whole file, and so does one in a
+    /// file of version 1.
+    #[test]
+    fn a_held_list_is_read_strictly() {
+        let scratch = Scratch::new();
+        let store = store(&scratch);
+        let person = Person::new();
+        person.pin(&store, &tracker("v1"));
+        let written = std::fs::read_to_string(store.path()).unwrap();
+        let held = |name: &str| {
+            format!(
+                "\n[[held]]\nkind = \"extension\"\nname = \"{name}\"\nhash = \"{}\"\nat = \
+                 \"2026-11-20T10:00:00Z\"\n",
+                tracker("v0").hash
+            )
+        };
+        for (what, text) in [
+            ("signed and held", format!("{written}{}", held("tracker"))),
+            (
+                "held twice",
+                format!("{written}{}{}", held("other"), held("other")),
+            ),
+            (
+                "held in version 1",
+                format!("version = 1\n{}", held("other")),
+            ),
+        ] {
+            std::fs::write(store.path(), &text).unwrap();
+            assert!(
+                matches!(
+                    store.pins(Some(&person.verifier())),
+                    Err(PinError::NotUnderstood { .. })
+                ),
+                "{what}:\n{text}"
+            );
         }
     }
 }

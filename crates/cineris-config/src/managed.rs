@@ -40,10 +40,19 @@
 //! of theirs elevate without the person: on Linux under WSL with Windows
 //! interop on (the default), `wsl.exe -u root` gives any program of the
 //! user's a root shell with no password, and `/etc` is then the model's to
-//! write; a `sudo` rule with `NOPASSWD` is the same. On a Windows
-//! administrator's account with UAC at its default level, public ways to
-//! elevate without a prompt are known, and Microsoft does not treat UAC as
-//! a boundary. Both are residuals of the design, not of this check.
+//! write; a `sudo` rule with `NOPASSWD` is the same. So are rootless
+//! containers and the `docker` group (the full review of the signed
+//! approvals): in a rootless container (podman's, a toolbox, a distrobox)
+//! the container's root is the person's own account, mapped, and any
+//! program of theirs on the host becomes it with `podman exec -u 0`, as a
+//! program inside a toolbox does by reaching the host with
+//! `flatpak-spawn --host`, so a managed file that the container's root owns
+//! is the model's to write there; and a member of the `docker` group can
+//! start a container that mounts the host's `/` and write `/etc` with no
+//! password. On a Windows administrator's account with UAC at its default
+//! level, public ways to elevate without a prompt are known, and Microsoft
+//! does not treat UAC as a boundary. All are residuals of the design, not
+//! of this check.
 //!
 //! The facts are read here, and judged by [`unix_refusal`] and
 //! [`windows_refusal`], which take them as values, so that each system's
