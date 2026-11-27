@@ -143,10 +143,11 @@ ignored = [
 
 [workspace.lints.rust]
 # Allowed per module in cineris-sandbox and cineris-term, where the OS
-# interfaces need it, in one Windows-only module of cineris-base
-# (`private::windows`, which sets access lists; decision 0029), and in one of
-# cineris-rpc (`socket::windows`, the named pipe; decision 0037). Nowhere else.
-# Every block has a safety comment.
+# interfaces need it, in three Windows-only modules of cineris-base
+# (`private::windows`, which sets and reads access lists; `zone::windows`,
+# the system's time zone; `program_data::windows`, the machine's ProgramData
+# folder; decision 0029), and in one of cineris-rpc (`socket::windows`, the
+# named pipe; decision 0037). Nowhere else. Every block has a safety comment.
 unsafe_code = "deny"
 # Public items are documented: part of "done" for every step.
 missing_docs = "warn"
