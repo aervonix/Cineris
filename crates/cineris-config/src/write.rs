@@ -474,8 +474,15 @@ fn check_mcp(table: &Table) -> Result<(), WriteError> {
         })
     };
     // The variables headers are taken from, in capitals: one header's each,
-    // and none of the harness's (since the step 25 fixes, the review).
+    // none of the harness's, and none a server takes from the environment
+    // by its own name (since the step 25 fixes, the review and its review).
     let mut header_variables = std::collections::BTreeSet::new();
+    let environment: std::collections::BTreeSet<String> = servers
+        .values()
+        .filter_map(|server| server.get("env").and_then(Value::as_table))
+        .flat_map(|env| env.keys())
+        .map(|name| name.to_ascii_uppercase())
+        .collect();
     for (name, server) in servers {
         if !settable_name(name) {
             return bad("names a server with a name that cannot be a setting's");
@@ -514,6 +521,12 @@ fn check_mcp(table: &Table) -> Result<(), WriteError> {
             if harnesss_variable(variable) {
                 return bad(&format!(
                     "takes a header from {}, a variable of the harness's own",
+                    cineris_base::visible(variable)
+                ));
+            }
+            if environment.contains(&variable.to_ascii_uppercase()) {
+                return bad(&format!(
+                    "takes a header from {}, which a server takes from the environment",
                     cineris_base::visible(variable)
                 ));
             }
@@ -824,6 +837,11 @@ mod tests {
             remote("anthropic", "api-key = { env = \"ANTHROPIC_API_KEY\" }"),
             remote("openai", "api-key = { env = \"openai_api_key\" }"),
             remote("x", "A = { env = \"CINERIS_CONFIG\" }"),
+            format!(
+                "{}[mcp.servers.tracker-cli]\ncommand = \"tracker\"\nenv = {{ TRACKER_TOKEN = {{ env = \
+                 \"TRACKER_TOKEN\" }} }}\n",
+                remote("tracker", "Token = { env = \"tracker_token\" }")
+            ),
         ] {
             let table: Table = text.parse().unwrap();
             assert!(check_mcp(&table).is_err(), "{text}");

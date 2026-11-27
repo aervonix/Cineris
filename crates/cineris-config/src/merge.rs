@@ -290,8 +290,19 @@ impl Merger {
                 self.withheld.push(Withheld {
                     key: key.clone(),
                     class,
-                    // Shown to the user before trust: never a secret.
-                    value: schema::redact(key, value),
+                    // Shown to the user before trust, who approves it. The
+                    // project's shared file (or a profile it defines): whole,
+                    // but what the secret filter's formats know, so that no
+                    // part of what is approved is hidden (the review of the
+                    // step 25 fixes, settled by the maintainers). The
+                    // project's local file is the person's own, never
+                    // committed, and may hold their token: shown as every
+                    // other view shows it.
+                    value: if source.authority == LayerKind::Project {
+                        schema::redact_for_consent(key, value)
+                    } else {
+                        schema::redact(key, value)
+                    },
                     origin: origin.clone(),
                 });
                 false

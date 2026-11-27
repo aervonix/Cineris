@@ -247,7 +247,7 @@ impl Setup for ProgramSetup {
 
     fn write_config(&self, chosen: &Chosen) -> Result<String, NotWritten> {
         let read = self.read.lock().unwrap_or_else(PoisonError::into_inner);
-        let choices = choices(chosen, &read);
+        let choices = choices(chosen, &read, &self.core.provider_key_variables());
         let shown = self.env.display_path(&self.user_config);
         cineris_config::write::write_user_config(&self.user_config, &choices)
             .map_err(|error| not_written(error, &shown))?;
@@ -374,16 +374,21 @@ fn shown_server(server: &ImportedServer, env: &Env) -> McpServer {
 }
 
 /// What to write for `chosen`: each server picked as it was read, and only
-/// one that can be imported.
-fn choices(chosen: &Chosen, read: &BTreeMap<String, Vec<ImportedServer>>) -> FirstRunChoices {
+/// one that can be imported, its headers' variables settled among every
+/// server picked, from whichever file, and none of `keys`, the providers'
+/// (`HeaderVariables::settle`: a header keeps the variable its row showed
+/// unless another picked server takes that name from its environment).
+fn choices(
+    chosen: &Chosen,
+    read: &BTreeMap<String, Vec<ImportedServer>>,
+    keys: &[String],
+) -> FirstRunChoices {
     FirstRunChoices {
         provider: chosen.provider.clone(),
         model: chosen.model.clone(),
         model_shared: chosen.model_shared,
-        imports: chosen.imports.as_ref().map(|imports| Imports {
-            instructions: imports.instructions,
-            skills: imports.skills,
-            servers: imports
+        imports: chosen.imports.as_ref().map(|imports| {
+            let mut servers: Vec<ImportedServer> = imports
                 .servers
                 .iter()
                 .filter_map(|(file, name)| {
@@ -392,7 +397,13 @@ fn choices(chosen: &Chosen, read: &BTreeMap<String, Vec<ImportedServer>>) -> Fir
                         .find(|server| &server.name == name && server.refused.is_none())
                         .cloned()
                 })
-                .collect(),
+                .collect();
+            HeaderVariables::new(keys).settle(&mut servers);
+            Imports {
+                instructions: imports.instructions,
+                skills: imports.skills,
+                servers,
+            }
         }),
         mode: chosen.mode.clone(),
         read_skill_folders: chosen.read_skill_folders,
@@ -528,7 +539,7 @@ mod tests {
             mode: Some("read-only".to_owned()),
             read_skill_folders: true,
         };
-        let written = choices(&chosen, &read);
+        let written = choices(&chosen, &read, &[]);
         assert!(written.read_skill_folders, "a yes is written");
         assert_eq!(written.provider.as_deref(), Some("anthropic"));
         assert_eq!(
@@ -668,6 +679,7 @@ mod tests {
                 "github": {"url": "https://mcp.example.org/gh", "headers": {"Token": "x"}},
                 "anthropic": {"url": "https://a.example.net/mcp", "headers": {"api-key": "x"}},
                 "corp": {"url": "https://c.example.net/mcp", "headers": {"gateway-key": "x"}},
+                "tracker": {"url": "https://tracker.example.net/mcp", "headers": {"Token": "x"}},
                 "my-tracker": {"url": "https://tracker.example.com/mcp",
                                "headers": {"Authorization": "Bearer one"}}
             }}"#,
@@ -675,6 +687,7 @@ mod tests {
         scratch.file(
             "home/.cursor/mcp.json",
             r#"{"mcpServers": {
+                "tracker-cli": {"command": "tracker", "env": {"TRACKER_TOKEN": "x"}},
                 "my_tracker": {"url": "https://other.example.net/mcp",
                                "headers": {"Authorization": "Bearer two"}}
             }}"#,
@@ -739,6 +752,8 @@ mod tests {
                     (cursor_file.clone(), "my_tracker".to_owned()),
                     (claude_file.clone(), "github".to_owned()),
                     (claude_file.clone(), "anthropic".to_owned()),
+                    (claude_file.clone(), "tracker".to_owned()),
+                    (cursor_file.clone(), "tracker-cli".to_owned()),
                 ],
             }),
             ..Chosen::default()
@@ -757,6 +772,16 @@ mod tests {
             );
         }
         assert!(!text.contains("\"ANTHROPIC_API_KEY\""), "{text}");
+        // A file read later that takes from its environment the name an
+        // earlier file's header was given: the header is given another at
+        // write time, so the token set for the local tool is never sent to
+        // the remote server (the review of the step 25 fixes).
+        assert_eq!(header(&claude, "tracker").0.variable, "TRACKER_TOKEN");
+        assert!(
+            text.contains("Token = { env = \"TRACKER_TOKEN_2\" }")
+                || text.contains("env = \"TRACKER_TOKEN_2\""),
+            "{text}"
+        );
     }
 
     #[test]

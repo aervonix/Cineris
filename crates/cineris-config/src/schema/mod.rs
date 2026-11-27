@@ -42,7 +42,7 @@ use std::sync::OnceLock;
 use toml::Value;
 
 pub use json::json_schema;
-pub(crate) use redact::redact;
+pub(crate) use redact::{redact, redact_for_consent};
 pub use reference::reference_page;
 pub use sections::{
     AdaptSettings, CompatSettings, CredentialSettings, HookSettings, KeySettings, LimitSet,

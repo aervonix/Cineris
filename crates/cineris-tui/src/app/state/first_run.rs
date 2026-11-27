@@ -401,7 +401,8 @@ fn header_row(header: &McpHeader, host: Option<&str>) -> String {
     } = header;
     if *set {
         format!(
-            "its {name} header comes from {variable}, which is already set: its value would be              sent to {}",
+            "its {name} header comes from {variable}, which is already set: its value would be \
+             sent to {}",
             host.unwrap_or("this server")
         )
     } else {
@@ -2105,5 +2106,38 @@ fn and_list(items: &[String]) -> String {
         [] => String::new(),
         [one] => one.clone(),
         [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
+#[cfg(test)]
+mod header_tests {
+    use super::*;
+
+    /// The row's words, exactly, set and not, with a host and without one
+    /// (the review of the step 25 fixes: a lost line continuation left a
+    /// run of spaces in the middle, which a test that folded white space
+    /// did not see).
+    #[test]
+    fn a_headers_row_says_exactly_where_a_set_variables_value_would_go() {
+        let header = |set: bool| McpHeader {
+            name: "Token".to_owned(),
+            variable: "GITHUB_TOKEN".to_owned(),
+            set,
+        };
+        assert_eq!(
+            header_row(&header(true), Some("mcp.example.org")),
+            "its Token header comes from GITHUB_TOKEN, which is already set: its value would be \
+             sent to mcp.example.org"
+        );
+        assert_eq!(
+            header_row(&header(true), None),
+            "its Token header comes from GITHUB_TOKEN, which is already set: its value would be \
+             sent to this server"
+        );
+        assert_eq!(
+            header_row(&header(false), Some("mcp.example.org")),
+            "its Token header comes from GITHUB_TOKEN, which you set"
+        );
+        assert!(!header_row(&header(true), None).contains("  "));
     }
 }
