@@ -871,6 +871,15 @@ impl App {
             (Some(_), Some(current)) => format!("{} of {total}", current + 1),
         };
         let separator = self.look.glyphs.separator;
+        // A match past where a long reasoning was cut is not found: the
+        // row says how many were searched only as far as they are kept
+        // (since the fixes of the review of step 25).
+        let place = match self.kept.cut_reasonings() {
+            0 => place,
+            _ if place.is_empty() => place,
+            1 => format!("{place} {separator} 1 reasoning cut, searched as kept"),
+            cut => format!("{place} {separator} {cut} reasonings cut, searched as kept"),
+        };
         let hint = self.look.theme.style(Token::Hint);
         let line = Line::from(Span::plain(" ".repeat(indent)))
             .with(Span::new(key, self.look.theme.style(Token::Key)))

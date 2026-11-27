@@ -908,6 +908,35 @@ fn a_reasoning_kept_only_in_part_is_read_whole_from_its_item() {
     );
 }
 
+/// A search in the full screen looks in a long reasoning only as far as it
+/// is kept, and says so: the search row counts the reasonings cut, beside
+/// where the search is, while a query is typed (since the fixes of the
+/// review of step 25). With none cut it says nothing of them.
+#[test]
+fn a_search_says_how_many_reasonings_it_looked_in_only_as_far_as_kept() {
+    let now = Instant::now();
+    let (mut app, link) = opened_app(Presenter::Fullscreen, 99, 30, now);
+    reasoned_and_compacted(&mut app, &link, now);
+    key(&mut app, "ctrl+f", now);
+    super::type_text(&mut app, "scanner", now);
+    assert!(app.settle_search(BOUND), "the worker answered");
+    let rows = text(&app.screen_frame(now).0);
+    assert!(rows[29].contains("1 of 1"), "{rows:#?}");
+    assert!(!rows[29].contains("cut"), "{rows:#?}");
+    key(&mut app, "esc", now);
+    // A long reasoning: its last line is past the cut, and not found.
+    reasoned_and_compacted_with(&mut app, &link, &long_reasoning(400), now);
+    let _ = app.screen_frame(now);
+    key(&mut app, "ctrl+f", now);
+    super::type_text(&mut app, "last line of a long", now);
+    assert!(app.settle_search(BOUND), "the worker answered");
+    let rows = text(&app.screen_frame(now).0);
+    assert!(
+        rows[29].contains("no match · 1 reasoning cut, searched as kept"),
+        "{rows:#?}"
+    );
+}
+
 /// A compaction's summary, and a reasoning kept only in part, are read
 /// from the session their block is of, not from whichever is open (the
 /// review of step 25, finding 18: item ids repeat across sessions, so after

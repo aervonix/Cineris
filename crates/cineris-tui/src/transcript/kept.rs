@@ -193,6 +193,10 @@ pub struct Kept {
     /// round, each reasoning that has words, each compaction (since step
     /// 25).
     stops: Vec<usize>,
+    /// How many reasonings it holds only the start of (since the fixes of
+    /// the review of step 25): a search says it looked in them only as far
+    /// as that.
+    cut_reasonings: usize,
     bytes: usize,
 }
 
@@ -267,6 +271,9 @@ impl Kept {
         if stop {
             self.stops.push(self.blocks.len());
         }
+        if matches!(&kept.piece, Piece::Block(Block::Reasoning(reasoning)) if reasoning.cut) {
+            self.cut_reasonings += 1;
+        }
         self.bytes += kept.bytes();
         self.blocks.push(kept);
     }
@@ -317,6 +324,14 @@ impl Kept {
     #[must_use]
     pub fn rounds(&self) -> usize {
         self.rounds.len()
+    }
+
+    /// How many reasonings it holds only the start of: what a search can
+    /// look in of them is what was kept (since the fixes of the review of
+    /// step 25).
+    #[must_use]
+    pub fn cut_reasonings(&self) -> usize {
+        self.cut_reasonings
     }
 
     /// How many stops it holds: rounds, reasoning, compactions.
