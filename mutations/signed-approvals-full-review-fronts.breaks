@@ -1,0 +1,228 @@
+# The signed approvals, part `full-review-fixes-fronts`: the front ends'
+# fixes of the full review. Written with the code.
+
+# ------------------------------------------------ what the store names
+
+[break] the-store-named-it-is-said-approved
+rule: `permissions trust` says of an extension or a hook the trust store names at the hash shown that this is not checked, never that it was approved before: an entry the model wrote reads the same.
+file: crates/cineris-cli/src/commands.rs
+in-string: The trust store names it at this hash
+replace: Approved before at this hash
+caught-by:
+    cineris-cli::system commands::sys_permissions_trust_approves_a_projects_extensions_on_a_signed_yes
+
+[break] the-list-says-your-signature
+rule: `permissions list` says an unchecked entry carries a signature, not the person's signature.
+file: crates/cineris-cli/src/commands.rs
+in-string: its trust carries a signature
+replace: its trust carries your signature
+caught-by:
+    cineris-cli::system commands::sys_a_project_trusted_with_permissions_trust_is_trusted_on_the_next_start
+
+# ------------------------------------------------ what `permissions trust` signs
+
+[break] the-rules-are-shown-after-the-password
+rule: `permissions trust` shows the project's rules and settings before the password, which signs them as shown.
+file: crates/cineris-cli/src/commands.rs
+in: permissions
+find: out!("{}", reading_text(&reading));
+replace: let _ = reading_text(&reading);
+caught-by:
+    cineris-cli::system commands::sys_a_project_trusted_with_permissions_trust_is_trusted_on_the_next_start
+
+[break] a-reading-the-files-no-longer-hold-is-pinned
+rule: The core pins the rules as the reading shown holds them, and refuses, writing nothing, when the project's files hold other rules or settings by the yes.
+file: crates/cineris-core/src/manage.rs
+in: Core::trust_project_with
+find: if now.rules_pin.hash != reading.rules_pin.hash || now.settings != reading.settings {
+replace: if false {
+packages: cineris-core,cineris-cli
+caught-by:
+    cineris-core::it trusting::a_trust_is_refused_when_the_rules_changed_after_they_were_shown
+    cineris-cli::system commands::sys_a_project_trusted_with_permissions_trust_is_trusted_on_the_next_start
+
+# ------------------------------------------------ Ctrl+C at a headless run's password
+
+[break] ctrl-c-at-a-runs-password-goes-on-without
+rule: `Ctrl+C` at a headless run's password ends the run as interrupted (130), before its session opens; `Esc` goes on without the approvals.
+file: crates/cineris-cli/src/approvals.rs
+in: read
+find: None if terminal.interrupted() => Err(NotSigned::Interrupted)
+replace: None if false => Err(NotSigned::Interrupted)
+caught-by:
+    cineris-cli::system approvals::sys_a_headless_run_with_no_terminal_asks_nothing_and_says_why
+
+[break] the-prompt-does-not-tell-ctrl-c-from-esc
+rule: The terminal's password prompt tells `Ctrl+C` from `Esc`, so that a headless run can end on the first.
+file: crates/cineris-tui/src/secret/password.rs
+in: ask_on
+find: interrupted = true;
+replace: interrupted = false;
+packages: cineris-tui,cineris-cli
+caught-by:
+    cineris-tui secret::password::tests::at_a_terminal_esc_and_ctrl_c_give_nothing
+    cineris-cli::system approvals::sys_a_headless_run_with_no_terminal_asks_nothing_and_says_why
+
+# ------------------------------------------------ the debugger's check
+
+[break] traced-always-false
+rule: `harden::traced` tells a process with a real tracer that it is traced.
+file: crates/cineris-sandbox/src/harden.rs
+in: traced
+find: test_traced() || sys::traced()
+replace: test_traced()
+caught-by:
+    cineris-sandbox::it harden::sys_a_process_with_a_tracer_is_told_it_is_traced
+
+[break] traced-reads-the-first-thread-alone
+rule: On Linux `harden::traced` reads every thread's status: a tracer attaches to a thread, and reads the whole process through it.
+file: crates/cineris-sandbox/src/harden.rs
+in: traced
+find: match std::fs::read_to_string(task.path().join("status")) {
+replace: match std::fs::read_to_string("/proc/self/status").map(|status| (status, &task).0) {
+os: linux
+caught-by:
+    cineris-sandbox::it harden::sys_a_process_with_a_tracer_is_told_it_is_traced
+
+[break] key-at-terminal-asks-while-traced
+rule: A subcommand that signs asks no password while a debugger is attached.
+file: crates/cineris-cli/src/approvals.rs
+in: key_at_terminal
+find: may_ask().map_err(NotSigned::Refused)?;
+replace: let _ = may_ask();
+caught-by:
+    cineris-cli::system approvals::sys_no_password_is_asked_at_a_subcommand_or_a_run_while_a_debugger_is_attached
+
+[break] open-at-start-asks-while-traced
+rule: A headless run asks no password while a debugger is attached: it goes on without the approvals, saying why.
+file: crates/cineris-cli/src/approvals.rs
+in: open_at_start
+find: may_ask().map_err(|why| {
+replace: Ok::<(), String>(()).map_err(|why: String| {
+caught-by:
+    cineris-cli::system approvals::sys_no_password_is_asked_at_a_subcommand_or_a_run_while_a_debugger_is_attached
+
+[break] setup-asks-while-traced
+rule: `approvals setup` and `reset` ask no password while a debugger is attached, before anything else.
+file: crates/cineris-cli/src/approvals.rs
+in: choose
+find: may_ask().map_err(|why| refused(&why))?;
+replace: let _ = may_ask();
+caught-by:
+    cineris-cli::system approvals::sys_no_password_is_asked_at_a_subcommand_or_a_run_while_a_debugger_is_attached
+
+[break] windows-asks-where-the-process-is-open
+rule: On Windows no password is asked in a process that could not close itself: its threads keep the user's default access list.
+file: crates/cineris-cli/src/approvals.rs
+in: may_ask
+find: cfg!(windows) && !cineris_sandbox::harden::hardened()
+replace: false
+os: windows
+caught-by:
+    cineris-cli::bin/cineris approvals::tests::no_password_is_asked_while_a_debugger_is_attached
+
+[break] the-application-opens-its-dialog-while-traced
+rule: The application asks the program before the password's dialog opens at a session's start, and opens none where no password may be asked.
+file: crates/cineris-tui/src/app/state/approvals.rs
+in: App::ask_unlock
+find: if let Some(why) = self.approvals_refused_here() {
+replace: if let Some(why) = None::<String> {
+packages: cineris-tui,cineris-cli
+caught-by:
+    cineris-tui app::state::approvals::tests::a_debugger_attached_before_the_open_asks_nothing_and_opens_without
+    cineris-cli::system approvals::sys_the_application_asks_no_password_while_a_debugger_is_attached
+
+[break] the-applications-yes-opens-its-dialog-while-traced
+rule: The application asks the program before the password's dialog opens at the trust question's yes, and opens none where no password may be asked.
+file: crates/cineris-tui/src/app/state/approvals.rs
+in: App::ask_to_sign
+find: if let Some(why) = self.approvals_refused_here() {
+replace: if let Some(why) = None::<String> {
+caught-by:
+    cineris-tui app::state::approvals::tests::a_debugger_attached_before_the_yes_asks_nothing_and_is_not_now
+
+[break] the-program-says-no-debugger-before-the-dialog
+rule: The program answers the application's question before the dialog with its own check.
+file: crates/cineris-cli/src/interactive.rs
+in: CoreApprovals::why_not_asked
+find: crate::approvals::may_ask().err()
+replace: None
+caught-by:
+    cineris-cli::system approvals::sys_the_application_asks_no_password_while_a_debugger_is_attached
+
+[break] unlock-asks-while-traced
+rule: The application's call that opens the approvals refuses a password read while a debugger was attached.
+file: crates/cineris-cli/src/interactive.rs
+in: CoreApprovals::unlock
+find: crate::approvals::may_ask().map_err(Refused::Failed)?;
+replace: let _ = crate::approvals::may_ask();
+caught-by:
+    cineris-cli::system approvals::sys_the_application_asks_no_password_while_a_debugger_is_attached
+
+[break] set-up-asks-while-traced
+rule: The application's call that sets the password up refuses one read while a debugger was attached, and writes no key file.
+file: crates/cineris-cli/src/interactive.rs
+in: CoreApprovals::set_up
+find: crate::approvals::may_ask().map_err(Refused::Failed)?;
+replace: let _ = crate::approvals::may_ask();
+caught-by:
+    cineris-cli::system approvals::sys_the_application_asks_no_password_while_a_debugger_is_attached
+
+[break] sign-asks-while-traced
+rule: The application's call that signs refuses a password read while a debugger was attached.
+file: crates/cineris-cli/src/interactive.rs
+in: CoreApprovals::sign
+find: crate::approvals::may_ask().map_err(Refused::Failed)?;
+replace: let _ = crate::approvals::may_ask();
+caught-by:
+    cineris-cli::system approvals::sys_the_application_asks_no_password_while_a_debugger_is_attached
+
+# ------------------------------------------------ the terminal taken early
+
+[break] the-application-takes-the-terminal-after-its-core
+rule: The application takes the terminal before its core starts, so that a password typed early is not echoed.
+file: crates/cineris-cli/src/interactive.rs
+in: run
+find: app::TakenTerminal::enter(overrides).ok()
+replace: app::TakenTerminal::enter(overrides).ok().filter(|_| false)
+os: linux
+caught-by:
+    cineris-cli::system approvals::sys_a_password_typed_before_a_subcommand_or_a_run_asks_is_never_echoed
+
+[break] the-question-takes-what-was-typed-before-it
+rule: The yes or no before the password throws away what was typed while the terminal was taken, so that nothing typed before it answers it.
+file: crates/cineris-cli/src/approvals.rs
+in: Taken::confirm
+find: let _ = terminal.drain();
+replace: let _ = &mut terminal;
+os: linux
+caught-by:
+    cineris-cli::system approvals::sys_a_yes_typed_before_the_question_does_not_answer_it
+
+[break] the-yes-line-is-not-wiped
+rule: The line the yes or no is read from is written over once it is judged.
+file: crates/cineris-cli/src/approvals.rs
+in: yes_of
+find: forget_line(line);
+replace: drop(line);
+caught-by:
+    cineris-cli::bin/cineris approvals::tests::a_yes_or_no_line_is_judged_and_written_over
+
+# ------------------------------------------------ the shipped binary closed, the reset's words
+
+[break] the-binary-does-not-close-itself
+rule: The real binary closes its own process to the user's other programs, first thing in `main`.
+file: crates/cineris-cli/src/main.rs
+in: main
+find: let hardened = cineris_sandbox::harden::harden();
+replace: let hardened = std::io::Result::Ok(());
+caught-by:
+    cineris-cli::system hardened::sys_the_binary_closes_its_own_process*
+
+[break] the-resets-warning-leaves-the-gates-out
+rule: The reset's warning says that what each approval pinned keeps its gates until it is approved again.
+file: crates/cineris-cli/src/approvals.rs
+in-string: hook they pinned keeps its gates
+replace: hook they pinned lets its gates go
+caught-by:
+    cineris-cli::bin/cineris approvals::tests::the_resets_warning_says_what_keeps_its_gates

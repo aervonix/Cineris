@@ -111,7 +111,7 @@ caught-by:
 [break] a-signal-mid-key-is-an-io-error
 rule: A signal that lands while the loop takes a key or draws a frame ends the application as that signal, not with the failed write's error.
 file: crates/cineris-tui/src/app.rs
-in: interactive
+in: interactive_taken
 find: if let Some(code) = cineris_term::signalled() {
 replace: if let Some(code) = None::<u8> {
 caught-by:

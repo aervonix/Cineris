@@ -185,10 +185,10 @@ caught-by:
 [break] trust-pins-only-the-allow-rules
 rule: Trusting a project pins every rule its files hold, allow, deny and ask, so the next start reads it as trusted.
 file: crates/cineris-core/src/manage.rs
-in: Core::trust_project_with
-find: let mut pin = vec![Definition::of_project_rules(&rules)];
+in: Core::trust_reading
+find: rules_pin: Definition::of_project_rules(&rules)
 replace:
-    let allowed = cineris_policy::ProjectRules {
+    rules_pin: Definition::of_project_rules(&cineris_policy::ProjectRules {
         base: rules
             .base
             .iter()
@@ -196,8 +196,7 @@ replace:
             .cloned()
             .collect(),
         profiles: rules.profiles.clone(),
-    };
-    let mut pin = vec![Definition::of_project_rules(&allowed)];
+    })
 packages: cineris-cli
 caught-by:
     cineris-cli::system commands::sys_a_project_trusted_with_permissions_trust_is_trusted_on_the_next_start

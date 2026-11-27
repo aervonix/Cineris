@@ -83,9 +83,11 @@ fn no_password_is_asked_while_a_debugger_is_attached() {
             && refused.contains("default access list"),
         "{refused}"
     );
-    // This test's process is not traced, and on Windows not closed: it is
-    // asked of the real checks only where they can say yes.
-    if !cfg!(windows) {
+    // This test's process is not traced, and never closed itself: on
+    // Windows that refuses, on Linux it does not.
+    if cfg!(windows) {
+        assert_eq!(may_ask(), Err(NOT_CLOSED.to_owned()));
+    } else {
         assert_eq!(may_ask(), Ok(()));
     }
 }
