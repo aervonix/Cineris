@@ -1689,8 +1689,9 @@ fn a_trust_that_leaves_an_extension_out_keeps_the_gate_an_unsigned_entry_pinned(
     let shown = core.project_extensions(&project).unwrap();
     assert_eq!(shown.len(), 1, "{shown:?}");
     // No to its extensions: the project's trust alone is signed.
+    let reading = core.trust_reading(&project).unwrap();
     let trusted = core
-        .trust_project_with(&project, &[], &[], &crate::person_key())
+        .trust_project_with(&project, &reading, &[], &[], &crate::person_key())
         .unwrap();
     assert!(
         trusted.summary.iter().any(|line| line == PROBE_HELD),

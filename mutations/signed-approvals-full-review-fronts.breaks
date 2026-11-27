@@ -226,3 +226,52 @@ in-string: hook they pinned keeps its gates
 replace: hook they pinned lets its gates go
 caught-by:
     cineris-cli::bin/cineris approvals::tests::the_resets_warning_says_what_keeps_its_gates
+
+# ------------------------------------------------ what a signed change did
+
+[break] a-signed-change-says-nothing-of-what-it-signed
+rule: Once a signed change is written, the command says what the password signed, a line each, the pins kept as held among them.
+file: crates/cineris-cli/src/approvals.rs
+in: signed_text
+find: if summary.is_empty() {
+replace: if true {
+caught-by:
+    cineris-cli::bin/cineris approvals::tests::a_signed_changes_lines_are_said_each_on_a_line_of_its_own
+    cineris-cli::bin/cineris commands::tests::a_trust_says_what_it_signed
+    cineris-cli::bin/cineris ext::tests::an_extension_is_added_listed_turned_off_and_removed
+
+[break] ext-add-says-nothing-it-signed
+rule: `ext add` says what the password signed once the pin is written.
+file: crates/cineris-cli/src/ext.rs
+in: added_text
+find: text.push_str(&crate::approvals::signed_text(&added.summary));
+replace:
+caught-by:
+    cineris-cli::bin/cineris ext::tests::an_extension_is_added_listed_turned_off_and_removed
+
+[break] ext-remove-says-nothing-it-signed
+rule: `ext remove` of a pinned extension says what the password signed once the pin is taken away.
+file: crates/cineris-cli/src/ext.rs
+in: removed_text
+find: text.push_str(&crate::approvals::signed_text(&removed.summary));
+replace:
+caught-by:
+    cineris-cli::bin/cineris ext::tests::an_extension_is_added_listed_turned_off_and_removed
+
+[break] permissions-trust-says-nothing-it-signed
+rule: `permissions trust` says what the password signed once the trust is written.
+file: crates/cineris-cli/src/commands.rs
+in: trusted_text
+find: out.push_str(&crate::approvals::signed_text(&trusted.summary));
+replace:
+caught-by:
+    cineris-cli::bin/cineris commands::tests::a_trust_says_what_it_signed
+
+[break] the-yes-shows-the-first-summary-line-alone
+rule: The application's password at the trust question's yes shows every line of what a yes changes, the pins kept as held among them.
+file: crates/cineris-tui/src/app/state/approvals.rs
+in: App::ask_to_sign
+find: let mut lines = request.summary.clone();
+replace: let mut lines: Vec<String> = request.summary.iter().take(1).cloned().collect();
+caught-by:
+    cineris-tui app::state::approvals::tests::the_yes_shows_every_line_of_the_summary_held_carries_among_them

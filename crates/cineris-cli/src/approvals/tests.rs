@@ -166,3 +166,23 @@ fn a_reset_says_each_store_it_left_as_it_was() {
     };
     assert!(!reset_text("key 0123", &none).contains("Left as it was"));
 }
+
+/// What a signed change did is said once it is written, a line each, the
+/// pins it kept as held among them (the full review of the signed
+/// approvals); nothing when nothing was signed.
+#[test]
+fn a_signed_changes_lines_are_said_each_on_a_line_of_its_own() {
+    assert_eq!(signed_text(&[]), "");
+    let said = signed_text(&[
+        "approve the extension `tracker` (1a2b3c4d)".to_owned(),
+        "the extension `probe`: approved earlier but not signed by your key; kept, holding its \
+         gates, approving nothing"
+            .to_owned(),
+    ]);
+    assert_eq!(
+        said,
+        "What your password signed:\n  approve the extension `tracker` (1a2b3c4d)\n  the \
+         extension `probe`: approved earlier but not signed by your key; kept, holding its gates, \
+         approving nothing\n"
+    );
+}

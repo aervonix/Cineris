@@ -167,6 +167,13 @@ fn an_extension_is_added_listed_turned_off_and_removed() {
     assert!(added.written);
     assert_eq!(added.registered.tools, ["find"]);
     assert_eq!(added.not_cached, None);
+    // What the password signed is said once it is written (the full review
+    // of the signed approvals).
+    let said = added_text(&added);
+    assert!(
+        said.contains("What your password signed:\n  approve the extension `tracker`"),
+        "{said}"
+    );
     let written = world
         .core
         .extension_to_add(&world.project, &world.users().join("tracker"))
@@ -235,6 +242,14 @@ fn an_extension_is_added_listed_turned_off_and_removed() {
         .unwrap();
     assert!(removed.unpinned && !removed.deleted);
     assert!(kept.exists());
+    let said = removed_text(&removal, removed.clone());
+    assert!(
+        said.contains(
+            "What your password signed:\n  take away the approval of the extension \
+                       `tracker`"
+        ),
+        "{said}"
+    );
     let listing = world.core.extensions(&world.project).unwrap();
     assert!(
         listing.extensions.iter().all(|one| one.pin.is_none()),
@@ -260,6 +275,9 @@ fn an_extension_is_added_listed_turned_off_and_removed() {
         .unwrap();
     assert!(!removed.unpinned && removed.deleted);
     assert!(!kept.exists());
+    // Nothing was signed: nothing is said of it.
+    let said = removed_text(&removal, removed.clone());
+    assert!(!said.contains("signed"), "{said}");
     // A project's extension: pointed at the project's trust.
     World::extension(
         &world.project.root.join(".cineris/extensions/theirs"),

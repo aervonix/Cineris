@@ -769,6 +769,7 @@ fn added_text(added: &Added) -> String {
              registers it again.\n"
         ));
     }
+    text.push_str(&crate::approvals::signed_text(&added.summary));
     text
 }
 
@@ -932,6 +933,8 @@ fn removed_text(removal: &Removal, removed: Removed) -> String {
             format!("Deleted `{folder}`.\n")
         });
     }
+    // What a removal of a pin signed: nothing when there was none.
+    text.push_str(&crate::approvals::signed_text(&removed.summary));
     text
 }
 

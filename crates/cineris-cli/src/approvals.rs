@@ -288,6 +288,22 @@ impl Drop for Taken {
     }
 }
 
+/// What a signed change did, once it is written: the proposal's lines
+/// (`summary`, as the core gives them with what it wrote), each on a line
+/// of its own, among them the pins it kept as held, which it approved
+/// nothing of (the full review of the signed approvals: a change signed
+/// said only what the person asked for). Nothing when there is none.
+pub(crate) fn signed_text(summary: &[String]) -> String {
+    if summary.is_empty() {
+        return String::new();
+    }
+    let mut text = "What your password signed:\n".to_owned();
+    for line in summary {
+        text.push_str(&format!("  {}\n", line.replace('\n', " ")));
+    }
+    text
+}
+
 /// What a headless run says when it has approvals to use and no terminal to
 /// ask for the password at.
 pub(crate) const NO_TERMINAL: &str = "no terminal to ask your approvals' password at: your \

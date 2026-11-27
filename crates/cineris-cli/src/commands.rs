@@ -1157,6 +1157,7 @@ fn trusted_text(shown: &str, trusted: &cineris_core::Trusted) -> String {
     if !trusted.hooks.is_empty() {
         out.push_str(&format!("Approved its hooks: {}.\n", names(&trusted.hooks)));
     }
+    out.push_str(&crate::approvals::signed_text(&trusted.summary));
     out
 }
 
@@ -1367,6 +1368,48 @@ mod tests {
         assert!(
             why.contains("--hook names `other`, which is not one shown"),
             "{why}"
+        );
+    }
+
+    /// What `permissions trust` says once it is signed: what it trusted,
+    /// that its rules and settings are the ones shown before the password,
+    /// and what the password signed, a pin kept as held among it (the full
+    /// review of the signed approvals).
+    #[test]
+    fn a_trust_says_what_it_signed() {
+        let trusted = cineris_core::Trusted {
+            rules: Vec::new(),
+            settings: Vec::new(),
+            was_trusted: false,
+            was_refused: false,
+            git: false,
+            extensions: vec!["tracker".to_owned()],
+            hooks: Vec::new(),
+            summary: vec![
+                "trust the project at ~/src/app".to_owned(),
+                "the hook `lint`: approved earlier but not signed by your key; kept, holding its \
+                 gates, approving nothing"
+                    .to_owned(),
+            ],
+        };
+        let said = trusted_text("~/src/app", &trusted);
+        assert!(
+            said.starts_with(
+                "Trusted ~/src/app, with its permission rules and settings as shown above.\n"
+            ),
+            "{said}"
+        );
+        assert!(
+            said.contains("Approved its extensions: `tracker`.\n"),
+            "{said}"
+        );
+        assert!(
+            said.ends_with(
+                "What your password signed:\n  trust the project at ~/src/app\n  the hook \
+                 `lint`: approved earlier but not signed by your key; kept, holding its gates, \
+                 approving nothing\n"
+            ),
+            "{said}"
         );
     }
 
