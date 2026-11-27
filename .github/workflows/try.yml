@@ -116,7 +116,8 @@ jobs:
   # The job's id and its environment are those of the blocking test job, on
   # purpose: the build cache's key is made of them, so a run in the `ci`
   # profile restores the cache the main branch wrote for `test-linux` or
-  # `test-windows` and builds only what the branch changed. It never writes
+  # `build-windows` (whose rust-cache key is `test`'s, `shared-key: test`)
+  # and builds only what the branch changed. It never writes
   # a cache. A release or dist build has no cache, and builds from scratch.
   test:
     name: try-${{ matrix.name }}

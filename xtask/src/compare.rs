@@ -139,6 +139,18 @@ pub(crate) fn compare_with(new: &Side, old: &Side, os: Os, top: usize, start: St
         "  new: {}\n  old: {}\n  {start_line}\n",
         new.label, old.label,
     );
+    // A split run's system tests carry their own runner's start, and are
+    // held above it (`TestCase::start`).
+    for (side, cases) in [("new", &new.cases), ("old", &old.cases)] {
+        if let Some(own) = cases.iter().find_map(|case| case.start) {
+            let _ = writeln!(
+                text,
+                "  {side}: its system tests ran in a job of their own, and are held above that \
+                 runner's start, {:.0} ms a test",
+                1000.0 * own
+            );
+        }
+    }
     if new_sample.min(old_sample) < 500 {
         text.push_str(
             "  One side has fewer than 500 unit and integration tests: its start cost may be more \
@@ -350,7 +362,7 @@ fn moved(new: &Side, old: &Side, new_start: f64, old_start: f64, tier: Tier) -> 
             if Tier::of(&case.binary, &case.name) != tier {
                 continue;
             }
-            let above = (case.seconds - start).max(0.0);
+            let above = case.above(start);
             let time = times
                 .entry((case.binary.clone(), case.name.clone()))
                 .or_insert(above);
@@ -404,6 +416,7 @@ mod shared_start_tests {
                     failed: false,
                     retried: false,
                     repeat: None,
+                    start: None,
                 })
                 .collect(),
         }
@@ -446,6 +459,7 @@ mod tests {
             failed,
             retried: false,
             repeat: None,
+            start: None,
         };
         let whole = |failed: bool| {
             vec![
@@ -590,6 +604,7 @@ start, and its time above the start too low.
                     failed: false,
                     retried: false,
                     repeat: None,
+                    start: None,
                 })
                 .collect(),
         };

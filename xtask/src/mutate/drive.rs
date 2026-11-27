@@ -1983,6 +1983,7 @@ replace: \"inside\"
                 failed: failed || self.always_failing == Some(name) || self.flaky == Some(name),
                 retried: false,
                 repeat: None,
+                start: None,
             };
             Ok(Tested::Ran(vec![
                 case(
@@ -2020,6 +2021,7 @@ replace: \"inside\"
                         failed: self.flaky_fails_alone,
                         retried: false,
                         repeat: None,
+                        start: None,
                     })
                     .collect(),
             ))
@@ -2450,6 +2452,7 @@ replace: \"inside\"
             failed,
             retried: false,
             repeat: None,
+            start: None,
         }
     }
 
@@ -3792,6 +3795,7 @@ error: could not compile `demo` (lib test) due to 2 previous errors
                         failed: !Pretend::library(tree).contains("1.5 * budget"),
                         retried: false,
                         repeat: None,
+                        start: None,
                     });
                 }
                 Ok(tested)

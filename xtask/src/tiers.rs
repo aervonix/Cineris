@@ -176,40 +176,265 @@ fn check_ci_report_in(root: &Path, in_actions: bool, summary: bool) -> Result<()
         SLOWEST_IN_CI,
         stall::judge(in_actions, &records),
         summary,
+        None,
     )
 }
 
+/// One part of the blocking test job, where the job runs as two: on
+/// Windows a job of tiers 1 and 2 and a job of the system tests, each run
+/// from the build job's archive of the tests (`cargo xtask ci test PART
+/// --from-archive DIR`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Part {
+    /// Tiers 1 and 2.
+    Tiers,
+    /// Tier 3, after the start probe ([`start_probe_path`]).
+    System,
+}
+
+impl Part {
+    /// `tiers` or `system`, as `ci test` takes them.
+    pub(crate) fn parse(text: &str) -> Option<Self> {
+        match text {
+            "tiers" => Some(Part::Tiers),
+            "system" => Some(Part::System),
+            _ => None,
+        }
+    }
+
+    /// The tiers the part's report holds, each of them and no other.
+    pub(crate) fn tiers(self) -> &'static [Tier] {
+        match self {
+            Part::Tiers => &[Tier::Unit, Tier::Integration],
+            Part::System => &[Tier::System],
+        }
+    }
+}
+
+/// Where the system part keeps the report of its start probe: the unit
+/// tests it runs first, on its own runner, to measure what the start of a
+/// test's process costs there. The system tests' report has no unit or
+/// integration test to measure it from, and a start measured on the other
+/// part's runner is not this runner's (hosted runners differ by a factor
+/// of two). It is beside the job's report, and is not part of it.
+pub(crate) fn start_probe_path(root: &Path) -> PathBuf {
+    workspace::nextest_report(root, "ci").with_file_name(START_PROBE_FILE)
+}
+
+/// The name of the start probe's report, beside the job's own: in the
+/// system tests' job, and in its artifact, `junit-windows-system`.
+pub(crate) const START_PROBE_FILE: &str = "start-probe.xml";
+
+/// The step that follows a part's test run in `cargo xtask ci test PART
+/// --from-archive DIR`: [`check_ci_report`] for the tiers of `part` alone.
+/// The report must hold tests of each of the part's tiers and of no other,
+/// and the system part's tier is held to its budget above the start its
+/// probe measured on the same runner. A probe that failed or ran nothing
+/// fails the check: it never only moves the figure.
+pub(crate) fn check_ci_part(part: Part) -> Result<()> {
+    check_ci_part_in(
+        &workspace::root(),
+        std::env::var_os("GITHUB_ACTIONS").is_some(),
+        true,
+        part,
+    )
+}
+
+/// [`check_ci_part`] for the tree at `root`, run on CI or not, with the
+/// job's summary page written or not.
+fn check_ci_part_in(root: &Path, in_actions: bool, summary: bool, part: Part) -> Result<()> {
+    let records = stall::read_records(&stall::record_path(root));
+    check_report_with(
+        &workspace::nextest_report(root, "ci"),
+        Os::here(),
+        SLOWEST_IN_CI,
+        stall::judge(in_actions, &records),
+        summary,
+        Some((part, &start_probe_path(root))),
+    )
+}
+
+/// The start probe's cases, read from `report`, refused when the probe
+/// ran nothing or too few tests to measure a start on ([`SMALL_SAMPLE`]),
+/// when one of its tests failed, or when it holds anything but unit tests.
+pub(crate) fn read_probe(report: &Path) -> Result<Vec<TestCase>> {
+    let cases = junit::read(report).map_err(|error| format!("the start probe: {error}"))?;
+    if let Some(case) = cases.iter().find(|case| case.failed) {
+        return Err(format!(
+            "the start probe's test {} failed: the start of a test's process is not measured \
+             from a run that failed",
+            case.id()
+        ));
+    }
+    if let Some(case) = cases
+        .iter()
+        .find(|case| Tier::of(&case.binary, &case.name) != Tier::Unit)
+    {
+        return Err(format!(
+            "the start probe ran {}, which is not a unit test: the probe is unit tests only",
+            case.id()
+        ));
+    }
+    if cases.len() < SMALL_SAMPLE {
+        return Err(format!(
+            "the start probe ran {} tests, fewer than the {SMALL_SAMPLE} a start is measured on: \
+             choose more for it (`checks::START_PROBE`), rather than hold tier 3 above a figure \
+             of too few",
+            cases.len()
+        ));
+    }
+    Ok(cases)
+}
+
+/// A part's report holds tests of each of its tiers, and of no other: a
+/// filter that chose the wrong tests, or none of a tier, is refused, and is
+/// never judged as a tier that took no time.
+fn check_part_holds(cases: &[TestCase], part: Part) -> Result<()> {
+    if let Some(case) = cases
+        .iter()
+        .find(|case| !part.tiers().contains(&Tier::of(&case.binary, &case.name)))
+    {
+        return Err(format!(
+            "the report of the job's {} holds {}, of tier {}, which is not one of its tiers",
+            part_name(part),
+            case.id(),
+            Tier::of(&case.binary, &case.name).name()
+        ));
+    }
+    for tier in part.tiers() {
+        if !cases
+            .iter()
+            .any(|case| Tier::of(&case.binary, &case.name) == *tier)
+        {
+            return Err(format!(
+                "the report of the job's {} has no test of tier {}: it did not run",
+                part_name(part),
+                tier.name()
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn part_name(part: Part) -> &'static str {
+    match part {
+        Part::Tiers => "tiers 1 and 2",
+        Part::System => "system tests",
+    }
+}
+
+/// What one tier check covers: the tiers it shows and judges, and the
+/// start of a test's process that is taken off each test.
+struct Scope {
+    tiers: &'static [Tier],
+    start: f64,
+    /// How many tests the start was measured on.
+    sample: usize,
+    /// The start was measured by the start probe, not on the report's own
+    /// unit and integration tests.
+    probe: bool,
+    /// The start some of the report's cases carry of their own runner (a
+    /// split run's system tests, made one report with tiers 1 and 2:
+    /// [`TestCase::start`]), which they are held above in place of `start`.
+    own: Option<f64>,
+}
+
+impl Scope {
+    /// Every tier, above the start the report's own tests measured.
+    fn whole(cases: &[TestCase]) -> Self {
+        let (start, sample) = start_of(cases);
+        Self {
+            tiers: &Tier::ALL,
+            start,
+            sample,
+            probe: false,
+            own: cases.iter().find_map(|case| case.start),
+        }
+    }
+
+    /// `part`'s tiers, above the start its report measured or, for the
+    /// system tests, the start the probe at `probe` measured.
+    fn of_part(cases: &[TestCase], part: Part, probe: &Path) -> Result<Self> {
+        check_part_holds(cases, part)?;
+        let (start, sample, probe) = match part {
+            Part::Tiers => {
+                let (start, sample) = start_of(cases);
+                (start, sample, false)
+            }
+            Part::System => {
+                let (start, sample) = start_of(&read_probe(probe)?);
+                (start, sample, true)
+            }
+        };
+        Ok(Self {
+            tiers: part.tiers(),
+            start,
+            sample,
+            probe,
+            own: None,
+        })
+    }
+
+    fn start_line(&self) -> String {
+        let mut line = start_line_of(self.start, self.sample, self.probe);
+        if let Some(own) = self.own {
+            line.push_str(&format!(
+                "; the system tests, run in a job of their own, above their own runner's start, \
+                 {:.0} ms a test (its start probe's)",
+                1000.0 * own
+            ));
+        }
+        line
+    }
+}
+
 /// Prints the tier totals of a report and each tier's `slowest` slowest
-/// tests, and fails when a tier is far over its budget.
+/// tests, and fails when a tier is far over its budget. A report of
+/// system tests alone with a start probe's beside it ([`START_PROBE_FILE`])
+/// is a split job's system tests, and is read as that part, above the
+/// probe's start.
 pub(crate) fn check_report(report: &Path, os: Os, slowest: usize) -> Result<()> {
-    check_report_with(report, os, slowest, None, true)
+    let probe = report.with_file_name(START_PROBE_FILE);
+    let system_alone = junit::read(report).is_ok_and(|cases| {
+        cases
+            .iter()
+            .all(|case| Tier::of(&case.binary, &case.name) == Tier::System)
+    });
+    let part = (system_alone && probe.is_file()).then_some((Part::System, probe.as_path()));
+    check_report_with(report, os, slowest, None, true, part)
 }
 
 /// [`check_report`], or, for a run that `stalled`, the same tables with no
 /// verdict: no mark on a tier, no warning, no failure, and a line that
-/// says why.
+/// says why. With `part`, the report is that part's of the job, and the
+/// path its start probe's report ([`check_ci_part`]).
 fn check_report_with(
     report: &Path,
     os: Os,
     slowest: usize,
     stalled: Option<stall::Stalled>,
     summary: bool,
+    part: Option<(Part, &Path)>,
 ) -> Result<()> {
     let cases = junit::read(report)?;
+    let scope = match part {
+        None => Scope::whole(&cases),
+        Some((part, probe)) => Scope::of_part(&cases, part, probe)?,
+    };
     let judged = |tier: Tier| stalled.is_none_or(|stalled| stalled.judges(tier));
-    let (table, over) = summarise_marked(&cases, os, judged);
+    let (table, over) = summarise_in(&cases, os, judged, &scope);
     if let Some(stalled) = &stalled {
         println!("{}", stalled.message());
     }
     print!("{table}");
-    print!("{}", crates_text(&cases, CRATES_SHOWN));
+    print!("{}", crates_text(&cases, CRATES_SHOWN, scope.start));
     print!("{}", slowest_tests(&cases, slowest));
     if summary {
         steps::append_job_summary(&format!(
             "### Test time by tier\n\n{}{}\n{}\n{}\n",
             stalled.map_or_else(String::new, |stalled| format!("{}\n\n", stalled.message())),
-            markdown(&cases, os),
-            crates_markdown(&cases),
+            markdown_in(&cases, os, &scope),
+            crates_markdown(&cases, scope.start),
             slowest_markdown(&cases, slowest)
         ));
     }
@@ -224,7 +449,7 @@ fn check_report_with(
     const ADVICE: &str = "Make the tests faster or move the slow ones to a non-blocking tier \
                           (docs/testing-and-ci.md). Budgets are not loosened quietly.";
 
-    let (start, sample) = start_of(&cases);
+    let (start, sample) = (scope.start, scope.sample);
     if !over.is_empty() {
         println!("{}", runner_line(os, start, sample));
     }
@@ -269,7 +494,7 @@ fn check_report_with(
 /// run's report with it, whatever the verdict.
 pub(crate) fn report_text(cases: &[TestCase], os: Os, slowest: usize) -> String {
     let (mut text, over) = summarise(cases, os);
-    text.push_str(&crates_text(cases, CRATES_SHOWN));
+    text.push_str(&crates_text(cases, CRATES_SHOWN, start_of(cases).0));
     text.push_str(&slowest_tests(cases, slowest));
     if !over.is_empty() {
         let (start, sample) = start_of(cases);
@@ -391,18 +616,28 @@ pub(crate) fn total(cases: &[TestCase], tier: Tier, start: f64) -> Totals {
         |totals, case| Totals {
             count: totals.count + 1,
             seconds: totals.seconds + case.seconds,
-            above_start: totals.above_start + (case.seconds - start).max(0.0),
+            above_start: totals.above_start + case.above(start),
         },
     )
 }
 
 /// The line that says what the start of a test's process was taken to
-/// cost, and from what.
-fn start_line(start: f64, sample: usize) -> String {
+/// cost, and from what: the run's own unit and integration tests, or the
+/// system part's start probe when `probe`.
+fn start_line_of(start: f64, sample: usize, probe: bool) -> String {
+    let from = if probe {
+        format!(
+            "the {START_PERCENTILE}st percentile of the {sample} unit tests' times of the start \
+             probe, run first on this runner to measure it"
+        )
+    } else {
+        format!(
+            "the {START_PERCENTILE}st percentile of the run's {sample} unit and integration tests' times"
+        )
+    };
     let mut line = format!(
-        "process start: {:.0} ms a test (the {START_PERCENTILE}st percentile of the run's {sample} \
-         unit and integration tests' times), taken off every test before a tier is held to its \
-         budget",
+        "process start: {:.0} ms a test ({from}), taken off every test before a tier is held to \
+         its budget",
         1000.0 * start,
     );
     if sample < SMALL_SAMPLE {
@@ -427,13 +662,23 @@ fn summarise_marked(
     os: Os,
     marked: impl Fn(Tier) -> bool,
 ) -> (String, Vec<(Tier, Verdict)>) {
-    let (start, sample) = start_of(cases);
+    summarise_in(cases, os, marked, &Scope::whole(cases))
+}
+
+/// [`summarise_marked`], of the tiers of `scope` alone, above its start.
+fn summarise_in(
+    cases: &[TestCase],
+    os: Os,
+    marked: impl Fn(Tier) -> bool,
+    scope: &Scope,
+) -> (String, Vec<(Tier, Verdict)>) {
+    let start = scope.start;
     let mut table = format!(
         "  {}\n  tier             tests   time    above start  budget  used\n",
-        start_line(start, sample)
+        scope.start_line()
     );
     let mut over = Vec::new();
-    for tier in Tier::ALL {
+    for &tier in scope.tiers {
         let Totals {
             count,
             seconds,
@@ -459,14 +704,23 @@ fn summarise_marked(
     (table, over)
 }
 
+#[cfg(test)]
 fn markdown(cases: &[TestCase], os: Os) -> String {
-    let (start, sample) = start_of(cases);
+    markdown_in(cases, os, &Scope::whole(cases))
+}
+
+/// The tiers' table of the job's summary page, of the tiers of `scope`
+/// alone, above its start.
+fn markdown_in(cases: &[TestCase], os: Os, scope: &Scope) -> String {
+    let start = scope.start;
     let mut table = format!(
         "The {}.\n\n| Tier | Tests | Time | Above start | Budget | Used |\n\
          |---|---:|---:|---:|---:|---:|\n",
-        start_line(start, sample).replacen("process start: ", "start of a test's process: ", 1)
+        scope
+            .start_line()
+            .replacen("process start: ", "start of a test's process: ", 1)
     );
-    for tier in Tier::ALL {
+    for &tier in scope.tiers {
         let Totals {
             count,
             seconds,
@@ -507,8 +761,7 @@ pub(crate) fn by_crate(cases: &[TestCase], start: f64) -> Vec<(String, [f64; 3])
                 crates.len() - 1
             }
         };
-        crates[index].1[Tier::of(&case.binary, &case.name).index()] +=
-            (case.seconds - start).max(0.0);
+        crates[index].1[Tier::of(&case.binary, &case.name).index()] += case.above(start);
     }
     crates.sort_by(|(a_name, a), (b_name, b)| {
         let (a_sum, b_sum): (f64, f64) = (a.iter().sum(), b.iter().sum());
@@ -520,8 +773,7 @@ pub(crate) fn by_crate(cases: &[TestCase], start: f64) -> Vec<(String, [f64; 3])
 /// Each tier's time above the start, split by crate: where to look when a
 /// tier grows. The first `shown` crates by name, the rest summed in one
 /// line.
-fn crates_text(cases: &[TestCase], shown: usize) -> String {
-    let (start, _) = start_of(cases);
+fn crates_text(cases: &[TestCase], shown: usize, start: f64) -> String {
     let crates = by_crate(cases, start);
     let mut text = String::from("\n  by crate, above start           unit  integration  system\n");
     for (name, seconds) in crates.iter().take(shown) {
@@ -550,8 +802,7 @@ fn crates_text(cases: &[TestCase], shown: usize) -> String {
     text
 }
 
-fn crates_markdown(cases: &[TestCase]) -> String {
-    let (start, _) = start_of(cases);
+fn crates_markdown(cases: &[TestCase], start: f64) -> String {
     let mut table = String::from(
         "Each tier's time above the start, by crate:\n\n\
          | Crate | Unit | Integration | System |\n|---|---:|---:|---:|\n",
@@ -843,7 +1094,7 @@ mod tests {
     #[test]
     fn the_crates_past_the_first_few_are_one_line() {
         let cases = junit::parse(REPORT);
-        let text = crates_text(&cases, 2);
+        let text = crates_text(&cases, 2, super::start_of(&cases).0);
         assert!(text.contains("cineris-policy"), "{text}");
         assert!(text.contains("cineris-llm"), "{text}");
         assert!(!text.contains("cineris-agent"), "{text}");
@@ -857,7 +1108,7 @@ mod tests {
             rest.trim_start().starts_with("4 more crates") && rest.ends_with("4.4"),
             "{text}"
         );
-        let markdown = crates_markdown(&cases);
+        let markdown = crates_markdown(&cases, super::start_of(&cases).0);
         assert!(
             markdown.contains("| `xtask` | 0.0 s | 0.0 s | 1.8 s |"),
             "{markdown}"
@@ -1158,6 +1409,233 @@ mod tests {
             marked.replace("  FAR OVER BUDGET", ""),
             plain,
             "only the marks differ"
+        );
+    }
+
+    use super::{Part, Scope, check_ci_part_in, markdown_in, start_probe_path, summarise_in};
+
+    /// `count` system tests of `seconds` each.
+    fn system_tests(count: usize, seconds: f64) -> Vec<TestCase> {
+        (0..count)
+            .map(|i| case("cineris-cli::system", &format!("t::sys_{i}"), seconds))
+            .collect()
+    }
+
+    /// `count` unit tests of `seconds` each: a start probe's.
+    fn probe_tests(count: usize, seconds: f64) -> Vec<TestCase> {
+        (0..count)
+            .map(|i| case("cineris-base", &format!("t::quick_{i}"), seconds))
+            .collect()
+    }
+
+    /// The tree of a part's run: its report and, when given, its probe's
+    /// report (as text: a probe's failure needs a `<failure>`).
+    fn part_tree(label: &str, cases: &[TestCase], probe: Option<&str>) -> std::path::PathBuf {
+        let root =
+            std::env::temp_dir().join(format!("xtask-tiers-part-{label}-{}", std::process::id()));
+        let report = workspace::nextest_report(&root, "ci");
+        std::fs::create_dir_all(report.parent().unwrap()).unwrap();
+        std::fs::write(&report, report_of(cases)).unwrap();
+        if let Some(probe) = probe {
+            std::fs::write(start_probe_path(&root), probe).unwrap();
+        }
+        root
+    }
+
+    #[test]
+    fn the_system_part_is_held_to_its_budget_above_the_start_its_probe_measured() {
+        // 1,000 system tests of 0.1 s: 100 s raw, 50 s above a start of
+        // 50 ms. Over tier 3's budget raw on every OS, and under it on
+        // Windows above the probe's start.
+        let cases = system_tests(1000, 0.1);
+        let root = part_tree(
+            "probe-start",
+            &cases,
+            Some(&report_of(&probe_tests(600, 0.05))),
+        );
+        let scope = Scope::of_part(&cases, Part::System, &start_probe_path(&root));
+        std::fs::remove_dir_all(&root).unwrap();
+        let scope = scope.unwrap();
+        assert!((scope.start - 0.05).abs() < 1e-9, "{}", scope.start);
+        assert_eq!((scope.sample, scope.probe), (600, true));
+        let (table, over) = summarise_in(&cases, Os::Windows, |_| true, &scope);
+        assert!(table.contains("50.0 s"), "{table}");
+        assert!(over.is_empty(), "{table}");
+        // Only tier 3, and a start said to be the probe's.
+        assert!(
+            !table.contains("1, unit") && !table.contains("2, integration"),
+            "{table}"
+        );
+        assert!(table.contains("of the start probe"), "{table}");
+        let markdown = markdown_in(&cases, Os::Windows, &scope);
+        assert!(markdown.contains("| 3, system | 1000 |"), "{markdown}");
+        assert!(!markdown.contains("| 1, unit"), "{markdown}");
+    }
+
+    #[test]
+    fn a_probe_that_failed_ran_nothing_or_is_missing_fails_the_system_part() {
+        let cases = system_tests(10, 1.0);
+        let failed = "<testsuites name=\"nextest-run\">\n<testsuite name=\"cineris-base\">\
+                      <testcase name=\"t::quick\" classname=\"cineris-base\" time=\"0.01\">\
+                      <failure message=\"no\">no</failure></testcase></testsuite>\n</testsuites>\n";
+        let empty = "<testsuites name=\"nextest-run\">\n</testsuites>\n";
+        let integration = report_of(&[case("cineris-agent::it", "a::b", 0.01)]);
+        for (label, probe, said) in [
+            ("failed", Some(failed), "failed"),
+            ("empty", Some(empty), "lists no tests"),
+            ("integration", Some(integration.as_str()), "not a unit test"),
+            ("missing", None, "the start probe"),
+        ] {
+            let root = part_tree(label, &cases, probe);
+            let checked = check_ci_part_in(&root, true, false, Part::System);
+            std::fs::remove_dir_all(&root).unwrap();
+            assert!(
+                checked.as_ref().is_err_and(|error| error.contains(said)),
+                "{label}: {checked:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_parts_report_must_hold_each_of_its_tiers_and_no_other() {
+        let probe = report_of(&probe_tests(600, 0.01));
+        let tiers_and_system = {
+            let mut cases = unit_tests_taking(0.1);
+            cases.push(case("cineris-cli::system", "t::sys_a", 1.0));
+            cases
+        };
+        let no_integration = probe_tests(10, 0.01);
+        for (label, cases, part, said) in [
+            (
+                "system-in-tiers",
+                &tiers_and_system,
+                Part::Tiers,
+                "not one of its tiers",
+            ),
+            (
+                "unit-in-system",
+                &tiers_and_system,
+                Part::System,
+                "not one of its tiers",
+            ),
+            (
+                "no-integration",
+                &no_integration,
+                Part::Tiers,
+                "no test of tier 2",
+            ),
+        ] {
+            let root = part_tree(label, cases, Some(&probe));
+            let checked = check_ci_part_in(&root, true, false, part);
+            std::fs::remove_dir_all(&root).unwrap();
+            assert!(
+                checked.as_ref().is_err_and(|error| error.contains(said)),
+                "{label}: {checked:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_part_far_over_its_budget_fails_and_one_within_it_passes() {
+        // 100 system tests of 2 s: about 199 s above the probe's start,
+        // past one and a half times tier 3's budget on every OS.
+        let probe = report_of(&probe_tests(600, 0.01));
+        let root = part_tree("system-over", &system_tests(100, 2.0), Some(&probe));
+        let over = check_ci_part_in(&root, true, false, Part::System);
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(
+            over.as_ref()
+                .is_err_and(|error| error.contains("tier 3, system")),
+            "{over:?}"
+        );
+        let root = part_tree("system-within", &system_tests(10, 1.0), Some(&probe));
+        let within = check_ci_part_in(&root, true, false, Part::System);
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(within, Ok(()));
+        // Tiers 1 and 2 need no probe: the unit tier is far over its budget.
+        let root = part_tree("tiers-over", &unit_tests_taking(8.0), None);
+        let tiers = check_ci_part_in(&root, true, false, Part::Tiers);
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(
+            tiers
+                .as_ref()
+                .is_err_and(|error| error.contains("tier 1, unit")),
+            "{tiers:?}"
+        );
+    }
+
+    #[test]
+    fn a_part_is_named_as_ci_test_takes_it() {
+        assert_eq!(Part::parse("tiers"), Some(Part::Tiers));
+        assert_eq!(Part::parse("system"), Some(Part::System));
+        assert_eq!(Part::parse("all"), None);
+        assert_eq!(Part::Tiers.tiers(), [Tier::Unit, Tier::Integration]);
+        assert_eq!(Part::System.tiers(), [Tier::System]);
+    }
+
+    #[test]
+    fn a_probe_of_too_few_tests_fails_the_system_part() {
+        let probe = report_of(&probe_tests(SMALL_SAMPLE - 1, 0.01));
+        let root = part_tree("few", &system_tests(10, 1.0), Some(&probe));
+        let checked = check_ci_part_in(&root, true, false, Part::System);
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(
+            checked
+                .as_ref()
+                .is_err_and(|error| error.contains("fewer than the 500")),
+            "{checked:?}"
+        );
+    }
+
+    /// The report a split run's parts make together: tier 3 above the
+    /// start its own cases carry, the others above the report's, and the
+    /// start line says both.
+    #[test]
+    fn a_merged_split_reports_system_tests_are_held_above_their_own_start() {
+        let mut cases = probe_tests(600, 0.01);
+        cases.push(case("cineris-agent::it", "a::b", 0.5));
+        let mut system = system_tests(100, 0.5);
+        for case in &mut system {
+            case.start = Some(0.1);
+        }
+        cases.extend(system);
+        let scope = Scope::whole(&cases);
+        let (table, _) = summarise_in(&cases, Os::Windows, |_| true, &scope);
+        // 100 tests of 0.5 s above 0.1 s each: 40 s, not 49.
+        assert!(table.contains("    40.0 s"), "{table}");
+        assert!(
+            table.contains("above their own runner's start, 100 ms"),
+            "{table}"
+        );
+        assert!(table.contains("2, integration"), "{table}");
+    }
+
+    /// `ci --tiers --from` a system tests' report with its probe's beside
+    /// it reads it as that part, above the probe's start.
+    #[test]
+    fn a_report_with_a_probe_beside_it_is_read_as_the_system_part() {
+        let probe = report_of(&probe_tests(600, 0.4));
+        let root = part_tree("from", &system_tests(100, 1.5), Some(&probe));
+        // 100 tests of 1.5 s: 150 s raw, past one and a half times
+        // Windows' 90 s (a failure), and 110 s above the probe's 0.4 s,
+        // over the budget and under the failure (a warning).
+        let read = super::check_report(&workspace::nextest_report(&root, "ci"), Os::Windows, 1);
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(read, Ok(()));
+    }
+
+    /// A whole run's report is read whole even with a start probe's left
+    /// beside it: only a report of system tests alone is the system part.
+    #[test]
+    fn a_whole_report_beside_a_stale_probe_is_read_whole() {
+        let probe = report_of(&probe_tests(600, 0.01));
+        let root = part_tree("stale-probe", &unit_tests_taking(8.0), Some(&probe));
+        let read = super::check_report(&workspace::nextest_report(&root, "ci"), Os::Linux, 1);
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(
+            read.as_ref()
+                .is_err_and(|error| error.contains("times over its time budget")),
+            "{read:?}"
         );
     }
 }

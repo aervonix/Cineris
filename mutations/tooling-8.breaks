@@ -1357,7 +1357,7 @@ caught-by:
 [break] a-run-not-judged-marks-its-tiers
 rule: A run that is not judged has no mark on a tier, over budget or far over it.
 file: xtask/src/tiers.rs
-in: summarise_marked
+in: summarise_in
 find: verdict(above_start, budget).filter(|_| marked(tier))
 replace: verdict(above_start, budget)
 caught-by:

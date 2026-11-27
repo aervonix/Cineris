@@ -325,6 +325,7 @@ pub(crate) fn medians(runs: &[Vec<TestCase>]) -> Vec<TestCase> {
                 failed: false,
                 retried: false,
                 repeat: None,
+                start: None,
             }
         })
         .collect()
@@ -1124,6 +1125,7 @@ mod tests {
             failed: false,
             retried: false,
             repeat: None,
+            start: None,
         }
     }
 

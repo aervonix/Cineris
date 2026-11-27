@@ -129,7 +129,59 @@ pub(crate) fn check(file: &str, text: &str) -> Vec<Violation> {
         ));
     }
     violations.extend(cache_writes(file, text));
+    if on_pull_requests {
+        violations.extend(other_runs_artifacts(file, text));
+    }
     violations
+}
+
+/// The inputs of `actions/download-artifact` that reach past the run it is
+/// in: another run's artifacts (`run-id`, with a token to read them) or
+/// another repository's.
+const OTHER_RUNS: [&str; 3] = ["run-id:", "github-token:", "repository:"];
+
+/// In a workflow that runs on pull requests, a step that downloads an
+/// artifact reads its own run's and no other's: the Windows test jobs run
+/// the test binaries the build job of their run archived, and an archive
+/// fetched from another run (a pull request's, into `main`'s run, say)
+/// would be someone else's code run as this run's tests.
+fn other_runs_artifacts(file: &str, text: &str) -> Vec<Violation> {
+    let (steps, _) = steps(text);
+    steps
+        .into_iter()
+        .filter(|step| {
+            step.keys
+                .iter()
+                .find_map(|line| used_action(line))
+                .is_some_and(|action| {
+                    action
+                        .to_ascii_lowercase()
+                        .starts_with("actions/download-artifact@")
+                })
+        })
+        .filter(|step| {
+            step.all.iter().any(|line| {
+                let line = line.trim_start();
+                OTHER_RUNS.iter().any(|input| line.starts_with(input))
+            })
+        })
+        .map(|step| {
+            Violation::new(
+                file,
+                Some(step.line),
+                format!(
+                    "a workflow that runs on pull requests downloads the artifacts of its own run \
+                     only: no {} on `actions/download-artifact`. Another run's artifact is \
+                     another run's build",
+                    OTHER_RUNS
+                        .iter()
+                        .map(|input| format!("`{}`", input.trim_end_matches(':')))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            )
+        })
+        .collect()
 }
 
 /// What a step that writes a cache must say: that only the main branch
@@ -425,6 +477,9 @@ pub(crate) fn check_action(file: &str, text: &str) -> Vec<Violation> {
         }
     }
     violations.extend(cache_writes(file, text));
+    // An action of the repository may be used by a workflow that runs on
+    // pull requests: it reads its own run's artifacts only, as they do.
+    violations.extend(other_runs_artifacts(file, text));
     violations
 }
 
@@ -812,6 +867,41 @@ mod tests {
         // And the rules read the repository's actions.
         let found = crate::rules::file_rules(".github/actions/x/action.yml", action.as_bytes());
         assert_eq!(found.len(), 2, "{found:#?}");
+    }
+
+    /// A workflow that runs on pull requests reads its own run's artifacts
+    /// and no other's; one that does not may read another's.
+    #[test]
+    fn a_pull_requests_workflow_downloads_only_its_own_runs_artifacts() {
+        let own = format!(
+            "      - uses: actions/download-artifact@{HASH} # v8.0.2\n        with:\n          name: windows-tests\n"
+        );
+        assert_eq!(
+            messages(".github/workflows/ci.yml", &blocking(&own)),
+            Vec::<String>::new()
+        );
+        for input in ["run-id: 1", "github-token: x", "repository: a/b"] {
+            let other = format!("{own}          {input}\n");
+            let found = messages(".github/workflows/ci.yml", &blocking(&other));
+            assert_eq!(found.len(), 1, "{input}: {found:#?}");
+            assert!(found[0].contains("artifacts of its own run"), "{found:?}");
+            // Not a pull request's workflow: allowed.
+            assert_eq!(
+                messages(".github/workflows/main.yml", &workflow(&other)),
+                Vec::<String>::new(),
+                "{input}"
+            );
+            // An action of the repository, which a pull request's workflow
+            // may use: refused.
+            let action = format!(
+                "name: x\nruns:\n  using: composite\n  steps:\n{}",
+                other
+                    .replace("\n      ", "\n    ")
+                    .replacen("      - ", "    - ", 1)
+            );
+            let found = super::check_action(".github/actions/x/action.yml", &action);
+            assert_eq!(found.len(), 1, "{input}: {found:#?}\n{action}");
+        }
     }
 
     #[test]

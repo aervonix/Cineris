@@ -125,7 +125,7 @@ fn by_crate_and_tier(cases: &[TestCase]) -> BTreeMap<(String, Tier), f64> {
             tiers::crate_of(&case.binary).to_owned(),
             Tier::of(&case.binary, &case.name),
         );
-        *sums.entry(key).or_default() += (case.seconds - start).max(0.0);
+        *sums.entry(key).or_default() += case.above(start);
     }
     sums
 }
@@ -307,7 +307,7 @@ fn work_factor(krate: &str, tier: Tier) -> f64 {
 pub(crate) fn windows_seconds(case: &TestCase, start: f64, counts: &Counts) -> f64 {
     let krate = tiers::crate_of(&case.binary);
     let tier = Tier::of(&case.binary, &case.name);
-    let above = (case.seconds - start).max(0.0);
+    let above = case.above(start);
     let work = (above - at_desk(counts)).max(0.0);
     work * work_factor(krate, tier) + on_the_runner(counts)
 }

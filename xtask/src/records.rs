@@ -64,11 +64,14 @@ fn is_main(info: &RunInfo) -> bool {
 /// list nor `BLOCKING`.
 pub(crate) const NON_BLOCKING: [&str; 2] = ["pr-size", "ts-client"];
 
-/// The `ci` workflow's jobs that a merge waits for, by the start of their
-/// names (`lint-linux`, `test-windows`, …): what the test of the workflow
-/// checks against, since every job not in [`NON_BLOCKING`] is taken to block.
+/// The `ci` workflow's jobs that a merge waits for, by their ids in the
+/// workflow (`lint` is `lint-linux` and `lint-windows`; `test` is
+/// `test-linux`; `build-windows` builds Windows' tests and archives them,
+/// and `test-windows` is `test-windows-tiers` and `test-windows-system`,
+/// which run them from the archive): what the test of the workflow checks
+/// against, since every job not in [`NON_BLOCKING`] is taken to block.
 #[cfg(test)]
-const BLOCKING: [&str; 2] = ["lint", "test"];
+const BLOCKING: [&str; 4] = ["lint", "test", "build-windows", "test-windows"];
 
 /// Whether a job of a `ci` run blocks a merge. A job of no known kind is
 /// taken as one that does, so that it is never left out of sight.
@@ -77,6 +80,22 @@ pub(crate) fn blocks(job: &str) -> bool {
         job.strip_prefix(kind)
             .is_some_and(|rest| rest.is_empty() || rest.starts_with('-'))
     })
+}
+
+/// A job's place among an OS's jobs in the jobs' table, in the order they
+/// run: the lint, the build of the tests where it is a job of its own
+/// (`build-windows`), the tests (tiers 1 and 2 before the system tests,
+/// where they are two jobs).
+fn place(job: &str) -> u8 {
+    if job.starts_with("lint") {
+        0
+    } else if job.starts_with("build") {
+        1
+    } else if job.ends_with("-system") {
+        3
+    } else {
+        2
+    }
 }
 
 /// A run's column in the jobs' table.
@@ -153,7 +172,7 @@ pub(crate) fn pr_section(runs: &[Measured], pr: Option<u64>) -> String {
     // The jobs that block a merge first, Linux's before Windows'; then the
     // ones that block nothing, marked, so that their minutes are never read
     // as the five-minute jobs'.
-    names.sort_by_key(|name| (!blocks(name), name.contains("windows"), *name));
+    names.sort_by_key(|name| (!blocks(name), name.contains("windows"), place(name), *name));
     for name in names {
         if blocks(name) {
             let _ = write!(text, "| `{name}` |");
@@ -198,10 +217,18 @@ pub(crate) fn pr_section(runs: &[Measured], pr: Option<u64>) -> String {
         .map(|(_, _, cases)| tiers::start_of(cases).0)
         .collect();
     text.push_str("\n| Time above process start, against the budget |");
-    for ((os, info, _), start) in columns.iter().zip(&starts) {
+    for ((os, info, cases), start) in columns.iter().zip(&starts) {
+        // A split run's system tests carry their own runner's start, which
+        // their tier is held above: said beside the other.
+        let own = cases
+            .iter()
+            .find_map(|case| case.start)
+            .map_or_else(String::new, |own| {
+                format!("; tier 3 {:.0} ms", 1000.0 * own)
+            });
         let _ = write!(
             text,
-            " {}, {} ({:.0} ms) |",
+            " {}, {} ({:.0} ms{own}) |",
             os_name(*os),
             tier_label(info),
             1000.0 * start
@@ -1132,7 +1159,52 @@ mod tests {
         assert!(!blocks("ts-client"));
         assert!(blocks("lint-linux"));
         assert!(blocks("test-windows"));
+        assert!(blocks("build-windows"));
+        assert!(blocks("test-windows-tiers"));
+        assert!(blocks("test-windows-system"));
         assert!(blocks("a-job-not-known-yet"));
+    }
+
+    #[test]
+    fn a_split_runs_windows_jobs_are_in_the_order_they_run() {
+        let mut run = info(3, "aaaaaaa1111", "worktree-x");
+        run.jobs = [
+            "test-windows-system",
+            "pr-size-windows",
+            "test-linux",
+            "test-windows-tiers",
+            "build-windows",
+            "lint-windows",
+            "lint-linux",
+        ]
+        .iter()
+        .map(|name| ((*name).to_owned(), Some(60)))
+        .collect();
+        let text = pr_section(
+            &[Measured {
+                info: run,
+                linux: None,
+                windows: None,
+            }],
+            None,
+        );
+        let rows: Vec<&str> = text
+            .lines()
+            .filter_map(|line| line.strip_prefix("| `")?.split('`').next())
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                "lint-linux",
+                "test-linux",
+                "lint-windows",
+                "build-windows",
+                "test-windows-tiers",
+                "test-windows-system",
+                "pr-size-windows"
+            ],
+            "{text}"
+        );
     }
 
     /// Every job of `ci.yml` is in one of the two lists, so that a job
@@ -1903,5 +1975,35 @@ mod tests {
             .filter_map(|line| line.split_whitespace().next())
             .collect();
         assert!(rounds.contains(&"4") && !rounds.contains(&"2"), "{table}");
+    }
+
+    /// A split run's tier 3 is held above its own job's start, and the
+    /// column says both.
+    #[test]
+    fn a_split_runs_column_says_tier_3s_own_start_and_holds_it_above_it() {
+        let mut windows = cases(2.004, 4.004, 6.004);
+        for case in windows
+            .iter_mut()
+            .filter(|case| case.name.starts_with("sys_"))
+        {
+            case.start = Some(1.004);
+        }
+        let text = pr_section(
+            &[Measured {
+                info: info(4, "bbbbbbb2222", "worktree-x"),
+                linux: None,
+                windows: Some(windows),
+            }],
+            None,
+        );
+        assert!(
+            text.contains("Windows, `bbbbbbb` (4 ms; tier 3 1004 ms) |"),
+            "{text}"
+        );
+        // 6.004 s above 1.004 s, not above 4 ms.
+        assert!(
+            text.contains("| Tier 3, system (60 s on Linux, 90 s on Windows) | 5.0 s |"),
+            "{text}"
+        );
     }
 }

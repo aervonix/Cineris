@@ -1,0 +1,226 @@
+# The Windows split (docs/steps/windows-split/answered.md): Windows' tests
+# built in one job and run from its archive in two, and what reads the
+# jobs and their reports.
+
+# ------------------------------------------------- each part's tier check
+
+[break] system-part-ignores-its-probe
+rule: The system tests' job holds tier 3 to its budget above the start its probe measured on its own runner, not above a start of nothing.
+file: xtask/src/tiers.rs
+in: of_part
+find: let (start, sample) = start_of(&read_probe(probe)?);
+replace: let (start, sample) = start_of(cases);
+caught-by:
+    xtask::bin/xtask tiers::tests::the_system_part_is_held_to_its_budget_above_the_start_its_probe_measured
+    xtask::bin/xtask tiers::tests::a_probe_that_failed_ran_nothing_or_is_missing_fails_the_system_part
+
+[break] failed-probe-taken
+rule: A start probe one of whose tests failed fails the job; it never only moves the figure.
+file: xtask/src/tiers.rs
+in: read_probe
+find: if let Some(case) = cases.iter().find(|case| case.failed) {
+replace: if let Some(case) = cases.iter().find(|_| false) {
+caught-by:
+    xtask::bin/xtask tiers::tests::a_probe_that_failed_ran_nothing_or_is_missing_fails_the_system_part
+
+[break] part-takes-another-tiers-tests
+rule: A part's report holds no test of a tier that is not its own: a filter that chose the wrong tests is refused.
+file: xtask/src/tiers.rs
+in: check_part_holds
+find: .find(|case| !part.tiers().contains(&Tier::of(&case.binary, &case.name)))
+replace: .find(|_| false)
+caught-by:
+    xtask::bin/xtask tiers::tests::a_parts_report_must_hold_each_of_its_tiers_and_no_other
+
+[break] part-missing-a-tier-passes
+rule: A part's report holds tests of each of its tiers: a tier with none did not run, and is never judged as a tier that took no time.
+file: xtask/src/tiers.rs
+in: check_part_holds
+find: .any(|case| Tier::of(&case.binary, &case.name) == *tier)
+replace: .any(|_| true)
+caught-by:
+    xtask::bin/xtask tiers::tests::a_parts_report_must_hold_each_of_its_tiers_and_no_other
+
+[break] part-shows-every-tier
+rule: A part's table shows and judges its own tiers alone, not the other part's at nothing.
+file: xtask/src/tiers.rs
+in: summarise_in
+find: for &tier in scope.tiers {
+replace: for tier in Tier::ALL {
+caught-by:
+    xtask::bin/xtask tiers::tests::the_system_part_is_held_to_its_budget_above_the_start_its_probe_measured
+
+# ------------------------------------------------- running from the archive
+
+[break] a-part-that-runs-nothing-passes
+rule: A run from the archive that chooses no test fails: a job never passes having run nothing.
+file: xtask/src/checks.rs
+in: from_archive_run
+find: "--no-tests=fail"
+replace: "--no-tests=pass"
+caught-by:
+    xtask::bin/xtask checks::tests::the_archive_is_extracted_over_the_checkout_and_run_from_there
+
+[break] archive-extracted-elsewhere
+rule: The archive is extracted over the checkout, so the paths compiled into the tests hold.
+file: xtask/src/checks.rs
+in: extract_command
+find: command.extend(["--extract-to".to_owned(), root]);
+replace: command.extend(["--persist-extract-tempdir".to_owned(), root]);
+caught-by:
+    xtask::bin/xtask checks::tests::the_archive_is_extracted_over_the_checkout_and_run_from_there
+
+# ------------------------------------------------- reading a split run
+
+[break] one-part-stands-for-the-report
+rule: A run that kept one part of Windows' report and not the other has no whole report, and none is read.
+file: xtask/src/runs.rs
+in: which_artifact
+find: return Ok(Chosen::Partial { kept, missing });
+replace: return Ok(Chosen::Ci(form));
+caught-by:
+    xtask::bin/xtask runs::try_artifact_tests::a_report_is_the_ci_workflows_or_failing_that_a_try_runs_and_an_expired_one_is_an_error
+
+[break] main-kept-a-report-with-one-part
+rule: A run of `main` kept Windows' report when it kept every artifact of one form: both parts, or the one artifact of before the split.
+file: xtask/src/runs.rs
+in: kept_by
+find: .any(|form| form.iter().all(|name| kept(artifacts, name) == Kept::Yes))
+replace: .any(|form| form.iter().any(|name| kept(artifacts, name) == Kept::Yes))
+caught-by:
+    xtask::bin/xtask runs::artifact_tests::a_split_run_kept_its_windows_report_when_it_kept_both_parts
+
+[break] parts-read-in-the-wrong-order
+rule: The two parts are read as one report with tiers 1 and 2 first, as the one job's report held them.
+file: xtask/src/runs.rs
+in: report_forms
+find: &["junit-windows-tiers", "junit-windows-system"]
+replace: &["junit-windows-system", "junit-windows-tiers"]
+caught-by:
+    xtask::bin/xtask runs::artifact_tests::the_report_artifacts_are_named_as_the_ci_workflow_names_them
+    xtask::bin/xtask runs::try_artifact_tests::a_report_is_the_ci_workflows_or_failing_that_a_try_runs_and_an_expired_one_is_an_error
+
+[break] system-job-listed-before-tiers
+rule: The jobs' table lists Windows' jobs in the order they run: the build, tiers 1 and 2, the system tests.
+file: xtask/src/records.rs
+in: place
+find: } else if job.ends_with("-system") {
+replace: } else if job.ends_with("-tiers") {
+caught-by:
+    xtask::bin/xtask records::tests::a_split_runs_windows_jobs_are_in_the_order_they_run
+
+# ------------------------------------------------- the workflow's rules
+
+[break] another-runs-artifact-allowed
+rule: A workflow that runs on pull requests downloads the artifacts of its own run only.
+file: xtask/src/rules/workflows.rs
+in: check
+find: violations.extend(other_runs_artifacts(file, text));
+replace: let _ = other_runs_artifacts;
+caught-by:
+    xtask::bin/xtask rules::workflows::tests::a_pull_requests_workflow_downloads_only_its_own_runs_artifacts
+
+# ------------------------------------------------- the review's fixes
+
+[break] tier-3-of-a-split-run-above-the-other-runners-start
+rule: A split run's report holds its system tests above their own job's start, which they carry, and the other tests above the report's.
+file: xtask/src/tiers.rs
+in: total
+find: above_start: totals.above_start + case.above(start)
+replace: above_start: totals.above_start + (case.seconds - start).max(0.0)
+caught-by:
+    xtask::bin/xtask tiers::tests::a_merged_split_reports_system_tests_are_held_above_their_own_start
+    xtask::bin/xtask records::tests::a_split_runs_column_says_tier_3s_own_start_and_holds_it_above_it
+
+[break] parts-merged-without-the-probes-start
+rule: When a split run's parts are made one report, the part that kept its start probe's report is held above that start.
+file: xtask/src/runs.rs
+in: merge_parts
+find: text = junit::with_start(&text, start);
+replace: let _ = start;
+caught-by:
+    xtask::bin/xtask runs::try_artifact_tests::a_split_runs_parts_are_one_report_with_the_system_tests_above_their_own_start
+
+[break] a-suites-own-start-not-read
+rule: A suite's own start, written on it when the parts are made one report, is read onto its cases.
+file: xtask/src/junit.rs
+in: parse
+find: .filter(|start| start.is_finite() && *start >= 0.0)
+replace: .filter(|_| false)
+caught-by:
+    xtask::bin/xtask junit::tests::a_suites_own_start_is_read_onto_its_cases_and_taken_off_them
+    xtask::bin/xtask runs::try_artifact_tests::a_split_runs_parts_are_one_report_with_the_system_tests_above_their_own_start
+
+[break] a-probe-of-too-few-tests-taken
+rule: A start probe of fewer than 500 tests fails the job: its 1st percentile would be a test that does real work.
+file: xtask/src/tiers.rs
+in: read_probe
+find: if cases.len() < SMALL_SAMPLE {
+replace: if false {
+caught-by:
+    xtask::bin/xtask tiers::tests::a_probe_of_too_few_tests_fails_the_system_part
+
+[break] a-system-report-read-from-a-file-above-no-start
+rule: `ci --tiers --from` a system tests' report with its start probe's beside it reads it above the probe's start.
+file: xtask/src/tiers.rs
+in: check_report
+find: let system_alone = junit::read(report).is_ok_and(|cases| {
+replace: let system_alone = false && junit::read(report).is_ok_and(|cases| {
+caught-by:
+    xtask::bin/xtask tiers::tests::a_report_with_a_probe_beside_it_is_read_as_the_system_part
+
+[break] tests-run-in-another-checkout-than-they-were-built-in
+rule: The archive's tests run only in a checkout at the place they were built in, where the paths compiled into them point.
+file: xtask/src/checks.rs
+in: check_built_at
+find: if workspace::same_tree(Path::new(built), root) {
+replace: if true {
+caught-by:
+    xtask::bin/xtask checks::tests::the_tests_are_run_only_in_a_checkout_where_they_were_built
+
+# ------------------------------------------------- the second round's fixes
+
+[break] a-replaced-report-read-from-the-old-download
+rule: A run's download is read again only while GitHub lists the uploads it was made of: a job run again replaces its report, and the new one is fetched.
+file: xtask/src/runs.rs
+in: is_current
+find: fs::read_to_string(marker).is_ok_and(|text| text == stamp)
+replace: marker.is_file()
+caught-by:
+    xtask::bin/xtask runs::artifact_tests::a_download_is_reused_only_while_its_uploads_are_the_ones_listed
+
+[break] a-refused-probe-gives-the-merged-report-its-start
+rule: A start probe the job's own check refused (a failure, too few tests, none) measured no start, and its part is no measurement.
+file: xtask/src/runs.rs
+in: merge_parts
+find: match crate::tiers::read_probe(&probe) {
+replace: match junit::read(&probe) {
+caught-by:
+    xtask::bin/xtask runs::try_artifact_tests::a_split_runs_parts_are_one_report_with_the_system_tests_above_their_own_start
+
+[break] an-earlier-runs-probe-left
+rule: The reports of an earlier run of the job are taken away before a run, its start probe's with them.
+file: xtask/src/checks.rs
+in: forget_reports
+find: workspace::forget_report(&tiers::start_probe_path(root))?;
+replace: let _ = tiers::start_probe_path(root);
+caught-by:
+    xtask::bin/xtask checks::tests::the_reports_of_an_earlier_run_go_with_its_start_probe
+
+[break] a-parts-runs-start-without-the-extraction
+rule: A part's runs and its tier check run nothing until the archive has been extracted into the checkout it was built in.
+file: xtask/src/checks.rs
+in: ci_part_steps
+find: if extracted.get() {
+replace: if true {
+caught-by:
+    xtask::bin/xtask checks::tests::a_parts_runs_wait_for_the_extraction
+
+[break] a-whole-report-read-as-the-system-part
+rule: Only a report of system tests alone, with a start probe's beside it, is read as the system part.
+file: xtask/src/tiers.rs
+in: check_report
+find: let part = (system_alone && probe.is_file())
+replace: let part = (probe.is_file())
+caught-by:
+    xtask::bin/xtask tiers::tests::a_whole_report_beside_a_stale_probe_is_read_whole
