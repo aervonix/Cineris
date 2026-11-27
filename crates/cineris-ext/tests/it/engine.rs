@@ -1930,3 +1930,78 @@ fn a_start_dropped_before_its_end_stops_its_thread() {
     ends.reach();
     ends.release();
 }
+
+/// Two hooks queued behind a third that computes: when their time and the
+/// third's are up together, the third is stopped and its thread ends, and a
+/// queued hook whose own time is up fails as out of its time even when the
+/// thread's end reached its call first, while one with time left never ran
+/// (the review of the step 28 fixes' third pull request: on a slow Windows
+/// runner the second of two runs asked at once said its runtime was
+/// stopped, where it had run out of its time, as the poll's order fell).
+/// The queued call with time left is awaited first: it ends only when the
+/// thread's end has closed every queued call's channel, so the other is
+/// polled after that end, the order that went wrong.
+#[test]
+fn a_queued_hook_out_of_its_time_says_so_whatever_ended_the_thread() {
+    let timer = timer();
+    let snapshot = extension(
+        "hooks = [\"tool.before\"]",
+        "cineris.on('tool.before', () => { cineris.notify('spinning'); for (;;) {} });",
+    );
+    let runtime = start(&snapshot, &timer).unwrap();
+    let host = FakeHost::new();
+    let capabilities = capabilities(&snapshot);
+    let second = Duration::from_secs(1);
+    let asked = timer.clock().monotonic();
+    let mut first = Box::pin(call_hook(
+        &runtime,
+        0,
+        &host,
+        &capabilities,
+        &timer,
+        (asked, second),
+    ));
+    let mut queued = Box::pin(call_hook(
+        &runtime,
+        0,
+        &host,
+        &capabilities,
+        &timer,
+        (asked, second),
+    ));
+    let mut later = Box::pin(call_hook(
+        &runtime,
+        0,
+        &host,
+        &capabilities,
+        &timer,
+        (asked, 10 * second),
+    ));
+    let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+    assert!(first.as_mut().poll(&mut context).is_pending());
+    assert!(queued.as_mut().poll(&mut context).is_pending());
+    assert!(later.as_mut().poll(&mut context).is_pending());
+    let (stopped, ()) = block_on(join(first, async {
+        while !host.asked().iter().any(|asked| asked == "notify spinning") {
+            let mut yielded = false;
+            std::future::poll_fn(|context| {
+                if yielded {
+                    return std::task::Poll::Ready(());
+                }
+                yielded = true;
+                context.waker().wake_by_ref();
+                std::task::Poll::Pending
+            })
+            .await;
+        }
+        timer.advance(second);
+    }));
+    assert_eq!(stopped, Err(CallError::TimedOut));
+    // The thread has ended once a queued call with time left hears it.
+    assert_eq!(block_on(later), Err(CallError::NotRun));
+    assert_eq!(
+        block_on(queued),
+        Err(CallError::TimedOut),
+        "a queued hook out of its time said its runtime was stopped"
+    );
+}
