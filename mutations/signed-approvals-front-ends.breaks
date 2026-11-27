@@ -1,0 +1,109 @@
+# The signed approvals, part `front-ends`: the password asked for at a
+# terminal and in the application, and what it signs. Written with the code.
+
+# ------------------------------------------------ the guards
+
+[break] a-sessions-command-may-reset-the-password
+rule: Guard A: the permission engine, given the command line's own grammar, refuses `cineris approvals reset` to every command of a session; `approvals status` only reads.
+file: crates/cineris-cli/src/nested.rs
+in: standing
+find: ApprovalsCommand::Reset => approves("approvals reset"),
+replace: ApprovalsCommand::Reset => Standing::Safe,
+caught-by:
+    cineris-cli::bin/cineris nested::tests::each_command_is_refused_by_the_engine_exactly_when_its_standing_says
+    cineris-cli::bin/cineris nested::tests::the_engines_table_reads_the_same_with_this_grammar
+
+[break] the-fallback-lets-the-password-be-reset
+rule: Guard A without a front end's grammar: the engine's fallback refuses `cineris approvals reset` as it refuses `approvals setup`.
+file: crates/cineris-policy/src/approving.rs
+find: ("approvals", Some(&["setup", "reset"])),
+replace: ("approvals", Some(&["setup"])),
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] reset-runs-under-a-sessions-command
+rule: Guard B: `cineris approvals reset` refuses under a session's command, before it reads anything.
+file: crates/cineris-cli/src/approvals.rs
+in: approvals
+find: crate::not_under_a_session(name, "approvals reset")
+replace: Ok::<(), u8>(())
+caught-by:
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
+
+# ------------------------------------------------ at a terminal
+
+[break] a-hash-approves-with-no-terminal
+rule: With no terminal there is no signed approval: `--hash` checks what is shown, and approves nothing on its own.
+file: crates/cineris-cli/src/ext.rs
+in: signing
+find: _ => Signing::NoTerminal,
+replace: _ => Signing::Ask,
+caught-by:
+    cineris-cli::bin/cineris ext::tests::a_signed_change_is_asked_only_at_a_terminal_and_no_hash_replaces_it
+
+[break] a-headless-run-at-a-terminal-does-not-open-the-approvals
+rule: A headless run at a terminal that has approvals to use opens them with the key the typed password makes, before its session opens.
+file: crates/cineris-cli/src/approvals.rs
+in: open_at_start
+find: .open_approvals(&key)
+replace: .approval_key().map(|_| ())
+caught-by:
+    cineris-cli::system approvals::sys_a_headless_run_with_no_terminal_asks_nothing_and_says_why
+
+# ------------------------------------------------ in the application
+
+[break] the-session-opens-before-the-password
+rule: When a session has approvals to use, the application holds its open until the password is answered: the approvals open first.
+file: crates/cineris-tui/src/app/state/approvals.rs
+in: App::approvals_hold
+find: Some(here) if here.holding => {
+replace: Some(here) if here.holding && here.held.is_some() => {
+caught-by:
+    cineris-tui app::state::approvals::tests::a_session_with_approvals_to_use_opens_after_the_password
+
+[break] the-trust-questions-yes-goes-unsigned
+rule: A yes to a trust question that proposes what it writes is answered only with the person's signature, made from the password the dialog asked for.
+file: crates/cineris-tui/src/app/state.rs
+in: App::answer
+find: && request.proposal.is_some()
+replace: && request.proposal.is_none()
+caught-by:
+    cineris-tui app::state::approvals::tests::the_trust_questions_yes_signs_with_the_password_and_nothing_else_holds_it
+    cineris-tui app::state::approvals::tests::a_wrong_password_at_the_yes_asks_again_and_esc_is_not_now
+
+[break] the-terminal-stays-open-while-the-application-asks
+rule: While the application asks for the password, the terminal is closed to other programs (its exclusive mode), and open again once the dialog has gone.
+file: crates/cineris-tui/src/app.rs
+in: draw
+find: let _ = terminal.set_exclusive(app.asking_password());
+replace:
+caught-by:
+    cineris-tui app::tests::the_loop_closes_the_terminal_to_others_while_the_password_is_asked
+
+[break] a-paste-the-loop-reads-is-left-unwiped
+rule: Each paste the application's loop reads is written over once it is done with.
+file: crates/cineris-tui/src/app.rs
+in: forget
+find: crate::secret::password::forget(event);
+replace: drop(event);
+caught-by:
+    cineris-tui app::tests::the_loop_writes_over_each_paste_it_reads
+
+[break] a-paste-the-prompt-takes-is-left-unwiped
+rule: Each paste the password's prompt reads at a terminal is written over once it is done with.
+file: crates/cineris-tui/src/secret/password.rs
+in: ask_on
+find: forget(event);
+replace: drop(event);
+caught-by:
+    cineris-tui secret::password::tests::at_a_terminal_each_paste_is_written_over_once_read
+
+[break] the-exclusive-mode-is-lost-across-a-stop
+rule: On Unix the terminal's exclusive mode, turned off when the program is stopped, is on again when it is continued.
+file: crates/cineris-term/src/sys/unix.rs
+in: on_stop
+find: exclusive_mode(true);
+replace:
+os: linux
+caught-by:
+    cineris-term::it exclusive::sys_the_exclusive_mode_holds_and_comes_back_after_a_stop

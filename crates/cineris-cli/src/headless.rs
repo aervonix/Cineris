@@ -525,6 +525,14 @@ fn taken_for_the_password(env: &Env) -> Option<cineris_tui::secret::PasswordTerm
     if !crate::approvals::at_terminal() {
         return None;
     }
+    // With no key file there are no approvals to use: the terminal is left
+    // as it is, and the run costs nothing more. Only whether it is there is
+    // asked; it is read once the terminal is taken.
+    let key_file = StateDir::from_dirs(&Dirs::from_env(env))
+        .map(|state| state.root().join(cineris_core::signed::KEY_FILE))?;
+    if std::fs::symlink_metadata(&key_file).is_err() {
+        return None;
+    }
     let overrides = cineris_config::load(&cineris_config::LoadOptions::new(env.clone()))
         .map(|loaded| crate::interactive::overrides(&loaded.settings.terminal))
         .unwrap_or_default();

@@ -22,7 +22,7 @@ Nothing else: it runs no program, writes no file, reaches no network and hooks n
 cineris ext add examples/md-outline
 ```
 
-Cineris reads the folder, shows what the extension may do and the tool it registers, and asks you to approve it. A yes copies the folder into your configuration directory's `extensions/md-outline/` (`~/.config/cineris/` on Linux, `%APPDATA%\cineris\` on Windows) and pins it by its hash: if a file in it changes, it is not loaded until you approve it again. Where there is no terminal to ask at, run it once to see the hash, then again with `--hash <the hash shown>`.
+Cineris reads the folder, shows what the extension may do and the tool it registers, and asks you to approve it. A yes copies the folder into your configuration directory's `extensions/md-outline/` (`~/.config/cineris/` on Linux, `%APPDATA%\cineris\` on Windows) and pins it by its hash: if a file in it changes, it is not loaded until you approve it again. The yes is your approvals password, typed at the terminal; with no terminal nothing is approved.
 
 Cineris asks before each call of the tool, as it does for every extension's tool, unless a rule allows it or refuses it, or the session runs at the `unrestricted` level, where an extension's tool that no rule names runs unasked. To allow it without asking at the other levels, add a rule to your configuration:
 

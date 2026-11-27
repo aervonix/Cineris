@@ -32,7 +32,7 @@ The extension:
 cineris ext add examples/release/extensions/changelog
 ```
 
-Cineris reads the folder, shows what the extension may do and the command it registers, and asks you to approve it. A yes copies the folder into your configuration directory's `extensions/changelog/` (`~/.config/cineris/` on Linux, `%APPDATA%\cineris\` on Windows) and pins it by its hash. Where there is no terminal to ask at, run it once to see the hash, then again with `--hash <the hash shown>`.
+Cineris reads the folder, shows what the extension may do and the command it registers, and asks you to approve it. A yes copies the folder into your configuration directory's `extensions/changelog/` (`~/.config/cineris/` on Linux, `%APPDATA%\cineris\` on Windows) and pins it by its hash. The yes is your approvals password, typed at the terminal; with no terminal nothing is approved.
 
 The command file is copied, not approved: put `commands/release-notes.md` in your configuration directory's `commands/` folder, for every project, or in a project's `.cineris/commands/`, for that project alone. If both have a `release-notes.md`, yours is used.
 

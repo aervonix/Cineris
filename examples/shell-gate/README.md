@@ -28,7 +28,7 @@ Nothing else: it runs no program, reads or writes no file and reaches no network
 cineris ext add examples/shell-gate
 ```
 
-Cineris reads the folder, shows what the extension may do and the hook it registers, and asks you to approve it. A yes copies the folder into your configuration directory's `extensions/shell-gate/` (`~/.config/cineris/` on Linux, `%APPDATA%\cineris\` on Windows) and pins it by its hash. Where there is no terminal to ask at, run it once to see the hash, then again with `--hash <the hash shown>`.
+Cineris reads the folder, shows what the extension may do and the hook it registers, and asks you to approve it. A yes copies the folder into your configuration directory's `extensions/shell-gate/` (`~/.config/cineris/` on Linux, `%APPDATA%\cineris\` on Windows) and pins it by its hash. The yes is your approvals password, typed at the terminal; with no terminal nothing is approved.
 
 Once approved, its gate holds: if the folder changes or cannot be read, the shell tool's calls are refused, saying why, until you approve it again (`cineris ext add`) or turn it off (`cineris ext disable shell-gate`).
 

@@ -24,7 +24,9 @@
 //! `[keys]` and `log.level`); the log; the core, given that configuration,
 //! started on its thread and waited for, so that an invalid catalog stops
 //! the program before the terminal is touched; the terminal; the first
-//! frame; and only then the session, which the application opens itself.
+//! frame; and only then the session, which the application opens itself:
+//! after the approvals' password when the session has approvals to use
+//! (`CoreApprovals`, the signed approvals step).
 
 use std::collections::VecDeque;
 use std::ffi::OsString;

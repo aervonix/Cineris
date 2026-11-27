@@ -13,8 +13,8 @@
 //!   either redirected nothing is asked and nothing approved, and the
 //!   refusal names the command to run at a terminal. A password is never
 //!   read from standard input, an argument or a variable.
-//! - **Not while a debugger is attached** ([`traced`]): it could read the
-//!   password as it is typed.
+//! - **Not while a debugger is attached** ([`traced`], the process
+//!   hardening's check): it could read the password as it is typed.
 //! - **`setup` and `reset` take the terminal before anything slow** (the
 //!   core's start), as `auth login` does, so that a password typed early is
 //!   not echoed by the terminal's own line mode.
@@ -43,16 +43,13 @@ type Done = u8;
 /// How many passwords a subcommand that signs takes before it gives up.
 pub(crate) const TRIES: usize = 3;
 
-/// Whether a debugger is attached to this process, which could read the
-/// password as it is typed.
-///
-/// **A seam:** the process hardening part of the signed approvals step
-/// gives the check (`cineris_sandbox::harden::traced()`, named in its
-/// design), and it has not landed. Until it does, this says no, and every
-/// prompt for the password asks it here first, so that the check is wired
-/// in one place.
+/// Whether a debugger or a tracer is attached to this process, which could
+/// read the password as it is typed: the process hardening's check
+/// (`cineris_sandbox::harden::traced`, which on Linux also fails closed
+/// when the process's status cannot be read). Every prompt for the
+/// password asks it here first, so that the check is wired in one place.
 pub(crate) fn traced() -> bool {
-    false
+    cineris_sandbox::harden::traced()
 }
 
 /// Why no password is asked while a debugger is attached.
