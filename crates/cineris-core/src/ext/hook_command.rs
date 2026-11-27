@@ -281,7 +281,10 @@ pub(crate) fn session_input(event: Event, session: &SessionId, paths: &PathResol
 /// What the model is told of a `session.start` hook's `context`: under a
 /// line that names the hook, every line quoted, what acts unseen escaped.
 pub(crate) fn session_notice(hook: &str, context: &str) -> String {
+    // Every selector an escape too: the model reads it, where one after
+    // each character would carry a byte unseen.
     let shown = cineris_base::visible_keeping(context, &['\n']);
+    let shown = cineris_base::selectors_escaped(&shown);
     let quoted: Vec<String> = shown
         .split('\n')
         .map(|line| {
@@ -1456,6 +1459,21 @@ mod tests {
     use cineris_ext::hook::command::Entry;
 
     use super::*;
+
+    /// A `session.start` hook's context reaches the model quoted, with
+    /// every variation selector as its escape (the fixes to step 28).
+    #[test]
+    fn a_session_hooks_context_has_its_selectors_as_escapes() {
+        let told = session_notice("greet", "Hi\u{e0152}\u{e0155} \u{2764}\u{fe0f}\nthere");
+        assert!(
+            !told.chars().any(cineris_base::visible::is_selector),
+            "{told}"
+        );
+        assert!(
+            told.contains("> Hi\\u{e0152}\\u{e0155} \u{2764}\\u{fe0f}\n> there"),
+            "{told}"
+        );
+    }
 
     /// `hook_may_run` across the engine's answers, for the user's own hook
     /// and a project's.
