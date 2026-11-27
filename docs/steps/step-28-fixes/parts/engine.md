@@ -54,7 +54,7 @@ The maintainers' review of the third pull request, before its push, found these 
 6. **The bound is said the same way everywhere** (the module's doc, 12-extensions, security.md §3, this record), with another session's start that was already evaluating among the threads it allows.
 7. **Nothing held the resolver's eight places.** **Test:** `cineris-llm fetch::tests::the_systems_lookups_take_the_processs_places` (with seven places taken, a lookup of `localhost` takes the eighth, and the next waits). **Breaks:** `the-systems-lookups-have-more-places`, `the-systems-lookups-take-no-place`. The cost to other clients is in finding 10, above.
 
-PREPUSH-VERDICTS
+**Verdicts:** `cargo xtask mutate step-28-fixes-engine`, 6 of 6 caught. The tests of `cineris-ext` (201) and of every crate that depends on it (1,145) pass, and `cargo xtask stress -p cineris-ext --count 100` passed every time on a hosted Linux runner (run 45956204037).
 
 ## The engine's notes of lower confidence
 
