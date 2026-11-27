@@ -81,6 +81,10 @@ pub enum Discover {
     /// Not the first time it is asked, and as [`Discover::Answer`] after: a
     /// modern server whose first answer was lost.
     SilentFirst,
+    /// As the inner one, once the gate is open: a late answer of any kind.
+    Late(Gate, Box<Discover>),
+    /// The first time it is asked as the first, after as the second.
+    Then(Box<Discover>, Box<Discover>),
     /// As [`Discover::Answer`], once the gate is open: a server slower than
     /// the probe to start. The gate is the server's, so a process started
     /// after it opened answers at once.
@@ -156,6 +160,10 @@ struct Script {
     stderr: String,
     /// What `initialize` waits for before it is answered.
     initialize_gate: Option<Gate>,
+    /// The error a legacy server refuses `initialize` with, if it does.
+    initialize_error: Option<i64>,
+    /// What a process's shutdown waits for before it ends it.
+    shutdown_gate: Option<Gate>,
     /// Whether its first process exits on `initialize`.
     exits_on_first_initialize: bool,
     /// Whether a modern server refuses `initialize` with `-32022` and then
@@ -262,6 +270,8 @@ impl FakeServer {
             replies: HashMap::new(),
             stderr: String::new(),
             initialize_gate: None,
+            initialize_error: None,
+            shutdown_gate: None,
             exits_on_first_initialize: false,
             refuses_initialize_and_exits: false,
             ack_gate: None,
@@ -418,6 +428,21 @@ impl FakeServer {
     #[must_use]
     pub fn ttl_pages(self, ttls: &[i64]) -> Self {
         self.script(|script| script.ttl_pages = ttls.to_vec());
+        self
+    }
+
+    /// A legacy server that refuses `initialize` with an error of `code`.
+    #[must_use]
+    pub fn initialize_error(self, code: i64) -> Self {
+        self.script(|script| script.initialize_error = Some(code));
+        self
+    }
+
+    /// That a process's shutdown ends it only once `gate` is open: a
+    /// process slow to end.
+    #[must_use]
+    pub fn shutdown_gate(self, gate: &Gate) -> Self {
+        self.script(|script| script.shutdown_gate = Some(gate.clone()));
         self
     }
 
@@ -678,6 +703,11 @@ impl ServerProcess for FakeProcess {
     fn shutdown(&self, grace: Duration) -> BoxFuture<'_, ()> {
         Box::pin(async move {
             lock(&self.server.shared.shutdowns).push(grace);
+            let gate = lock(&self.server.shared.script).shutdown_gate.clone();
+            if let Some(gate) = gate {
+                // A process slow to end.
+                gate.opened().await;
+            }
             if self.process.input.upgrade().is_some() {
                 // Its input is still open: the staged kill.
                 self.process.exit("ended by the staged kill");
@@ -912,7 +942,25 @@ async fn discover(
         shared.discovers += 1;
         shared.discovers
     };
-    match &script.discover {
+    let mut behaviour = &script.discover;
+    loop {
+        match behaviour {
+            Discover::Then(first, rest) => {
+                behaviour = if asked == 1 {
+                    first.as_ref()
+                } else {
+                    rest.as_ref()
+                };
+            }
+            Discover::Late(gate, inner) => {
+                gate.opened().await;
+                behaviour = inner.as_ref();
+            }
+            _ => break,
+        }
+    }
+    match behaviour {
+        Discover::Late(..) | Discover::Then(..) => {}
         Discover::Silent => {}
         Discover::Exit => process.exit("it exited on a request before initialize"),
         Discover::Error(code) => process.send(error(id, *code, "method not found")).await,
@@ -969,6 +1017,9 @@ async fn initialize(script: &Script, process: &Process, id: &Json) {
         if receiver.await.is_err() {
             return;
         }
+    }
+    if let Some(code) = script.initialize_error {
+        return process.send(error(id, code, "initialize refused")).await;
     }
     let version = script.legacy.clone().unwrap_or_default();
     process

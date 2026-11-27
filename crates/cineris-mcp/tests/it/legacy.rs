@@ -119,6 +119,47 @@ fn a_burst_of_changes_wakes_a_receiver_that_was_not_looking_once() {
 }
 
 #[test]
+fn a_listing_that_ended_is_not_handed_to_who_asks_after_it() {
+    run(async {
+        let timer = timer();
+        let gate = Gate::new();
+        let server = FakeServer::legacy("2025-06-18")
+            .tools(vec![tool("a")])
+            .list_gate(&gate);
+        let client = Arc::new(connect(&server, &timer).await);
+        let cancel = CancelToken::new();
+        // One who asks while the listing runs, and gives up once it ended
+        // and before it took its copy: the copy kept for it stays.
+        let gives_up = CancelToken::new();
+        let waiting = tokio::spawn({
+            let client = Arc::clone(&client);
+            let gives_up = gives_up.clone();
+            async move { client.list_tools(&gives_up).await }
+        });
+        let (first, ()) = join(client.list_tools(&cancel), async {
+            server.wait_for("tools/list", 1).await;
+            settle().await;
+            gate.open();
+        })
+        .await;
+        first.unwrap();
+        // The listing ended; the one waiting has not run since.
+        gives_up.cancel();
+        let after = client.list_tools(&cancel).await.unwrap();
+        assert_eq!(after.len(), 1);
+        assert_eq!(
+            server.of("tools/list").len(),
+            2,
+            "asked after it ended, a listing is a new one, whatever is kept"
+        );
+        assert_eq!(
+            waiting.await.unwrap().unwrap_err(),
+            cineris_mcp::ClientError::Cancelled
+        );
+    });
+}
+
+#[test]
 fn listings_asked_for_while_one_runs_share_it() {
     run(async {
         let timer = timer();

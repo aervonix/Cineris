@@ -766,8 +766,9 @@ pub(crate) enum Probe {
     Unsupported(Vec<String>),
     /// A modern server that cannot be spoken to: why.
     Refused(String),
-    /// Any other error, or silence: a legacy server.
-    Legacy,
+    /// Any other error, a result of another kind, or silence: a legacy
+    /// server. What it answered, for a message.
+    Legacy(String),
     /// The connection ended before an answer: a legacy server that exits
     /// on a request before `initialize`.
     Exited(ClientError),
@@ -811,7 +812,7 @@ pub(crate) fn discover_params(version: &str) -> Json {
 /// it speaks.
 pub(crate) fn probed(answered: Result<Answer, ClientError>, version: &str) -> Probe {
     match answered {
-        Err(ClientError::TimedOut { .. }) => Probe::Legacy,
+        Err(ClientError::TimedOut { .. }) => Probe::Legacy("nothing".to_owned()),
         Err(stopped @ (ClientError::Stopped(_) | ClientError::MayHaveRun(_))) => {
             Probe::Exited(settled(stopped))
         }
@@ -820,7 +821,7 @@ pub(crate) fn probed(answered: Result<Answer, ClientError>, version: &str) -> Pr
             let Some(supported) = result.get("supportedVersions").and_then(Json::as_array) else {
                 // A result that is not the discovery's is a legacy server
                 // answering what it does not know.
-                return Probe::Legacy;
+                return Probe::Legacy("a result that is not a discovery result".to_owned());
             };
             let supported: Vec<&str> = supported.iter().filter_map(Json::as_str).collect();
             let chosen = if supported.contains(&version) {
@@ -855,7 +856,12 @@ pub(crate) fn probed(answered: Result<Answer, ClientError>, version: &str) -> Pr
             wire::HEADER_MISMATCH => {
                 Probe::Refused("it found the client's request malformed (error -32020)".to_owned())
             }
-            _ => Probe::Legacy,
+            _ => match wire::server_error(error) {
+                ClientError::Server { code, message } => {
+                    Probe::Legacy(format!("error {code}: {message}"))
+                }
+                other => Probe::Legacy(other.to_string()),
+            },
         },
     }
 }
@@ -922,7 +928,7 @@ pub(crate) fn settled(error: ClientError) -> ClientError {
 
 /// Revisions a server named, as a message shows them: quoted, at most
 /// eight, each cut.
-fn shown(versions: &[&str]) -> String {
+pub(crate) fn shown(versions: &[&str]) -> String {
     let mut shown: Vec<String> = versions
         .iter()
         .take(8)

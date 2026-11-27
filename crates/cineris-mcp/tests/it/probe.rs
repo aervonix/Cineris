@@ -218,11 +218,8 @@ fn a_modern_server_that_speaks_no_revision_of_the_clients_is_never_sent_initiali
             "{result:?}"
         );
         assert_eq!(server.methods(), ["server/discover"]);
-        assert_eq!(
-            server.shutdowns(),
-            [GRACE],
-            "a start that fails ends the server"
-        );
+        // A start that fails ends the server, in the background.
+        until(|| server.shutdowns() == [GRACE]).await;
     });
 }
 
@@ -317,7 +314,7 @@ fn a_legacy_answer_of_a_revision_the_client_does_not_speak_ends_the_start() {
         };
         assert!(why.contains("2023-01-01"), "{why}");
         assert!(server.of("notifications/initialized").is_empty());
-        assert_eq!(server.shutdowns(), [GRACE]);
+        until(|| server.shutdowns() == [GRACE]).await;
     });
 }
 
@@ -352,7 +349,8 @@ fn a_silent_server_still_starts_within_the_start_limit_and_initialize_is_never_c
                 limit: START,
             }
         );
-        assert_eq!(server.shutdowns(), [GRACE]);
+        // Ended in the background.
+        until(|| server.shutdowns() == [GRACE]).await;
         assert!(server.of("notifications/cancelled").is_empty());
     });
 }

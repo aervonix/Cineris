@@ -37,7 +37,7 @@ use crate::jsonrpc::{self, Answer};
 use crate::process::{ServerPipes, SpawnError};
 use crate::session::{
     Agreed, ClientOptions, Declined, Limit, Probe, Router, Rpc, Session, bounded, discover,
-    discover_params, initialize, probed,
+    discover_params, initialize, probed, shown,
 };
 use crate::stdio::StdioTransport;
 use crate::transport::{Transport, lock};
@@ -78,9 +78,22 @@ struct Start<'a> {
     timer: &'a SharedTimer,
     options: &'a ClientOptions,
     respawn: &'a Respawn,
-    /// The connection being tried now, so that one left by a start that
-    /// ran out of time is shut down.
+    /// The connection being tried now. A start that ends without handing
+    /// it to a client (it failed, ran out of time, or its caller dropped it)
+    /// ends its process.
     current: Mutex<Option<Arc<StdioTransport>>>,
+    /// The words of a refusal of `initialize` that sent the start on to ask
+    /// a new process patiently: what a start that then runs out of time
+    /// reports.
+    refusal: Mutex<Option<String>>,
+}
+
+impl Drop for Start<'_> {
+    fn drop(&mut self) {
+        if let Some(transport) = lock(&self.current).take() {
+            retire(&transport, self.options.shutdown_grace);
+        }
+    }
 }
 
 impl Start<'_> {
@@ -104,22 +117,30 @@ impl Start<'_> {
         }
     }
 
-    /// The server started again: the old process is let go and ended in
-    /// the background.
-    fn again(&self, old: Link) -> Result<Link, ClientError> {
-        retire(&old.transport, self.options.shutdown_grace);
+    /// The server started again, once the process let go has ended: a
+    /// server that cannot run twice (a fixed name, a lock, a port) would
+    /// refuse the next. The wait is within the start's limit, and the old
+    /// process stays the start's own until it has ended, so that a start
+    /// dropped meanwhile still ends it. `why` is why, for a server that
+    /// cannot be started again.
+    async fn again(&self, old: Link, why: &str) -> Result<Link, ClientError> {
+        old.transport.abandon();
+        old.transport
+            .process()
+            .shutdown(self.options.shutdown_grace)
+            .await;
         let pipes = (self.respawn)().map_err(|error| {
-            ClientError::NotStarted(format!(
-                "it exited when asked what it speaks, and could not be started again: {error}"
-            ))
+            ClientError::NotStarted(format!("{why}, and could not be started again: {error}"))
         })?;
         Ok(self.link(pipes))
     }
 
     /// Probes, falls back, and agrees a revision. A server known to be
     /// legacy is sent `initialize` at once, and started again and probed
-    /// when it refuses it; one known to be modern is probed with no time of
-    /// its own, its silence never taken as the legacy era.
+    /// when it refuses it; one known to be modern is asked with no time of
+    /// its own. **A server known or found to be modern is never sent
+    /// `initialize`:** its process asked patiently either answers as a
+    /// modern server, or the start ends with what it said.
     async fn agree(&self, first: Link, known: Option<Era>) -> Result<(Link, Agreed), ClientError> {
         let preferred = wire::MODERN_VERSIONS[0];
         let mut link = first;
@@ -128,6 +149,8 @@ impl Start<'_> {
             Some(Era::Modern) => Next::Probe { patient: true },
             None => Next::Probe { patient: false },
         };
+        // How many processes asked patiently exited before they answered.
+        let mut patient_exits = 0;
         loop {
             match next {
                 Next::Initialize => match initialize(&link.rpc).await {
@@ -135,11 +158,15 @@ impl Start<'_> {
                     // Refused: the server changed. Asked what it speaks, on
                     // a process that was not sent `initialize`.
                     Err(Declined::Answered(_)) => {
-                        link = self.again(link)?;
+                        link = self.again(link, "it refused `initialize`").await?;
                         next = Next::Probe { patient: false };
                     }
                     // It exited: started again, and sent `initialize` alone.
-                    Err(Declined::Stopped(_)) => return self.initialize_again(link).await,
+                    Err(Declined::Stopped(_)) => {
+                        return self
+                            .initialize_again(link, "it exited during `initialize`")
+                            .await;
+                    }
                     Err(Declined::Failed(error)) => return Err(error),
                 },
                 Next::Probe { patient } => {
@@ -167,20 +194,46 @@ impl Start<'_> {
                         // `initialize` waits.
                         match self.handshake_hearing(&link, probe).await {
                             Heard::Legacy(agreed) => return Ok((link, agreed)),
-                            Heard::Modern => {
-                                link = self.again(link)?;
+                            Heard::Modern { refusal } => {
+                                if let Some(words) = refusal {
+                                    *lock(&self.refusal) = Some(words);
+                                }
+                                link = self
+                                    .again(
+                                        link,
+                                        "it showed itself modern once it was sent `initialize`",
+                                    )
+                                    .await?;
                                 next = Next::Probe { patient: true };
                                 continue;
                             }
-                            Heard::Exited => return self.initialize_again(link).await,
+                            Heard::Exited => {
+                                return self
+                                    .initialize_again(link, "it exited during `initialize`")
+                                    .await;
+                            }
                             Heard::Failed(error) => return Err(error),
                         }
                     };
                     drop(probe);
-                    return match probed(answered, preferred) {
+                    let probe = probed(answered, preferred);
+                    if patient {
+                        // Known or found to be modern: never `initialize`.
+                        match probe {
+                            Probe::Exited(_) if patient_exits == 0 => {
+                                patient_exits += 1;
+                                link = self
+                                    .again(link, "it exited before it answered `server/discover`")
+                                    .await?;
+                                continue;
+                            }
+                            other => return self.patiently(link, other).await,
+                        }
+                    }
+                    return match probe {
                         Probe::Modern(agreed) => Ok((link, agreed)),
                         // An error that is not a modern one: legacy.
-                        Probe::Legacy => self.handshake(link).await,
+                        Probe::Legacy(_) => self.handshake(link).await,
                         // A `-32022` naming only legacy revisions: a server
                         // of the legacy era that says so.
                         Probe::Unsupported(supported) if only_legacy(&supported) => {
@@ -188,7 +241,10 @@ impl Start<'_> {
                         }
                         Probe::Unsupported(supported) => self.retry(link, &supported).await,
                         Probe::Refused(why) => Err(ClientError::NotStarted(why)),
-                        Probe::Exited(_) => self.initialize_again(link).await,
+                        Probe::Exited(_) => {
+                            self.initialize_again(link, "it exited when asked what it speaks")
+                                .await
+                        }
                         Probe::Failed(error) => Err(error),
                     };
                 }
@@ -196,9 +252,35 @@ impl Start<'_> {
         }
     }
 
+    /// What a server known or found to be modern answered, asked
+    /// patiently: a modern answer, or the end of the start with what it
+    /// said. Never `initialize`.
+    async fn patiently(&self, link: Link, probe: Probe) -> Result<(Link, Agreed), ClientError> {
+        let known = "though it was known or found to be modern, so it is not sent `initialize`";
+        match probe {
+            Probe::Modern(agreed) => Ok((link, agreed)),
+            Probe::Unsupported(supported) if only_legacy(&supported) => {
+                let named: Vec<&str> = supported.iter().map(String::as_str).collect();
+                Err(ClientError::NotStarted(format!(
+                    "it named only legacy revisions ({}) {known}",
+                    shown(&named)
+                )))
+            }
+            Probe::Unsupported(supported) => self.retry(link, &supported).await,
+            Probe::Refused(why) => Err(ClientError::NotStarted(why)),
+            Probe::Legacy(what) => Err(ClientError::NotStarted(format!(
+                "it answered `server/discover` with {what}, as a legacy server does, {known}"
+            ))),
+            Probe::Exited(stopped) => Err(ClientError::NotStarted(format!(
+                "it exited twice before it answered `server/discover` ({stopped})"
+            ))),
+            Probe::Failed(error) => Err(error),
+        }
+    }
+
     /// The server started again, and sent `initialize` alone.
-    async fn initialize_again(&self, old: Link) -> Result<(Link, Agreed), ClientError> {
-        let link = self.again(old)?;
+    async fn initialize_again(&self, old: Link, why: &str) -> Result<(Link, Agreed), ClientError> {
+        let link = self.again(old, why).await?;
         let agreed = initialize(&link.rpc).await.map_err(declined)?;
         Ok((link, agreed))
     }
@@ -208,14 +290,18 @@ impl Start<'_> {
     async fn handshake(&self, link: Link) -> Result<(Link, Agreed), ClientError> {
         match initialize(&link.rpc).await {
             Ok(agreed) => Ok((link, agreed)),
-            Err(Declined::Stopped(_)) => self.initialize_again(link).await,
+            Err(Declined::Stopped(_)) => {
+                self.initialize_again(link, "it exited during `initialize`")
+                    .await
+            }
             Err(declined_) => Err(declined(declined_)),
         }
     }
 
     /// The legacy handshake on a process silent on the probe, which is
-    /// still heard: a modern answer to it, or a refusal of `initialize`,
-    /// shows a modern server slower than the probe.
+    /// still heard: a modern answer to it shows a modern server slower than
+    /// the probe, and so does a refusal of `initialize`, unless the probe
+    /// was answered as a legacy server answers it.
     async fn handshake_hearing(
         &self,
         link: &Link,
@@ -224,27 +310,38 @@ impl Start<'_> {
         let preferred = wire::MODERN_VERSIONS[0];
         let mut handshake = pin!(initialize(&link.rpc));
         let mut probe_done = false;
+        let mut heard_legacy = false;
         let outcome = poll_fn(|context| {
             if !probe_done && let Poll::Ready(answered) = probe.as_mut().poll(context) {
                 probe_done = true;
                 match probed(answered, preferred) {
-                    // A `-32022` naming only legacy revisions, a legacy
-                    // server's late error, or an end the handshake meets
-                    // too, is left.
-                    Probe::Unsupported(supported) if only_legacy(&supported) => {}
+                    // A `-32022` naming only legacy revisions, or a legacy
+                    // server's late error: the handshake goes on.
+                    Probe::Unsupported(supported) if only_legacy(&supported) => {
+                        heard_legacy = true;
+                    }
+                    Probe::Legacy(_) => heard_legacy = true,
                     Probe::Modern(_) | Probe::Unsupported(_) | Probe::Refused(_) => {
                         return Poll::Ready(None);
                     }
-                    _ => {}
+                    // An end the handshake meets too.
+                    Probe::Exited(_) | Probe::Failed(_) => {}
                 }
             }
             handshake.as_mut().poll(context).map(Some)
         })
         .await;
         match outcome {
-            None => Heard::Modern,
+            None => Heard::Modern { refusal: None },
             Some(Ok(agreed)) => Heard::Legacy(agreed),
-            Some(Err(Declined::Answered(_))) => Heard::Modern,
+            // Refused by a server that answered the probe as a legacy
+            // server does: its last word.
+            Some(Err(Declined::Answered(refusal))) if heard_legacy => {
+                Heard::Failed(declined(Declined::Answered(refusal)))
+            }
+            Some(Err(Declined::Answered(refusal))) => Heard::Modern {
+                refusal: Some(refusal_words(refusal)),
+            },
             Some(Err(Declined::Stopped(_))) => Heard::Exited,
             Some(Err(Declined::Failed(error))) => Heard::Failed(error),
         }
@@ -272,7 +369,10 @@ impl Start<'_> {
         match discover(&link.rpc, version, &mut limit).await {
             Probe::Modern(agreed) => Ok((link, agreed)),
             Probe::Failed(error) | Probe::Exited(error) => Err(error),
-            _ => Err(ClientError::NotStarted(format!(
+            Probe::Legacy(what) => Err(ClientError::NotStarted(format!(
+                "asked again with revision {version}, which it said it speaks, it answered {what}"
+            ))),
+            Probe::Unsupported(_) | Probe::Refused(_) => Err(ClientError::NotStarted(format!(
                 "it refused revision {version}, which it said it speaks"
             ))),
         }
@@ -293,9 +393,9 @@ enum Next {
 enum Heard {
     /// It agreed a legacy revision.
     Legacy(Agreed),
-    /// Its late answer to the probe, or its refusal of `initialize`, shows a
-    /// modern server: the process is let go.
-    Modern,
+    /// Its late answer to the probe, or its refusal of `initialize` (whose
+    /// words it keeps), shows a modern server: the process is let go.
+    Modern { refusal: Option<String> },
     /// It exited.
     Exited,
     /// Something else ended the start.
@@ -321,6 +421,14 @@ fn only_legacy(supported: &[String]) -> bool {
             .any(|version| wire::LEGACY_VERSIONS.contains(&version.as_str()))
 }
 
+/// The words of a refusal of `initialize`, for a message.
+fn refusal_words(refusal: ClientError) -> String {
+    match declined(Declined::Answered(refusal)) {
+        ClientError::NotStarted(words) => words,
+        other => other.to_string(),
+    }
+}
+
 /// What the client reports for a refused handshake.
 fn declined(declined: Declined) -> ClientError {
     match declined {
@@ -331,11 +439,14 @@ fn declined(declined: Declined) -> ClientError {
     }
 }
 
-/// Lets a connection go and ends its process in the background.
+/// Lets a connection go and ends its process in the background, inside a
+/// Tokio runtime; outside one, its input is closed and nothing more.
 fn retire(transport: &Arc<StdioTransport>, grace: Duration) {
     transport.abandon();
-    let process = Arc::clone(transport.process());
-    tokio::spawn(async move { process.shutdown(grace).await });
+    if tokio::runtime::Handle::try_current().is_ok() {
+        let process = Arc::clone(transport.process());
+        tokio::spawn(async move { process.shutdown(grace).await });
+    }
 }
 
 impl StdioClient {
@@ -363,9 +474,10 @@ impl StdioClient {
 
     /// Connects to a server whose era is known from an earlier start, as
     /// [`ServerInfo::era`] gave it: a legacy server is spoken to with
-    /// `initialize` at once, and probed after all if it refuses it; a
-    /// modern server is asked `server/discover`, which tells its
-    /// capabilities, as the probe does.
+    /// `initialize` at once, and started again and probed if it refuses it;
+    /// a modern server is asked `server/discover` (which tells its
+    /// capabilities) with no time of its own, and is never sent
+    /// `initialize`.
     ///
     /// # Errors
     ///
@@ -394,20 +506,31 @@ impl StdioClient {
             options: &options,
             respawn: &respawn,
             current: Mutex::new(None),
+            refusal: Mutex::new(None),
         };
         let first = start.link(pipes);
         let mut limit = Limit::new(&timer, "start", definition.start_timeout);
-        let agreed = match bounded(start.agree(first, known), Some(&mut limit), None).await {
+        // A start that fails ends its process in the background, by
+        // `Start`'s drop, and returns at once: within its limit.
+        let (link, agreed) = match bounded(start.agree(first, known), Some(&mut limit), None).await
+        {
             Ok(Ok(agreed)) => agreed,
-            Ok(Err(error)) | Err(error) => {
-                let current = lock(&start.current).take();
-                if let Some(transport) = current {
-                    transport.shutdown(options.shutdown_grace).await;
-                }
-                return Err(error);
+            Ok(Err(error)) => return Err(error),
+            Err(timed_out) => {
+                let refusal = lock(&start.refusal).take();
+                return Err(match refusal {
+                    Some(words) => ClientError::NotStarted(format!(
+                        "{words}, and started again it did not answer `server/discover` within \
+                         the start's {} s",
+                        definition.start_timeout.as_secs()
+                    )),
+                    None => timed_out,
+                });
             }
         };
-        let (link, agreed) = agreed;
+        // Handed to the client: no longer the start's to end.
+        lock(&start.current).take();
+        drop(start);
         let info = ServerInfo {
             era: agreed.era,
             version: agreed.version.clone(),
@@ -506,10 +629,6 @@ impl Drop for StdioClient {
         if let Some(listen) = &self.listen {
             listen.abort();
         }
-        if tokio::runtime::Handle::try_current().is_ok() {
-            retire(&self.transport, self.grace);
-        } else {
-            self.transport.abandon();
-        }
+        retire(&self.transport, self.grace);
     }
 }
