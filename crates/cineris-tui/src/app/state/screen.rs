@@ -221,8 +221,12 @@ impl App {
         let mut bottom = self.bottom(now, full, &boxes, live_len, column);
         // The search's row in the hint row's place, the cursor after what
         // is typed.
-        // Not over a dialog's own row: its keys are the dialog's.
-        if let Some(search) = view.search.as_ref().filter(|_| self.dialogs.is_empty())
+        // Not over a dialog's own row, nor the password dialog's: their
+        // keys are theirs.
+        if let Some(search) = view
+            .search
+            .as_ref()
+            .filter(|_| self.dialogs.is_empty() && !self.asking_password())
             && let Some(last) = bottom.lines.last_mut()
         {
             let (row, col) = self.search_row(search, full, view.worker.is_some());

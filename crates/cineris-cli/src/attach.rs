@@ -152,6 +152,7 @@ pub(crate) fn run(attach: Attach, name: &'static str) -> u8 {
                 restyle: Some(Box::new(interactive::restyle)),
                 export: Some(crate::export::writer(started_in)),
                 setup: None,
+                approvals: None,
             };
             (Box::new(link) as Box<dyn Link>, start)
         })

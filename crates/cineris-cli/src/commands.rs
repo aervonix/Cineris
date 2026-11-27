@@ -97,7 +97,7 @@ impl Context {
     }
 
     fn say(&self, text: &str) {
-        eprintln!("{}: {}", self.name, crate::visible(text));
+        crate::print_err(&format!("{}: {}\n", self.name, crate::visible(text)));
     }
 
     /// Says what went wrong and gives the exit code of its kind.
@@ -114,21 +114,6 @@ impl Context {
             eprintln!("{}", crate::visible(&diagnostic.render(&self.env)));
         }
     }
-}
-
-/// The person's key, from the password they type at the terminal, for a
-/// change of their approvals that is signed (the signed approvals step:
-/// `permissions trust`, `ext add`, `ext remove` of a pinned extension).
-///
-/// Not built yet: the command line's part of the step asks for the
-/// password here, at the controlling terminal. Until then each such change
-/// is refused, and nothing is written.
-pub(crate) fn person_key(_core: &Core) -> Result<cineris_core::signed::PersonKey, String> {
-    Err(
-        "this change is signed with your key, and signing at a terminal comes with the CLI \
-         part of the signed approvals step: nothing was written"
-            .to_owned(),
-    )
 }
 
 fn result(outcome: Result<Done, Done>) -> Done {
@@ -711,17 +696,48 @@ pub(crate) fn permissions(command: PermissionsCommand, name: &'static str) -> Do
                 crate::not_under_a_session(name, "permissions forget")?;
             }
         }
-        let core = context.core(&Common::default())?;
+        // The configuration first, for the `[terminal]` settings the
+        // password's prompt honours; the core is given it.
+        let loaded =
+            cineris_config::load(&LoadOptions::new(context.env.clone())).map_err(|failure| {
+                context.say(&failure.render(&context.env));
+                exit::USAGE
+            })?;
+        // `trust` asks for the approvals' password: at a terminal, the
+        // terminal is taken before the core starts, so that a password typed
+        // early is not echoed.
+        let mut taken = if matches!(command, PermissionsCommand::Trust { .. }) {
+            crate::approvals::Taken::take(crate::interactive::overrides(&loaded.settings.terminal))
+        } else {
+            None
+        };
+        let core = match context.start_core(&Common::default(), Some(loaded)) {
+            Ok(core) => core,
+            Err(error) => {
+                drop(taken);
+                return Err(context.fail(&error));
+            }
+        };
         let project = context.project(&core)?;
         let fail = |error: OpError| context.fail(&error);
         match command {
             PermissionsCommand::List => {
                 let trust = core.project_trust(&project).map_err(fail)?;
                 let approvals = core.stored_approvals(&project).map_err(fail)?;
+                // No password is typed here, so a signature is not checked:
+                // an entry that carries one is said to (the signed
+                // approvals step), rather than not trusted.
+                let carries = trust == TrustState::Untrusted
+                    && core
+                        .approvals_held(Some(&project))
+                        .is_ok_and(|held| held.project_carries);
                 let mut out = format!(
                     "{}: {}\n",
                     project.shown,
                     match trust {
+                        TrustState::Untrusted if carries =>
+                            "its trust carries your signature, not checked here: it counts in a \
+                             session opened with your approvals password",
                         TrustState::Untrusted => "not trusted",
                         TrustState::Trusted => "trusted",
                         TrustState::RulesChanged =>
@@ -769,10 +785,11 @@ pub(crate) fn permissions(command: PermissionsCommand, name: &'static str) -> Do
                 hooks: named_hooks,
             } => {
                 // Its extensions are shown as the trust question shows
-                // them, each with its hash, and approved only on a yes at a
-                // terminal or, with none to ask at, each one named with that
-                // hash (since step 28; by hash since the owner's answer to
-                // the early review of its third pull request).
+                // them, each with its hash, and approved on a yes at a
+                // terminal (since step 28). The trust is signed with the
+                // person's key: the password is asked for once what it
+                // trusts has been shown, and with no terminal nothing is
+                // trusted, whatever is named (the signed approvals step).
                 // What trusting it would turn the sandbox off with, said
                 // first, in the trust question's words.
                 for warning in core.project_sandbox_warnings(&project).map_err(fail)? {
@@ -782,6 +799,7 @@ pub(crate) fn permissions(command: PermissionsCommand, name: &'static str) -> Do
                 // Its hook commands, shown and approved with its
                 // extensions, as the trust question lists them (step 28).
                 let hooks = core.project_hook_commands(&project).map_err(fail)?;
+                let at_terminal = crate::approvals::at_terminal();
                 let mut approved = (Vec::new(), Vec::new());
                 if !extensions.is_empty() || !hooks.is_empty() {
                     let mut listing = String::new();
@@ -831,29 +849,24 @@ pub(crate) fn permissions(command: PermissionsCommand, name: &'static str) -> Do
                             return Err(exit::USAGE);
                         }
                     }
-                    let at_terminal = io::stdin().is_terminal() && io::stdout().is_terminal();
-                    if at_terminal {
-                        out!("Approve these {what} too? [y/N] ");
-                        let mut line = String::new();
-                        let yes = io::stdin().read_line(&mut line).is_ok()
-                            && matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes");
-                        if yes {
-                            approved = (extensions, hooks);
+                    if !at_terminal {
+                        context.say(&format!(
+                            "the project was not trusted: {}",
+                            crate::approvals::no_terminal(context.name, "permissions trust")
+                        ));
+                        return Err(exit::USAGE);
+                    }
+                    let yes = match taken.as_mut() {
+                        Some(taken) => taken.confirm(&format!("Approve these {what} too?")),
+                        None => {
+                            out!("Approve these {what} too? [y/N] ");
+                            let mut line = String::new();
+                            io::stdin().read_line(&mut line).is_ok()
+                                && matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes")
                         }
-                    } else {
-                        let is_named = |named: &[(String, String)], name: &str| {
-                            named.iter().any(|(one, _)| one == name)
-                        };
-                        approved = (
-                            extensions
-                                .into_iter()
-                                .filter(|one| is_named(&named_extensions, &one.name))
-                                .collect(),
-                            hooks
-                                .into_iter()
-                                .filter(|one| is_named(&named_hooks, &one.name))
-                                .collect(),
-                        );
+                    };
+                    if yes {
+                        approved = (extensions, hooks);
                     }
                     let left = shown_extensions.len() + shown_hooks.len()
                         - approved.0.len()
@@ -861,21 +874,37 @@ pub(crate) fn permissions(command: PermissionsCommand, name: &'static str) -> Do
                     if left > 0 {
                         context.say(&format!(
                             "{left} of the project's {what} were left unapproved: `{} \
-                             permissions trust` asks again{}",
+                             permissions trust` asks again",
                             context.name,
-                            if at_terminal {
-                                ""
-                            } else {
-                                ", or approves each with `--extension NAME=HASH` or `--hook \
-                                 NAME=HASH`, naming it with the hash it is shown with"
-                            }
                         ));
                     }
                 }
-                let key = person_key(&core).map_err(|why| {
-                    context.say(&format!("the project was not trusted: {why}"));
-                    exit::USAGE
-                })?;
+                if !at_terminal {
+                    context.say(&format!(
+                        "the project was not trusted: {}",
+                        crate::approvals::no_terminal(context.name, "permissions trust")
+                    ));
+                    return Err(exit::USAGE);
+                }
+                let key = match crate::approvals::key_at_terminal(
+                    &core,
+                    taken.as_mut(),
+                    &trust_signed(&project.shown, &approved.0, &approved.1),
+                ) {
+                    Ok(key) => key,
+                    Err(crate::approvals::NotSigned::Signal(code)) => return Err(code),
+                    Err(crate::approvals::NotSigned::Declined) => {
+                        context.say("the project was not trusted, and nothing was changed");
+                        return Err(exit::USAGE);
+                    }
+                    Err(crate::approvals::NotSigned::Refused(why)) => {
+                        context.say(&format!(
+                            "the project was not trusted, and nothing was changed: {why}"
+                        ));
+                        return Err(exit::USAGE);
+                    }
+                };
+                // The key goes when this arm ends, once it has signed.
                 let trusted = core
                     .trust_project_with(&project, &approved.0, &approved.1, &key)
                     .map_err(fail)?;
@@ -1074,6 +1103,39 @@ pub(crate) fn auth(command: AuthCommand, name: &'static str) -> Done {
             }
         }
     })())
+}
+
+/// What the password approves at `permissions trust`, under the prompt's
+/// sentence: the project, as it is now, and the extensions and hooks
+/// approved with it.
+fn trust_signed(
+    shown: &str,
+    extensions: &[cineris_core::ProjectExtension],
+    hooks: &[cineris_core::ProjectHookCommand],
+) -> Vec<String> {
+    let names = |names: Vec<&str>| {
+        names
+            .iter()
+            .map(|name| format!("`{}`", cineris_base::in_code(name)))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let mut lines = vec![format!(
+        "trusting {shown}, with its permission rules and settings as they are now"
+    )];
+    if !extensions.is_empty() {
+        lines.push(format!(
+            "its extensions {}, as shown",
+            names(extensions.iter().map(|one| one.name.as_str()).collect())
+        ));
+    }
+    if !hooks.is_empty() {
+        lines.push(format!(
+            "its hooks {}, as shown",
+            names(hooks.iter().map(|one| one.name.as_str()).collect())
+        ));
+    }
+    lines
 }
 
 /// Why a `NAME=HASH` named for `flag` is refused: a name not shown, or

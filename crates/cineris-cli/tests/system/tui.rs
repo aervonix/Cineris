@@ -32,7 +32,8 @@ use super::{CINERIS, LEFT_OUT, MODEL, Machine};
 /// The glyph sets the interface draws in: a test spells a glyph once, as the
 /// product's tables have it, and the screen may show either set (a Windows
 /// console gets the ASCII one).
-const GLYPHS: GlyphSets<'static, Glyphs> = GlyphSets::new(&[Glyphs::UNICODE, Glyphs::ASCII]);
+pub(crate) const GLYPHS: GlyphSets<'static, Glyphs> =
+    GlyphSets::new(&[Glyphs::UNICODE, Glyphs::ASCII]);
 
 /// The role of the shell the binary runs under: its options are the path
 /// of the file that says how.
@@ -119,6 +120,15 @@ pub fn child() {
     for (name, value) in spec["env"].as_object().expect("variables") {
         command.env(name, value.as_str().expect("a value"));
     }
+    // A process group of its own, which a console event can be sent to
+    // alone (`interrupt_the_binary`).
+    #[cfg(windows)]
+    if spec["group"].as_bool() == Some(true) {
+        use std::os::windows::process::CommandExt as _;
+        /// `CREATE_NEW_PROCESS_GROUP`.
+        const NEW_GROUP: u32 = 0x0000_0200;
+        command.creation_flags(NEW_GROUP);
+    }
     cineris_base::hook::started(command.get_program());
     // It lives through a hang-up on Unix, to say how the binary ended after
     // the console was closed under it.
@@ -135,8 +145,18 @@ impl Machine {
         self.tui_as(std::path::Path::new(CINERIS), arguments)
     }
 
+    /// As [`tui`](Self::tui), the binary in a process group of its own,
+    /// which [`interrupt_the_binary`] sends its signal to.
+    pub fn tui_grouped(&self, arguments: &[&str]) -> Session {
+        self.tui_spec(std::path::Path::new(CINERIS), arguments, true)
+    }
+
     /// As [`tui`](Self::tui), the binary at `program`: under another name.
     pub fn tui_as(&self, program: &std::path::Path, arguments: &[&str]) -> Session {
+        self.tui_spec(program, arguments, false)
+    }
+
+    fn tui_spec(&self, program: &std::path::Path, arguments: &[&str], group: bool) -> Session {
         let spec = self.home.join(format!(
             "tui-{}.json",
             std::time::SystemTime::now()
@@ -156,6 +176,7 @@ impl Machine {
                 "cwd": self.workspace.to_string_lossy(),
                 "args": arguments,
                 "env": env,
+                "group": group,
             })
             .to_string(),
         )
@@ -597,12 +618,26 @@ fn trust_asked(session: &mut Session) {
     wait_shows(session, TRUST_ANSWERS);
 }
 
+/// The trust question's yes is signed (the signed approvals step): `Trust
+/// it` asks for the approvals' password with what a yes changes, and the
+/// answer is the person's signature.
+const SIGN: &str = "Type your approvals password to approve:";
+
+/// Answers the trust question yes, and the password's prompt after it with
+/// the person's password.
+fn trust_it(session: &mut Session) {
+    session.answer_dialog(LIMIT, TRUST_ANSWERS, b"y", |t| t.shows(SIGN));
+    super::approvals::type_password(session, super::approvals::PASSWORD);
+}
+
 /// A project whose file sets a model is asked about it when its session
-/// opens; after `Trust it` the session runs on the project's model.
+/// opens; after `Trust it`, signed with the person's password, the session
+/// runs on the project's model.
 #[test]
 fn sys_a_project_is_trusted_from_its_dialog_and_its_model_is_used() {
     let phases = Phases::new("sys_a_project_is_trusted_from_its_dialog_and_its_model_is_used");
     let machine = Machine::new("tui_trust");
+    machine.person();
     machine.project_config("[model]\nmain = \"claude-opus-5-5\"\n");
     let mut session = machine.tui(&[]);
     first_frame_before_trust(&mut session, &phases);
@@ -616,11 +651,15 @@ fn sys_a_project_is_trusted_from_its_dialog_and_its_model_is_used() {
     assert!(!shown.contains(r"\\?\"), "{shown}");
     // The header's box names the model the session runs on (the dialog
     // named it too, outside any box).
-    session.answer_dialog(LIMIT, TRUST_ANSWERS, b"y", |t| {
+    trust_it(&mut session);
+    session.wait_for(LIMIT, "the project's model in the header", |t| {
         GLYPHS.history_has_row(t, |g| {
             RowPattern::starting_with(g.vertical).containing("claude-opus-5-5")
         })
     });
+    let stored = std::fs::read_to_string(machine.dirs().state.unwrap().join("trust.toml"))
+        .unwrap_or_default();
+    assert!(stored.contains("signature"), "{stored}");
 
     quit(&mut session, &phases);
 }
@@ -632,6 +671,7 @@ fn sys_a_project_is_trusted_from_its_dialog_and_its_model_is_used() {
 fn sys_a_projects_first_limit_is_listed_and_in_force_once_trusted() {
     let phases = Phases::new("sys_a_projects_first_limit_is_listed_and_in_force_once_trusted");
     let machine = Machine::new("tui_first_limit");
+    machine.person();
     machine.project_config("[limits.turn]\ntime = \"0s\"\n");
     machine.reply_text("Not sent.");
     let mut session = machine.tui(&[]);
@@ -642,7 +682,8 @@ fn sys_a_projects_first_limit_is_listed_and_in_force_once_trusted() {
     let shown = everything(&session);
     assert!(shown.contains("limits.turn.time"), "{shown}");
     assert!(shown.contains("first limit"), "{shown}");
-    session.answer_dialog(LIMIT, TRUST_ANSWERS, b"y", |t| t.shows(HEADER));
+    trust_it(&mut session);
+    session.wait_for(LIMIT, "the session's header", |t| t.shows(HEADER));
 
     phases.mark("the turn");
     type_text(&mut session, "go\r");
@@ -683,6 +724,7 @@ fn first_frame_before_trust(session: &mut Session, phases: &Phases) {
 fn sys_a_never_survives_a_restart_and_permissions_trust_clears_it() {
     let phases = Phases::new("sys_a_never_survives_a_restart_and_permissions_trust_clears_it");
     let machine = Machine::new("tui_never");
+    machine.person();
     machine.project_config("[model]\nmain = \"claude-opus-5-5\"\n");
     let header_with = |session: &mut Session, model: &str| {
         session.wait_for(LIMIT, "the header's model", |t| {
@@ -715,15 +757,20 @@ fn sys_a_never_survives_a_restart_and_permissions_trust_clears_it() {
     let listed = machine.run(&["permissions", "list"]);
     listed.expect_code(0);
     assert!(listed.stdout.contains("never trusted"), "{}", listed.stdout);
-    let trusted = machine.run(&["permissions", "trust"]);
+    // Trusted at a terminal, signed with the password; the next session
+    // has approvals to use, and asks for it before it opens.
+    let trusted = machine.signing(&["permissions", "trust"], &[], super::approvals::PASSWORD);
     trusted.expect_code(0);
     assert!(
-        trusted.stdout.contains("which you had said never to trust"),
+        trusted.screen.contains("which you had said never to trust"),
         "{}",
-        trusted.stdout
+        trusted.screen
     );
     let mut session = machine.tui(&[]);
-    first_frame(&mut session, &phases);
+    session.wait_for(LIMIT, "the approvals' password", |t| {
+        t.shows("to use this session's approvals")
+    });
+    super::approvals::type_password(&mut session, super::approvals::PASSWORD);
     header_with(&mut session, "claude-opus-5-5");
     quit(&mut session, &phases);
 
@@ -1030,6 +1077,60 @@ fn perf_start_to_first_frame_under_both_names() {
 /// Whether the prompt's box shows `text` typed, after the user's glyph.
 fn typed(screen: &cineris_testkit::VTerm, text: &str) -> bool {
     GLYPHS.shows(screen, |g| format!("{} {text}", g.user))
+}
+
+/// Sends the binary the role shell started for `session` what a terminal's
+/// interrupt sends it: SIGINT on Linux, by its process id; on Windows a
+/// Ctrl-Break event to its process group ([`Machine::tui_grouped`]), from
+/// inside its console, by the binary's own guard program, as the harness
+/// sends one to a command (`cineris_sandbox::tree`).
+pub(crate) fn interrupt_the_binary(session: &Session) {
+    #[cfg(target_os = "linux")]
+    {
+        let pid = child_status(session)
+            .and_then(|status| status_field(&status, "Pid:"))
+            .expect("the binary's process");
+        let sent = Command::new("kill")
+            .args(["-INT".to_owned(), pid])
+            .status()
+            .expect("kill");
+        assert!(sent.success(), "SIGINT was not sent");
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt as _;
+        /// `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`: no console of its
+        /// own, so that it can attach to the binary's, and a group the
+        /// event is not sent to.
+        const ALONE: u32 = 0x0000_0008 | 0x0000_0200;
+        let shell = session.pid();
+        let listed = Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                &format!(
+                    "(Get-CimInstance Win32_Process -Filter 'ParentProcessId={shell}' | \
+                     Where-Object Name -like 'cineris*').ProcessId"
+                ),
+            ])
+            .output()
+            .expect("powershell");
+        let pid = String::from_utf8_lossy(&listed.stdout).trim().to_owned();
+        assert!(
+            pid.chars().all(|c| c.is_ascii_digit()) && !pid.is_empty(),
+            "the binary's process: {pid:?}"
+        );
+        cineris_base::hook::started(std::ffi::OsStr::new(CINERIS));
+        let sent = Command::new(CINERIS)
+            .args(["__tree-guard", "cin-ctrl-break", &pid])
+            .creation_flags(ALONE)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .expect("the guard program");
+        assert!(sent.success(), "Ctrl-Break was not sent: {sent}");
+    }
 }
 
 /// A field of a process's `/proc` status: Linux only.

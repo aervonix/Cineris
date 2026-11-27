@@ -271,6 +271,22 @@ impl std::fmt::Debug for Step {
     }
 }
 
+/// What signs a yes to a trust question that proposes what it writes, as
+/// the person's front end signs it (since the signed approvals step): the
+/// signature, in hexadecimal, of the statement rebuilt from the proposal.
+/// The carrier's test gives it, with a key whose approvals its core has
+/// open: this crate cannot see the policy crate, which makes both.
+pub type Signer<'a> = &'a dyn Fn(&cineris_protocol::methods::ApprovalProposal) -> String;
+
+/// The scenarios whose trust question is answered yes, which a yes must
+/// sign: a carrier whose core cannot have its approvals opened (the real
+/// binary's `serve --stdio`, until the signed approvals' second pull
+/// request lets a server open them) runs every scenario but these.
+const SIGNING: [&str; 2] = [
+    "trusting the project when asked",
+    "a project's commands and extensions",
+];
+
 /// A scenario.
 #[derive(Debug)]
 pub struct Scenario {
@@ -282,6 +298,15 @@ pub struct Scenario {
     pub model: Vec<ServerReply>,
     /// The steps.
     pub steps: Vec<Step>,
+}
+
+impl Scenario {
+    /// Whether a step answers a trust question yes, which a [`Signer`]
+    /// signs.
+    #[must_use]
+    pub fn signs(&self) -> bool {
+        SIGNING.contains(&self.name)
+    }
 }
 
 fn call(make: impl Fn(&Ctx) -> Op + Send + Sync + 'static) -> Step {
@@ -863,18 +888,22 @@ pub struct Transcript(pub Vec<Value>);
 /// Runs `scenario` on `carrier`, with the scenario's workspace at
 /// `workspace` (as the server's machine names it). Each text of `known`
 /// (the scenario's folder, the scripted server's address) is written as
-/// the name given with it wherever it appears.
+/// the name given with it wherever it appears. A yes to a trust question
+/// that proposes what it writes is signed by `signer`, as the person's
+/// front end signs it.
 ///
 /// # Panics
 ///
 /// When a step cannot be taken: the connection ended, or an event's `seq`
 /// did not increase; when a read for an export does not say it masked;
-/// or when a fork asked to end before an item does not give it back.
+/// when a fork asked to end before an item does not give it back; or when
+/// a yes must be signed and there is no `signer`.
 pub fn run(
     scenario: &Scenario,
     carrier: &mut dyn Carrier,
     workspace: &str,
     known: &[(&str, &str)],
+    signer: Option<Signer<'_>>,
 ) -> Transcript {
     let mut ctx = Ctx {
         workspace: workspace.to_owned(),
@@ -985,7 +1014,19 @@ pub fn run(
             ),
             Step::Answer(make) => loop {
                 if let Some((_, Some((id, request)))) = take(carrier, &mut ctx, &mut kept) {
-                    carrier.respond(id, make(&request));
+                    let mut response = make(&request);
+                    if let (ServerResponse::Trust(answer), ServerRequest::Trust(asked)) =
+                        (&mut response, &request)
+                        && answer.trusted
+                        && answer.signature.is_none()
+                        && let Some(proposal) = &asked.proposal
+                    {
+                        let signer = signer.unwrap_or_else(|| {
+                            panic!("{}: a yes to sign, and no signer", scenario.name)
+                        });
+                        answer.signature = Some(signer(proposal));
+                    }
+                    carrier.respond(id, response);
                     break;
                 }
             },

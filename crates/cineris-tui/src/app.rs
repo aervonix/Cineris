@@ -32,8 +32,10 @@
 //! | `ready` | When a dialog or a panel takes keys: the rule they share (step 24) |
 //! | `panels` | The panels: the `Panel` kind, their layout in the live region, their focus and readiness (step 24) |
 //! | [`setup`] | What the first run asks of the program: the [`Setup`] trait and the worker its calls run on (step 25) |
+//! | [`approvals`] | What opens the person's approvals and signs the trust question's yes: the [`Approvals`] trait (the signed approvals step) |
 //! | `wording` | What an error says, and what to do next |
 
+pub mod approvals;
 pub(crate) mod dialog;
 mod files;
 mod items;
@@ -58,6 +60,7 @@ use cineris_protocol::{ErrorData, SessionId};
 pub use cineris_term::{Capabilities, ColorDepth, Overrides, Waker, signal_ended, signalled};
 use cineris_term::{Device, Event, Frame, Full, Inline, Scheduler, Screen, Terminal, Wake};
 
+pub use approvals::{Approvals, ApprovalsState};
 pub use link::{Inbound, Link, Ticket};
 pub use setup::Setup;
 pub use state::{App, Drained, Effect, Restyle, Restyled, SECOND_INTERRUPT};
@@ -230,6 +233,10 @@ pub struct Start {
     /// gives one when the user's configuration file does not exist; `cineris
     /// attach` never does.
     pub setup: Option<std::sync::Arc<dyn Setup>>,
+    /// The person's approvals (the signed approvals step): what opens them
+    /// when a session with approvals to use opens, and signs the trust
+    /// question's yes. `cineris attach` gives none.
+    pub approvals: Option<std::sync::Arc<dyn Approvals>>,
 }
 
 impl std::fmt::Debug for Start {
@@ -239,6 +246,7 @@ impl std::fmt::Debug for Start {
             .field("open", &self.open)
             .field("settings", &self.settings)
             .field("setup", &self.setup.is_some())
+            .field("approvals", &self.approvals.is_some())
             .finish_non_exhaustive()
     }
 }

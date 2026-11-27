@@ -34,6 +34,7 @@ use cineris_policy::{Checked, PinStore, TrustStore};
 use cineris_protocol::ids::Timestamp;
 
 use crate::core::Core;
+use crate::manage::Project;
 
 /// The key a core's sessions check signatures with, once the person has
 /// opened their approvals.
@@ -164,7 +165,112 @@ pub struct ResetReport {
     pub projects: usize,
 }
 
+/// What the key file and the stores hold of the person's approvals: what
+/// **carries** a signature, never what counts ([`Core::approvals_held`]).
+/// Nothing is checked to make it: the stores are read with no key, so that
+/// an entry with a signature is told from one without, whosever the
+/// signature is and whatever it is over. It holds no secret and no key a
+/// session could check with: the key file's fingerprint and its time only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApprovalsHeld {
+    /// The key file: none, what it says, or why it could not be read.
+    pub key: HeldKey,
+    /// How many pins the user's `pins.toml` holds, signed or not.
+    pub pins: usize,
+    /// Whether the user's pins carry a signature (one for the whole set).
+    pub pins_carry_signature: bool,
+    /// How many projects' entries in `trust.toml` carry a signature.
+    pub projects_carrying: usize,
+    /// How many carry none: written by an older version, or after a reset.
+    pub projects_not_carrying: usize,
+    /// Whether the entry of the project asked about carries a signature.
+    pub project_carries: bool,
+}
+
+/// The key file, as [`ApprovalsHeld`] says it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HeldKey {
+    /// No key has been set up.
+    None,
+    /// A key is set up: its fingerprint and when it was made.
+    Made {
+        /// The first bytes of the public key the file is of, in
+        /// hexadecimal (`KeyFile::fingerprint`).
+        fingerprint: String,
+        /// When the file says it was made.
+        made_at: Timestamp,
+    },
+    /// The file could not be read or is not understood: why.
+    Unreadable(String),
+}
+
+impl ApprovalsHeld {
+    /// Whether a session opened in the project asked about has approvals to
+    /// use: a key is set up, and the user's pins or the project's entry
+    /// carry a signature. It decides only whether the person is asked for
+    /// their password when the session opens: it opens nothing, and nothing
+    /// it says counts until the typed password's key checks it.
+    #[must_use]
+    pub fn to_use(&self) -> bool {
+        matches!(self.key, HeldKey::Made { .. })
+            && (self.pins_carry_signature || self.project_carries)
+    }
+}
+
 impl Core {
+    /// What the key file and the stores hold of the person's approvals, and
+    /// whether `project`'s entry carries a signature: one read of each of
+    /// the three files, which checks nothing, opens nothing and writes
+    /// nothing (`cineris approvals status`, and the application's question
+    /// whether to ask for the password when a session opens). See
+    /// [`ApprovalsHeld`]: a store's entry read with no key stands as
+    /// `Checked::NoKey` when it carries a signature and `Checked::Unsigned`
+    /// when it carries none.
+    ///
+    /// # Errors
+    ///
+    /// When there is no state directory, or a store cannot be read or is
+    /// not understood. A key file that cannot be read is said in
+    /// [`HeldKey::Unreadable`] instead.
+    pub fn approvals_held(&self, project: Option<&Project>) -> Result<ApprovalsHeld, KeyRefusal> {
+        let state = self
+            .state_dir()
+            .ok_or_else(|| KeyRefusal::Failed("no state directory is known".to_owned()))?;
+        let key = match self.approval_key() {
+            Ok(None) => HeldKey::None,
+            Ok(Some(file)) => HeldKey::Made {
+                fingerprint: file.fingerprint(),
+                made_at: file.made_at().clone(),
+            },
+            Err(why) => HeldKey::Unreadable(why.to_string()),
+        };
+        let clock = Arc::clone(&self.inner.options.clock);
+        let pins = PinStore::new(state.pins_file(), Arc::clone(&clock))
+            .pins(None)
+            .map_err(|failure| KeyRefusal::Failed(failure.to_string()))?;
+        let projects = TrustStore::new(state.trust_file(), clock)
+            .list(None)
+            .map_err(|failure| KeyRefusal::Failed(failure.to_string()))?;
+        // Read with no key: a signature is `NoKey`, none is `Unsigned`.
+        let carries = |checked: Checked| checked == Checked::NoKey;
+        let projects_carrying = projects
+            .iter()
+            .filter(|(_, _, checked)| carries(*checked))
+            .count();
+        Ok(ApprovalsHeld {
+            key,
+            pins: pins.held().len(),
+            pins_carry_signature: carries(pins.checked()),
+            projects_carrying,
+            projects_not_carrying: projects.len() - projects_carrying,
+            project_carries: project.is_some_and(|project| {
+                projects
+                    .iter()
+                    .any(|(key, _, checked)| *key == project.key && carries(*checked))
+            }),
+        })
+    }
+
     /// The key file's place in the state directory. `None` with no state
     /// directory.
     #[must_use]

@@ -8,7 +8,7 @@ use std::process::Stdio;
 
 use serde_json::json;
 
-use crate::{Machine, OTHER_MODEL, jsonl, shown, shown_hash};
+use crate::{Machine, OTHER_MODEL, jsonl, shown};
 
 #[test]
 fn sys_exit_0_in_each_format_with_only_the_result_on_standard_output() {
@@ -205,10 +205,15 @@ fn sys_exit_4_5_and_8_for_the_provider_the_model_and_the_context() {
 /// Under `--fail-on-denial`, an extension's host call nobody can answer
 /// stops its turn from inside its tool's run. When that call was the last
 /// of its response the model is not asked again: the turn itself ends
-/// `denied`, and the outcome and exit code 6 agree with it.
+/// `denied`, and the outcome and exit code 6 agree with it. The project's
+/// extension is approved with its trust, signed with the person's
+/// password, and the run is at a terminal, where it asks for the password
+/// to use it (the signed approvals step).
 #[test]
 fn sys_exit_6_when_an_extensions_host_call_stops_the_last_call_under_fail_on_denial() {
-    let machine = Machine::new("sys_exit_6_host_call");
+    let mut machine = Machine::new("sys_exit_6_host_call");
+    machine.quick_dialogs();
+    machine.person();
     let folder = machine.workspace.join(".cineris/extensions/probe");
     std::fs::create_dir_all(&folder).unwrap();
     std::fs::write(
@@ -226,10 +231,12 @@ fn sys_exit_6_when_an_extensions_host_call_stops_the_last_call_under_fail_on_den
          'went on' } });\n",
     )
     .unwrap();
-    let listed = machine.run(&["permissions", "trust"]);
-    let named = format!("probe={}", shown_hash(&listed.stdout, "`probe` in"));
     machine
-        .run(&["permissions", "trust", "--extension", &named])
+        .signing(
+            &["permissions", "trust"],
+            &["y"],
+            crate::approvals::PASSWORD,
+        )
         .expect_code(0);
 
     machine.reply_tool(
@@ -239,7 +246,7 @@ fn sys_exit_6_when_an_extensions_host_call_stops_the_last_call_under_fail_on_den
     );
     // What the model would say if it were asked again.
     machine.reply_text("Done anyway.");
-    let run = machine.run(&[
+    let mut session = machine.tui(&[
         "-p",
         "set up CI",
         "--output",
@@ -248,7 +255,13 @@ fn sys_exit_6_when_an_extensions_host_call_stops_the_last_call_under_fail_on_den
         "--allow",
         "ext probe/*",
     ]);
-    let record = run.expect_code(6).json();
+    session.wait_for(crate::tui::LIMIT, "the approvals' password", |t| {
+        t.shows("to use this session's approvals")
+    });
+    crate::approvals::type_password(&mut session, crate::approvals::PASSWORD);
+    let run = crate::approvals::ended(&mut session);
+    run.expect_code(6);
+    let record = run.json();
     assert_eq!(record["outcome"], "denied", "{record}");
     assert_eq!(record["error"]["code"], "permission_denied", "{record}");
     assert_eq!(

@@ -12,6 +12,7 @@
 //! - the subcommands that approve, trust, keep credentials or answer:
 //!   `ext add|remove|disable`, `permissions trust|untrust|revoke|forget`,
 //!   `project accept|add|edit|promote|disable|delete`, `auth login|logout`,
+//!   `approvals setup|reset` (the password approvals are signed with),
 //!   `stats reset`, `setup`, `serve` and `attach`; and the internal
 //!   `__sandbox` and `__tree-guard`;
 //! - the application itself (no subcommand, not headless, not the help or
@@ -306,11 +307,12 @@ const RUN_WORDS: usize = 128;
 const MENTIONS: usize = 64;
 
 /// The subcommands, by their first word.
-const TOPICS: [&str; 12] = [
+const TOPICS: [&str; 13] = [
     "sessions",
     "config",
     "permissions",
     "auth",
+    "approvals",
     "models",
     "usage",
     "stats",
@@ -323,7 +325,7 @@ const TOPICS: [&str; 12] = [
 
 /// The subcommands that approve, trust or answer: all of a topic's actions
 /// (`None`), or those named. A topic with actions not named here only reads.
-const APPROVING: [(&str, Option<&[&str]>); 8] = [
+const APPROVING: [(&str, Option<&[&str]>); 9] = [
     ("ext", Some(&["add", "remove", "disable"])),
     (
         "permissions",
@@ -334,6 +336,9 @@ const APPROVING: [(&str, Option<&[&str]>); 8] = [
         Some(&["accept", "add", "edit", "promote", "disable", "delete"]),
     ),
     ("auth", Some(&["login", "logout"])),
+    // Setting the password every approval is signed with (the signed
+    // approvals step); `status` only reads.
+    ("approvals", Some(&["setup", "reset"])),
     ("stats", Some(&["reset"])),
     ("setup", None),
     ("serve", None),
@@ -342,11 +347,12 @@ const APPROVING: [(&str, Option<&[&str]>); 8] = [
 
 /// The topics whose action is the next word: with that word not known, so
 /// is what runs.
-const WITH_ACTIONS: [&str; 7] = [
+const WITH_ACTIONS: [&str; 8] = [
     "sessions",
     "config",
     "permissions",
     "auth",
+    "approvals",
     "stats",
     "project",
     "ext",

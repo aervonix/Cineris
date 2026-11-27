@@ -725,3 +725,67 @@ fn a_reset_lifts_no_extension_gate() {
     assert!(!offered, "the reset approved it");
     assert_eq!(outcome, "denied", "the reset lifted its gate: {text}");
 }
+
+// ------------------------------------------------------------ what is held
+
+/// What `cineris approvals status` and the application's question at a
+/// session's opening read: what carries a signature, whosever it is, and
+/// never what counts. It opens nothing: a core whose approvals are closed
+/// stays closed.
+#[test]
+fn what_carries_a_signature_is_counted_and_nothing_is_opened() {
+    use cineris_core::HeldKey;
+    use cineris_protocol::methods::TrustResourceKind;
+    let world = World::new("signed_held", []);
+    let (pins, trust) = stores(&world);
+    let core = world.closed_core();
+    let project = core.project(&world.workspace).unwrap();
+    // Nothing yet: no key, no pins, no entries.
+    let held = core.approvals_held(Some(&project)).unwrap();
+    assert_eq!(held.key, HeldKey::None);
+    assert_eq!((held.pins, held.pins_carry_signature), (0, false));
+    assert_eq!((held.projects_carrying, held.projects_not_carrying), (0, 0));
+    assert!(!held.project_carries && !held.to_use());
+    // A key file, the user's pins and this project's entry signed by the
+    // person, and another project's entry signed by another key: each
+    // carries a signature, whatever key it is by.
+    let state = cineris_config::StateDir::from_dirs(&world.dirs()).unwrap();
+    let key_file = state.root().join(cineris_core::signed::KEY_FILE);
+    crate::person()
+        .key_file()
+        .write(&key_file, &world.clock)
+        .unwrap();
+    let tool = cineris_policy::Definition::of(TrustResourceKind::Hook, "probe", ["a"]);
+    crate::person().pin(&pins, &tool);
+    crate::person().trust(&trust, &project.key, &project.shown, &[], false);
+    let elsewhere = cineris_protocol::ProjectKey::new("elsewhere");
+    crate::model_key().trust(&trust, &elsewhere, "/elsewhere", &[], false);
+    let held = core.approvals_held(Some(&project)).unwrap();
+    let fingerprint = crate::person().key_file().fingerprint();
+    assert!(
+        matches!(&held.key, HeldKey::Made { fingerprint: made, .. } if *made == fingerprint),
+        "{:?}",
+        held.key
+    );
+    assert_eq!((held.pins, held.pins_carry_signature), (1, true));
+    assert_eq!((held.projects_carrying, held.projects_not_carrying), (2, 0));
+    assert!(held.project_carries && held.to_use());
+    // Another project's entry is not this one's.
+    let other = core.approvals_held(None).unwrap();
+    assert!(!other.project_carries);
+    // A reset's way: the signatures taken off. Nothing carries one, and a
+    // session has nothing to ask the password for.
+    pins.strip_signature().unwrap();
+    trust.strip_signatures().unwrap();
+    let held = core.approvals_held(Some(&project)).unwrap();
+    assert_eq!((held.pins, held.pins_carry_signature), (1, false));
+    assert_eq!((held.projects_carrying, held.projects_not_carrying), (0, 2));
+    assert!(!held.project_carries && !held.to_use());
+    assert!(!core.approvals_open(), "a read opened the approvals");
+    // A key file that cannot be read is said, and the stores still are.
+    std::fs::write(&key_file, "nonsense").unwrap();
+    let held = core.approvals_held(None).unwrap();
+    assert!(matches!(held.key, HeldKey::Unreadable(_)), "{:?}", held.key);
+    assert_eq!(held.pins, 1);
+    assert!(!held.to_use());
+}

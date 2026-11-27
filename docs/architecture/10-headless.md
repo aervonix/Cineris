@@ -97,6 +97,16 @@ Nothing can be asked in headless mode. A tool call that would need approval is d
 - **A write of a protected path needs an answer at every mode below `unrestricted`,** `autonomous` included: git's hooks and configuration, `.cineris/`, shell start-up files, CI configuration, registry settings, and files that look like secrets ([06-permissions-and-sandbox.md](06-permissions-and-sandbox.md), "Protected paths"). In a headless run that is a denial, unless an allow rule names the path: `--allow 'write .github/workflows/**'`.
 - **`--permission-mode unrestricted` asks nothing,** protected paths included, and is meant for disposable environments. Two things still hold there: a `deny` or `ask` rule the user wrote (an `ask` is a denial where nobody can be asked), and the built-in protection of the harness's own credentials, trust and approvals.
 
+### The person's approvals
+
+Since the signed approvals step, what the person approved and the harness keeps (a project's trust, the extensions they added) counts only checked with the key their approvals password makes, typed by them ([06-permissions-and-sandbox.md](06-permissions-and-sandbox.md), "Project trust"). A headless run has them only where it can ask for that password:
+
+- **At a terminal** (standard input and standard output both terminals), the run takes the terminal before anything slow, so that a password typed early is not echoed by the terminal's line mode. Once its core has started, and when something carries a signature to use (a key is set up, and the user's pins or the project's entry carry one), it asks for the password with the prompt of [09-tui.md](09-tui.md), "The approvals password" (*unlock*), before it opens the session: the person's opens the approvals, and the session uses them; one that is not theirs asks again, three times in all. `Esc` goes on without them, and standard error says so once. The terminal is put back before the session opens; the run watches for signals only from then, so that the prompt's own handlers never outlive it (a signal while it asks puts the terminal back and ends the run as the signal's own end does).
+- **With no terminal** nothing is asked, the run uses no approvals, and, when it had some to use, standard error says once: "no terminal to ask your approvals' password at: your extensions and this project's trust are not used in this run". Under the password anchor this holds in every later pull request too: what a script or CI needs it states on its own command line (`--allow`, `--permission-mode`, `--trust-project`), which is its own statement and no approval of the person's.
+- **A run under a session's command** has no person, and asks nothing.
+- **`--trust-project`** stays what it was: trust for the run alone, stored nowhere and signing nothing; it loads no extension that is not approved.
+- **No approval is given in a headless run.** The subcommands that approve ask for the password at a terminal, and with none refuse, naming the command to run at one: `--hash`, `--extension NAME=HASH` and `--hook NAME=HASH` check what is shown, and are not approvals on their own.
+
 ## Exit codes
 
 One table, shared by all output formats. Pi's print and JSON modes disagree on exit status, and Opencode's run mode has only 0 and 1 (see [../reference-notes.md](../reference-notes.md)); a script should be able to branch on the code alone.
@@ -169,6 +179,6 @@ Headless runs write session logs like any other run, so `--continue` works betwe
 
 ## What headless mode does not do
 
-- It does not read a terminal, draw anything or wait for input other than the prompt.
+- It does not read a terminal, draw anything or wait for input other than the prompt, but for the approvals' password at a terminal ("The person's approvals", above).
 - It does not load TUI code paths, so start-up is as small as the core allows. The start-up budget in [../performance-budgets.md](../performance-budgets.md) applies.
-- It does not prompt for project trust. Untrusted project resources are skipped and listed on standard error.
+- It does not prompt for project trust. Untrusted project resources are skipped and listed on standard error. The one thing it asks, at a terminal only, is the approvals' password ("The person's approvals", above).

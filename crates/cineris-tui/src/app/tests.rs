@@ -3463,3 +3463,157 @@ fn an_app_frame_snapshot_is_drawn_at_the_size_it_is_asked_for() {
     assert!(narrow.contains("-- committed: 6 lines\n"), "{narrow}");
     assert!(wide.contains("-- committed: 0 lines\n"), "{wide}");
 }
+
+/// A [`Played`] terminal that also keeps each change of its exclusive mode.
+struct Closing {
+    played: Played,
+    modes: Arc<Mutex<Vec<bool>>>,
+}
+
+impl cineris_term::Device for Closing {
+    fn size(&self) -> std::io::Result<(u16, u16)> {
+        self.played.size()
+    }
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+        self.played.write(bytes)
+    }
+    fn wait(
+        &mut self,
+        timeout: Option<Duration>,
+        into: &mut Vec<u8>,
+    ) -> std::io::Result<cineris_term::Ready> {
+        self.played.wait(timeout, into)
+    }
+    fn waker(&self) -> cineris_term::Waker {
+        self.played.waker()
+    }
+    fn suspend(&mut self) {
+        self.played.suspend();
+    }
+    fn leave(&mut self) {}
+    fn now(&self) -> Instant {
+        self.played.now()
+    }
+    fn exclusive(&mut self, on: bool) -> std::io::Result<()> {
+        self.modes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(on);
+        Ok(())
+    }
+}
+
+/// A played terminal of `steps`, from `base`, and what it writes.
+fn played(steps: Vec<(cineris_term::Ready, Vec<u8>)>, base: Instant) -> Played {
+    Played {
+        steps: steps.into_iter().collect(),
+        written: Arc::new(Mutex::new(Vec::new())),
+        waits: Arc::new(Mutex::new(Vec::new())),
+        base,
+        elapsed: Duration::ZERO,
+    }
+}
+
+/// Through the loop (the signed approvals): while the approvals' password
+/// is asked, the terminal is closed to other programs, from the frame that
+/// first draws the dialog until the frame after it has gone; and open again
+/// after.
+#[test]
+fn the_loop_closes_the_terminal_to_others_while_the_password_is_asked() {
+    use cineris_term::Ready;
+    let base = Instant::now();
+    let (mut app, link) = app(base);
+    link.give(Inbound::Done(
+        Ticket(1),
+        Ok(OpResult::SessionNew(SessionResult {
+            session: session().build(),
+        })),
+    ));
+    app.ask_password(
+        crate::secret::PasswordAsk::new(crate::secret::Purpose::Sign, vec!["x".to_owned()]),
+        |_, _| {},
+    );
+    let modes = Arc::new(Mutex::new(Vec::new()));
+    let device = Closing {
+        // The core's waker; then `Ctrl+C`, which answers the dialog with
+        // nothing whenever it comes.
+        played: played(
+            vec![(Ready::Woken, Vec::new()), (Ready::Input, b"\x03".to_vec())],
+            base,
+        ),
+        modes: Arc::clone(&modes),
+    };
+    let mut terminal = cineris_term::Terminal::with_device(device, caps()).expect("the terminal");
+    let ended = run(&mut terminal, &mut app);
+    assert!(
+        matches!(&ended, Err(error) if error.to_string() == "the script has ended"),
+        "{ended:?}"
+    );
+    assert!(!app.asking_password());
+    assert_eq!(
+        *modes.lock().unwrap_or_else(PoisonError::into_inner),
+        [true, false]
+    );
+    assert!(!terminal.is_exclusive());
+}
+
+/// Through the loop (the signed approvals): a paste the loop reads is
+/// written over once it is done with, where it reads keys between frames
+/// and where it reads them between batches of what came from the core.
+#[test]
+fn the_loop_writes_over_each_paste_it_reads() {
+    use cineris_term::Ready;
+    let wiped = || crate::secret::password::PASTES_WIPED.with(std::cell::Cell::get);
+    // Between frames.
+    let base = Instant::now();
+    let (mut app, link) = app(base);
+    link.give(Inbound::Done(
+        Ticket(1),
+        Ok(OpResult::SessionNew(SessionResult {
+            session: session().build(),
+        })),
+    ));
+    let mut terminal = cineris_term::Terminal::with_device(
+        played(
+            vec![
+                (Ready::Woken, Vec::new()),
+                (Ready::Input, b"\x1b[200~pasted\x1b[201~".to_vec()),
+            ],
+            base,
+        ),
+        caps(),
+    )
+    .expect("the terminal");
+    let before = wiped();
+    let _ = run(&mut terminal, &mut app);
+    assert_eq!(wiped() - before, 1, "between frames");
+    assert_eq!(app.input().editor().expanded(), "pasted");
+
+    // Between batches: more came from the core than one batch takes.
+    let (mut app, link) = crate::testkit::app(base);
+    link.give(Inbound::Done(
+        Ticket(1),
+        Ok(OpResult::SessionNew(SessionResult {
+            session: session().build(),
+        })),
+    ));
+    for _ in 0..(crate::app::BATCH * 3) {
+        link.give(event(Event::TurnStarted(
+            cineris_protocol::event::TurnStarted {},
+        )));
+    }
+    let mut terminal = cineris_term::Terminal::with_device(
+        played(
+            vec![
+                (Ready::Woken, Vec::new()),
+                (Ready::Input, b"\x1b[200~between\x1b[201~".to_vec()),
+            ],
+            base,
+        ),
+        caps(),
+    )
+    .expect("the terminal");
+    let before = wiped();
+    let _ = run(&mut terminal, &mut app);
+    assert_eq!(wiped() - before, 1, "between batches");
+}

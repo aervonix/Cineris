@@ -26,6 +26,7 @@
     reason = "the demo is the example's, and this binary uses part of it"
 )]
 mod demo;
+mod exclusive;
 mod full;
 mod handoff;
 mod perf;
@@ -78,4 +79,5 @@ fn child_entry() {
     }
     signals::enter();
     handoff::enter();
+    exclusive::enter();
 }

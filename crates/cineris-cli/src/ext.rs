@@ -3,13 +3,25 @@
 //! in step 28: managing extensions").
 //!
 //! The core decides; this prints and asks. A question is put only at a
-//! terminal, as `cineris permissions trust` puts its own: a yes (`y` or
-//! `yes`) approves, anything else, an empty line included, does not. With
-//! no terminal to ask at, only `--hash H` approves, and only what has that
-//! hash: what was shown (the owner's answer to the early review of step
-//! 28's third pull request, which took `--yes` away: a bare yes named
-//! nothing, and the hash names what was shown). A `--hash` given at a
-//! terminal must be the hash too, and the question is still asked.
+//! terminal, as `cineris permissions trust` puts its own.
+//!
+//! - **What is signed** (since the signed approvals step): `add`, and
+//!   `remove` of a pinned extension, change the person's pins, which are
+//!   signed with the key their password makes. After what it approves is
+//!   shown, the password is asked for at the terminal, with lines that
+//!   name it (`crate::approvals::key_at_terminal`): `Enter` is the yes,
+//!   `Esc` the no, and with no key set up the yes sets one up. With no
+//!   terminal there is no approval: `--hash` stays a check of what is
+//!   shown, and is not enough on its own (the owner accepted that scripted
+//!   approval stops working without a person).
+//! - **What is not signed:** `disable`, which writes the user's
+//!   configuration, and `remove` of a folder nothing pins. A yes (`y` or
+//!   `yes`) at a terminal does it, anything else, an empty line included,
+//!   does not; with no terminal to ask at, only `--hash H`, the hash of
+//!   what was shown (the owner's answer to the early review of step 28's
+//!   third pull request, which took `--yes` away).
+//! - **A `--hash` given** must be the hash of what is shown wherever it is
+//!   given: otherwise nothing is asked or done.
 //!
 //! **Under a session's command** each of `add`, `remove` and `disable` is
 //! refused before anything is read (`cineris_sandbox::session`).
@@ -41,7 +53,7 @@ use crate::exit;
 type Done = u8;
 
 fn say(name: &str, text: &str) {
-    eprintln!("{name}: {}", crate::visible(text));
+    crate::print_err(&format!("{name}: {}\n", crate::visible(text)));
 }
 
 fn out(text: &str) {
@@ -58,13 +70,38 @@ fn fail(name: &str, error: &OpError) -> Done {
 
 /// A core as the other subcommands start one, with the launcher a session
 /// is given, so that what an extension's programs are said to be able to do
-/// is what a session would let them do.
-fn core(name: &str) -> Result<Core, Done> {
-    let mut options = CoreOptions::new(Env::from_process(), Arc::new(TokioTimer));
+/// is what a session would let them do. With `asks`, at a terminal, the
+/// terminal for the approvals' password too, taken before the core starts
+/// (and before anything else slow), with the `[terminal]` settings of the
+/// configuration the core is given: a password typed early is not echoed
+/// (`crate::approvals::Taken`).
+fn core(name: &str, asks: bool) -> Result<(Core, Option<crate::approvals::Taken>), Done> {
+    let env = Env::from_process();
+    let loaded = cineris_config::load(&cineris_config::LoadOptions::new(env.clone())).map_err(
+        |failure| {
+            say(name, &failure.render(&env));
+            exit::USAGE
+        },
+    )?;
+    let taken = if asks {
+        crate::approvals::Taken::take(crate::interactive::overrides(&loaded.settings.terminal))
+    } else {
+        None
+    };
+    let mut options = CoreOptions::new(env, Arc::new(TokioTimer));
+    options.loaded = Some(loaded);
     options.launcher = std::env::current_exe()
         .ok()
         .map(|exe| (exe, vec![std::ffi::OsString::from(crate::args::SANDBOX)]));
-    Core::start(options).map_err(|error| fail(name, &error))
+    cineris_base::hook::hold_core();
+    match Core::start(options) {
+        Ok(core) => Ok((core, taken)),
+        Err(error) => {
+            // Put back first, so that what is said is said as usual.
+            drop(taken);
+            Err(fail(name, &error))
+        }
+    }
 }
 
 /// The project of the working directory, as a session's would be.
@@ -121,14 +158,23 @@ fn approved(
     }
 }
 
-/// Asks `question` at the terminal, or takes the hash given where there is
-/// none; and whether there was a terminal.
-fn asked(question: &str, given: Option<&str>, shown: Option<&str>) -> (Answer, bool) {
+/// Asks `question` at the terminal, on the one taken for the approvals'
+/// password when there is one (raw, so asked by keys), or takes the hash
+/// given where there is none; and whether there was a terminal.
+fn asked(
+    question: &str,
+    given: Option<&str>,
+    shown: Option<&str>,
+    taken: Option<&mut crate::approvals::Taken>,
+) -> (Answer, bool) {
     let at_terminal = io::stdin().is_terminal() && io::stdout().is_terminal();
-    let answer = approved(at_terminal, given, shown, || {
-        out(&format!("{question} [y/N] "));
-        let mut line = String::new();
-        io::stdin().read_line(&mut line).map(|_| line)
+    let answer = approved(at_terminal, given, shown, || match taken {
+        Some(taken) => Ok(if taken.confirm(question) { "y" } else { "n" }.to_owned()),
+        None => {
+            out(&format!("{question} [y/N] "));
+            let mut line = String::new();
+            io::stdin().read_line(&mut line).map(|_| line)
+        }
     });
     (answer, at_terminal)
 }
@@ -158,6 +204,86 @@ fn not_done(
              shown"
         ),
         (_, None) => format!("{what}: with no terminal to ask at, nothing can say yes to it"),
+    }
+}
+
+/// Whether a signed change of what was shown with the hash `shown` is
+/// asked for: a `--hash` given must be that hash, wherever it is given;
+/// then the password is asked for at a terminal, and with none there is no
+/// approval, whatever hash was given.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Signing {
+    /// Ask for the password.
+    Ask,
+    /// The `--hash` given is not the hash of what is shown, or there is
+    /// none to name it by: nothing is asked or done.
+    HashDiffers,
+    /// No terminal to ask at: nothing is approved.
+    NoTerminal,
+}
+
+fn signing(at_terminal: bool, given: Option<&str>, shown: Option<&str>) -> Signing {
+    match (given, shown) {
+        (Some(given), Some(shown)) if !given.trim().eq_ignore_ascii_case(shown) => {
+            Signing::HashDiffers
+        }
+        (Some(_), None) => Signing::HashDiffers,
+        _ if at_terminal => Signing::Ask,
+        _ => Signing::NoTerminal,
+    }
+}
+
+/// What a signed change is of: the hash a `--hash` given must be, the
+/// lines that name it under the prompt's sentence, what is said when it is
+/// not done, and the command line to run at a terminal.
+struct ToSign<'a> {
+    given: Option<&'a str>,
+    shown: Option<&'a str>,
+    lines: &'a [String],
+    not_done: &'a str,
+    command: &'a str,
+}
+
+/// The person's key for a signed change, after what it approves was shown.
+/// `Err` with the exit code, said.
+fn signed(
+    name: &str,
+    core: &Core,
+    taken: Option<&mut crate::approvals::Taken>,
+    change: &ToSign<'_>,
+) -> Result<cineris_core::signed::PersonKey, Done> {
+    use crate::approvals::NotSigned;
+    let what = change.not_done;
+    match signing(crate::approvals::at_terminal(), change.given, change.shown) {
+        Signing::HashDiffers => {
+            say(
+                name,
+                &not_done(Answer::HashDiffers, true, change.given, change.shown, what),
+            );
+            Err(exit::USAGE)
+        }
+        Signing::NoTerminal => {
+            say(
+                name,
+                &format!(
+                    "{what}: {}",
+                    crate::approvals::no_terminal(name, change.command)
+                ),
+            );
+            Err(exit::USAGE)
+        }
+        Signing::Ask => match crate::approvals::key_at_terminal(core, taken, change.lines) {
+            Ok(key) => Ok(key),
+            Err(NotSigned::Declined) => {
+                say(name, what);
+                Err(exit::USAGE)
+            }
+            Err(NotSigned::Refused(why)) => {
+                say(name, &format!("{what}: {why}"));
+                Err(exit::USAGE)
+            }
+            Err(NotSigned::Signal(code)) => Err(code),
+        },
     }
 }
 
@@ -197,7 +323,10 @@ pub(crate) fn ext(command: ExtCommand, name: &'static str) -> Done {
             ExtCommand::Disable { .. } => crate::not_under_a_session(name, "ext disable")?,
             ExtCommand::List | ExtCommand::Inspect { .. } => {}
         }
-        let core = core(name)?;
+        // `add` and `remove` may ask for the approvals' password: the
+        // terminal is taken before the core starts.
+        let asks = matches!(command, ExtCommand::Add { .. } | ExtCommand::Remove { .. });
+        let (core, mut taken) = core(name, asks)?;
         let project = project(name, &core)?;
         let fail = |error: OpError| fail(name, &error);
         match command {
@@ -238,6 +367,7 @@ pub(crate) fn ext(command: ExtCommand, name: &'static str) -> Done {
                         &format!("Turn `{}` off, letting its gates go?", in_code(&wanted)),
                         hash.as_deref(),
                         shown.as_deref(),
+                        None,
                     );
                     if answer != Answer::Yes {
                         say(
@@ -277,43 +407,52 @@ pub(crate) fn ext(command: ExtCommand, name: &'static str) -> Done {
                 // Its pin and its folder go on one yes that names both (the
                 // early review's M1), and nothing goes without it.
                 let shown = removal.hash.map(|hash| hash.to_string());
-                let (answer, at_terminal) = asked(
-                    &removal_question(&removal),
-                    hash.as_deref(),
-                    shown.as_deref(),
+                let not_removed = format!(
+                    "`{}` was not removed, and nothing was changed",
+                    in_code(&removal.name)
                 );
-                if answer != Answer::Yes {
-                    say(
+                // Taking a pin away is signed with the person's key: the
+                // password is the yes. A folder with no pin is deleted on a
+                // plain yes.
+                let key = if removal.pin.is_some() {
+                    Some(signed(
                         name,
-                        &not_done(
-                            answer,
-                            at_terminal,
-                            hash.as_deref(),
-                            shown.as_deref(),
-                            &format!(
-                                "`{}` was not removed, and nothing was changed",
-                                in_code(&removal.name)
-                            ),
-                        ),
+                        &core,
+                        taken.as_mut(),
+                        &ToSign {
+                            given: hash.as_deref(),
+                            shown: shown.as_deref(),
+                            lines: &[removal_signed(&removal)],
+                            not_done: &not_removed,
+                            command: &format!("ext remove {wanted}"),
+                        },
+                    )?)
+                } else {
+                    let (answer, at_terminal) = asked(
+                        &removal_question(&removal),
+                        hash.as_deref(),
+                        shown.as_deref(),
+                        taken.as_mut(),
                     );
-                    return Err(exit::USAGE);
-                }
-                // Taking a pin away is signed with the person's key; a folder
-                // with no pin is deleted without it.
-                let key = match removal.pin {
-                    Some(_) => Some(crate::commands::person_key(&core).map_err(|why| {
+                    if answer != Answer::Yes {
                         say(
                             name,
-                            &format!("`{}` was not removed: {why}", in_code(&removal.name)),
+                            &not_done(
+                                answer,
+                                at_terminal,
+                                hash.as_deref(),
+                                shown.as_deref(),
+                                &not_removed,
+                            ),
                         );
-                        exit::USAGE
-                    })?),
-                    None => None,
+                        return Err(exit::USAGE);
+                    }
+                    None
                 };
-                let removed = core
-                    .remove_extension(&removal, removal.folder.is_some(), key.as_ref())
-                    .map_err(fail)?;
-                out(&removed_text(&removal, removed));
+                // The key goes when this arm ends, once it has signed.
+                let removed =
+                    core.remove_extension(&removal, removal.folder.is_some(), key.as_ref());
+                out(&removed_text(&removal, removed.map_err(fail)?));
                 Ok(exit::COMPLETED)
             }
             // Without the script engine nothing can be evaluated, and an
@@ -345,36 +484,27 @@ pub(crate) fn ext(command: ExtCommand, name: &'static str) -> Done {
                     ));
                     return Ok(exit::COMPLETED);
                 }
+                // The password is the yes: the pin is signed with the key it
+                // makes (the signed approvals step).
                 let shown = to_add.hash.to_string();
-                let (answer, at_terminal) =
-                    asked(&add_question(&to_add), hash.as_deref(), Some(&shown));
-                if answer != Answer::Yes {
-                    say(
-                        name,
-                        &not_done(
-                            answer,
-                            at_terminal,
-                            hash.as_deref(),
-                            Some(&shown),
-                            &format!(
-                                "`{}` was not added, and nothing was written or pinned",
-                                in_code(&to_add.name)
-                            ),
+                let key = signed(
+                    name,
+                    &core,
+                    taken.as_mut(),
+                    &ToSign {
+                        given: hash.as_deref(),
+                        shown: Some(&shown),
+                        lines: &add_signed(&to_add),
+                        not_done: &format!(
+                            "`{}` was not added, and nothing was written or pinned",
+                            in_code(&to_add.name)
                         ),
-                    );
-                    return Err(exit::USAGE);
-                }
-                let key = crate::commands::person_key(&core).map_err(|why| {
-                    say(
-                        name,
-                        &format!("`{}` was not added: {why}", in_code(&to_add.name)),
-                    );
-                    exit::USAGE
-                })?;
-                let added = runtime
-                    .block_on(core.add_extension(to_add, &key))
-                    .map_err(fail)?;
-                out(&added_text(&added));
+                        command: &format!("ext add {path}"),
+                    },
+                )?;
+                // The key goes when this arm ends, once it has signed.
+                let added = runtime.block_on(core.add_extension(to_add, &key));
+                out(&added_text(&added.map_err(fail)?));
                 Ok(exit::COMPLETED)
             }
         }
@@ -599,20 +729,18 @@ fn to_add_text(to_add: &ToAdd) -> String {
     text
 }
 
-/// `ext add`'s question, naming what a yes replaces.
+/// What the password approves at `ext add`, under the prompt's sentence:
+/// the extension as shown, where it goes (naming what it replaces), and
+/// its hash.
 #[cfg(feature = "scripts")]
-fn add_question(to_add: &ToAdd) -> String {
+fn add_signed(to_add: &ToAdd) -> Vec<String> {
     let code = in_code(&to_add.name);
-    match &to_add.replaces {
-        Some(what) => format!("Approve `{code}` as shown, and replace {what} with it?"),
-        None if to_add.in_place => {
-            format!("Approve `{code}` as shown, in `{}`?", to_add.destination)
-        }
-        None => format!(
-            "Approve `{code}` as shown, written to `{}`?",
-            to_add.destination
-        ),
-    }
+    let first = match &to_add.replaces {
+        Some(what) => format!("`{code}` as shown, replacing {what}"),
+        None if to_add.in_place => format!("`{code}` as shown, in `{}`", to_add.destination),
+        None => format!("`{code}` as shown, written to `{}`", to_add.destination),
+    };
+    vec![first, format!("its hash {}", to_add.hash)]
 }
 
 /// What `ext add` says once it is approved.
@@ -770,6 +898,22 @@ fn removal_question(removal: &Removal) -> String {
             format!("{first}{}?", chars.as_str())
         }
         (false, None) => format!("Remove `{code}`?"),
+    }
+}
+
+/// What the password approves at `ext remove` of a pinned extension, under
+/// the prompt's sentence.
+fn removal_signed(removal: &Removal) -> String {
+    let code = in_code(&removal.name);
+    match &removal.folder {
+        None => format!("taking away your approval of `{code}`"),
+        Some((folder, true)) => format!(
+            "taking away your approval of `{code}`, and unlinking `{folder}`, which is a link, \
+             leaving what it leads to"
+        ),
+        Some((folder, false)) => format!(
+            "taking away your approval of `{code}`, and deleting `{folder}` and everything in it"
+        ),
     }
 }
 

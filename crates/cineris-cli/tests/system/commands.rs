@@ -25,9 +25,19 @@ fn trust_line(machine: &Machine) -> String {
     list.stdout.lines().next().unwrap().to_owned()
 }
 
+/// `permissions trust`, signed with the person's password at a terminal,
+/// pins every rule; a session opened with their approvals uses the
+/// project's model, and a headless run with no terminal uses no approvals,
+/// and says so. A change of the rules sets the trust aside until it is
+/// approved again (since the signed approvals step: read through a session
+/// opened with the password, since nothing without it checks the
+/// signature).
 #[test]
 fn sys_a_project_trusted_with_permissions_trust_is_trusted_on_the_next_start() {
-    let machine = Machine::new("sys_trust");
+    use crate::approvals::{PASSWORD, header_with_the_password};
+    let mut machine = Machine::new("sys_trust");
+    machine.quick_dialogs();
+    machine.person();
     // A dearer model, which waits for trust, and rules of all three
     // actions: the pin covers each of them.
     let rules = "[[permissions.rules]]\neffect = \"exec\"\nmatch = \"make test\"\naction = \
@@ -50,7 +60,16 @@ fn sys_a_project_trusted_with_permissions_trust_is_trusted_on_the_next_start() {
     assert_eq!(jsonl(&once.expect_code(0).stdout)[0]["model"], OTHER_MODEL);
     assert!(trust_line(&machine).ends_with(": not trusted"));
 
-    let trusted = machine.run(&["permissions", "trust"]);
+    // With no terminal there is no trust: nothing is asked or written.
+    let piped = machine.run(&["permissions", "trust"]);
+    piped.expect_code(2);
+    assert!(
+        piped.stderr.contains("in your own terminal"),
+        "{}",
+        shown(&piped)
+    );
+    assert!(trust_line(&machine).ends_with(": not trusted"));
+    let trusted = machine.signing(&["permissions", "trust"], &[], PASSWORD);
     trusted.expect_code(0);
     for expected in [
         "allow exec make test",
@@ -59,38 +78,51 @@ fn sys_a_project_trusted_with_permissions_trust_is_trusted_on_the_next_start() {
         "model.main",
     ] {
         assert!(
-            trusted.stdout.contains(expected),
+            trusted.screen.contains(expected),
             "{expected}: {}",
-            shown(&trusted)
+            trusted.screen
         );
     }
-    assert!(trust_line(&machine).ends_with(": trusted"));
+    // What a command with no password reads: a signature, not checked.
+    assert!(
+        trust_line(&machine).contains("carries your signature, not checked here"),
+        "{}",
+        trust_line(&machine)
+    );
+    header_with_the_password(&machine, OTHER_MODEL);
+    // A headless run with no terminal uses no approvals, and says why.
     let (model, stderr) = model_of_a_run(&machine);
-    assert_eq!(model, OTHER_MODEL, "trusted on the next start: {stderr}");
-    assert!(!stderr.contains("rules have changed"), "{stderr}");
+    assert_eq!(model, MODEL, "{stderr}");
+    assert!(
+        stderr.contains("no terminal to ask your approvals' password at"),
+        "{stderr}"
+    );
 
     // A rule the user has not seen sets the project's settings aside
-    // again, until the change is approved.
+    // again, until the change is approved, signed.
     machine.project_config(&format!(
         "[model]\nmain = \"{OTHER_MODEL}\"\n\n{rules}\n[[permissions.rules]]\neffect = \
          \"exec\"\nmatch = \"curl *\"\naction = \"allow\"\n"
     ));
-    assert!(trust_line(&machine).contains("rules have changed"));
-    assert_eq!(model_of_a_run(&machine).0, MODEL);
-    let approved = machine.run(&["permissions", "trust"]);
+    let approved = machine.signing(&["permissions", "trust"], &[], PASSWORD);
+    approved.expect_code(0);
     assert!(
-        approved.expect_code(0).stdout.starts_with("Approved"),
+        approved.screen.contains("Approved the permission rules of"),
         "{}",
-        shown(&approved)
+        approved.screen
     );
-    assert_eq!(model_of_a_run(&machine).0, OTHER_MODEL);
+    header_with_the_password(&machine, OTHER_MODEL);
 
-    // Run headless from a folder below the root: the root's trust and
-    // configuration apply, the workspace is the root, and commands start
-    // in the folder, which the model is told (the follow-ups of step 23).
+    // Run headless from a folder below the root, trusted for the run: the
+    // root's configuration applies, the workspace is the root, and commands
+    // start in the folder, which the model is told (the follow-ups of step
+    // 23).
     machine.reply_text("Done.");
     let below = machine.workspace.join("src");
-    let run = machine.run_in(&below, &["-p", "go", "--output", "jsonl"]);
+    let run = machine.run_in(
+        &below,
+        &["-p", "go", "--output", "jsonl", "--trust-project"],
+    );
     let start = &jsonl(&run.expect_code(0).stdout)[0];
     assert_eq!(
         start["model"],
@@ -391,13 +423,17 @@ fn sys_project_writes_lists_accepts_and_turns_off_entries() {
 }
 
 /// `permissions trust` shows a project's extensions as the trust question
-/// does, and with no terminal to ask at approves one only by its name and
-/// the hash it was shown (`--extension NAME=HASH`): without it, it trusts
-/// the rules and says the extensions were left unapproved, and with
-/// another hash it approves nothing (step 28).
+/// does (step 28), and approves them on a yes at a terminal, the trust
+/// signed with the person's password (the signed approvals step): with no
+/// terminal nothing is trusted, whatever is named; a name with another hash
+/// is refused before anything is asked; a no trusts the rules and leaves
+/// the extensions unapproved.
 #[test]
-fn sys_permissions_trust_approves_a_projects_extensions_only_with_the_flag_where_none_can_ask() {
-    let machine = Machine::new("sys_trust_extensions");
+fn sys_permissions_trust_approves_a_projects_extensions_on_a_signed_yes() {
+    use crate::approvals::PASSWORD;
+    let mut machine = Machine::new("sys_trust_extensions");
+    machine.quick_dialogs();
+    machine.person();
     let folder = machine.workspace.join(".cineris/extensions/probe");
     std::fs::create_dir_all(&folder).unwrap();
     std::fs::write(
@@ -411,7 +447,7 @@ fn sys_permissions_trust_approves_a_projects_extensions_only_with_the_flag_where
     let pinned = || std::fs::read_to_string(&trust_file).unwrap_or_default();
 
     let plain = machine.run(&["permissions", "trust"]);
-    plain.expect_code(0);
+    plain.expect_code(2);
     for shown_too in [
         "Its extensions",
         "`probe` in `.cineris/extensions/probe`.",
@@ -438,16 +474,14 @@ fn sys_permissions_trust_approves_a_projects_extensions_only_with_the_flag_where
         shown(&plain)
     );
     assert!(
-        plain.stderr.contains("left unapproved")
-            && plain.stderr.contains("`--extension NAME=HASH`"),
+        plain.stderr.contains("in your own terminal"),
         "{}",
         shown(&plain)
     );
-    assert!(!pinned().contains("kind = \"extension\""), "{}", pinned());
+    assert!(pinned().is_empty(), "{}", pinned());
 
     // Named with another hash, nothing is trusted or pinned; named with the
-    // hash shown, it is approved (the owner's answer to the early review
-    // of step 28's third pull request).
+    // hash shown and no terminal, nothing either.
     let hash = shown_hash(&plain.stdout, "`probe` in");
     let wrong = machine.run(&["permissions", "trust", "--extension", "probe=0000"]);
     wrong.expect_code(2);
@@ -456,14 +490,27 @@ fn sys_permissions_trust_approves_a_projects_extensions_only_with_the_flag_where
         "{}",
         shown(&wrong)
     );
-    assert!(!pinned().contains("kind = \"extension\""), "{}", pinned());
     let named = format!("probe={hash}");
     let flagged = machine.run(&["permissions", "trust", "--extension", &named]);
+    flagged.expect_code(2);
+    assert!(pinned().is_empty(), "{}", pinned());
+
+    // At a terminal, a no trusts the rules alone, signed; a yes approves the
+    // extension with them.
+    let rules_only = machine.signing(&["permissions", "trust"], &["n"], PASSWORD);
+    rules_only.expect_code(0);
+    assert!(
+        rules_only.screen.contains("left unapproved"),
+        "{}",
+        rules_only.screen
+    );
+    assert!(!pinned().contains("kind = \"extension\""), "{}", pinned());
+    let flagged = machine.signing(&["permissions", "trust"], &["y"], PASSWORD);
     flagged.expect_code(0);
     assert!(
-        flagged.stdout.contains("Approved its extensions: `probe`."),
+        flagged.screen.contains("Approved its extensions: `probe`."),
         "{}",
-        shown(&flagged)
+        flagged.screen
     );
     let file = pinned();
     assert!(
@@ -471,25 +518,24 @@ fn sys_permissions_trust_approves_a_projects_extensions_only_with_the_flag_where
         "{file}"
     );
     // Approved as it is, it is not offered again.
-    let again = machine.run(&["permissions", "trust"]);
+    let again = machine.signing(&["permissions", "trust"], &[], PASSWORD);
     again.expect_code(0);
-    assert!(
-        !again.stdout.contains("Its extensions"),
-        "{}",
-        shown(&again)
-    );
+    assert!(!again.screen.contains("Its extensions"), "{}", again.screen);
 }
 
-/// With no terminal to ask at, `ext add`, `remove` and `disable` act only
-/// on the hash of what they show (the owner's answer to the early review
-/// of step 28's third pull request): `add` shows what the script
-/// registers, evaluated before its question, and approves only with the
-/// snapshot's hash; `disable` of one that holds a gate asks first, and
-/// turns it off only with its pinned version's hash; `remove` unpins and
-/// deletes on that hash, and does neither without it.
+/// `ext add` shows what the script registers, evaluated before its
+/// question, and approves only on the person's password at a terminal (the
+/// signed approvals step); `disable` of one that holds a gate asks first,
+/// and with no terminal turns it off only with its pinned version's hash
+/// (the owner's answer to the early review of step 28's third pull
+/// request); `remove` of a pinned extension unpins and deletes on the
+/// password, and not with the hash alone.
 #[test]
-fn sys_ext_add_disable_and_remove_act_only_on_the_hash_shown() {
-    let machine = Machine::new("sys_ext_by_hash");
+fn sys_ext_add_disable_and_remove_act_only_on_what_is_shown() {
+    use crate::approvals::PASSWORD;
+    let mut machine = Machine::new("sys_ext_by_hash");
+    machine.quick_dialogs();
+    machine.person();
     let folder = machine.home.join("src").join("guard");
     std::fs::create_dir_all(&folder).unwrap();
     std::fs::write(
@@ -534,21 +580,23 @@ fn sys_ext_add_disable_and_remove_act_only_on_the_hash_shown() {
     );
     let hash = hash_of(&plain.stdout, "(its hash is ");
     assert!(
-        plain.stderr.contains(&format!("`--hash {hash}`")),
+        plain.stderr.contains("in your own terminal"),
         "{}",
         shown(&plain)
     );
+    let hashed = machine.run(&["ext", "add", &path, "--hash", &hash]);
+    hashed.expect_code(2);
     assert!(
         !kept.exists() && !pinned().contains("guard"),
         "{}",
         pinned()
     );
-    let added = machine.run(&["ext", "add", &path, "--hash", &hash]);
+    let added = machine.signing(&["ext", "add", &path], &[], PASSWORD);
     added.expect_code(0);
     assert!(
         kept.exists() && pinned().contains("guard"),
         "{}",
-        shown(&added)
+        added.screen
     );
 
     // Its gate is named, and it is not turned off without the hash.
@@ -575,17 +623,23 @@ fn sys_ext_add_disable_and_remove_act_only_on_the_hash_shown() {
         shown(&off)
     );
 
-    // Not removed at all without the hash; unpinned and deleted with it.
-    let kept_pin = machine.run(&["ext", "remove", "guard"]);
-    kept_pin.expect_code(2);
-    assert!(
-        kept.exists() && pinned().contains("guard"),
-        "{}",
-        shown(&kept_pin)
-    );
-    let removed = machine.run(&["ext", "remove", "guard", "--hash", &hash]);
+    // Not removed at all with no terminal, the hash given or not; unpinned
+    // and deleted on the password.
+    for words in [
+        &["ext", "remove", "guard"][..],
+        &["ext", "remove", "guard", "--hash", &hash],
+    ] {
+        let kept_pin = machine.run(words);
+        kept_pin.expect_code(2);
+        assert!(
+            kept.exists() && pinned().contains("guard"),
+            "{}",
+            shown(&kept_pin)
+        );
+    }
+    let removed = machine.signing(&["ext", "remove", "guard"], &[], PASSWORD);
     removed.expect_code(0);
-    assert!(!kept.exists(), "{}", shown(&removed));
+    assert!(!kept.exists(), "{}", removed.screen);
     assert!(!pinned().contains("guard"), "{}", pinned());
 }
 /// A harness whose mark of its sessions' commands failed (on Windows, a job

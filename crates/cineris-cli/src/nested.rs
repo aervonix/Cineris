@@ -5,8 +5,9 @@
 //! the words after the program's name, so that what it refuses is what the
 //! binary would do, read by [`crate::args::parse`] itself.
 //!
-//! - **Refused:** each subcommand that approves, trusts, keeps credentials
-//!   or answers for the person ([`standing`] says which, with a choice for
+//! - **Refused:** each subcommand that approves, trusts, keeps credentials,
+//!   sets the password approvals are signed with, or answers for the
+//!   person ([`standing`] says which, with a choice for
 //!   each variant of [`Command`] and of its subcommands, and no `_` arm);
 //!   the application itself; a headless run carrying a flag whose
 //!   [`Nested`](crate::args::Nested) choice refuses it; and the internal
@@ -23,9 +24,9 @@ use std::sync::Arc;
 use cineris_core::approving::{Invocation, Kind, OwnCommands, Refusal, Standing};
 
 use crate::args::{
-    AuthCommand, Choice, Command, ConfigCommand, ExtCommand, FLAGS, Format, GUARD, Nested,
-    PermissionsCommand, ProjectCommand, Run, SANDBOX, SessionsCommand, SetupCommand, StatsCommand,
-    parse,
+    ApprovalsCommand, AuthCommand, Choice, Command, ConfigCommand, ExtCommand, FLAGS, Format,
+    GUARD, Nested, PermissionsCommand, ProjectCommand, Run, SANDBOX, SessionsCommand, SetupCommand,
+    StatsCommand, parse,
 };
 
 fn refused(what: impl Into<String>, kind: Kind) -> Standing {
@@ -60,6 +61,14 @@ pub(crate) fn standing(command: &Command) -> Standing {
             AuthCommand::Status => Standing::Safe,
             AuthCommand::Login { .. } => approves("auth login"),
             AuthCommand::Logout { .. } => approves("auth logout"),
+        },
+        // The password every approval is signed with: setting it, or a new
+        // one at a reset, answers for the person (the signed approvals
+        // step). The status only reads.
+        Command::Approvals(approvals) => match approvals {
+            ApprovalsCommand::Status => Standing::Safe,
+            ApprovalsCommand::Setup => approves("approvals setup"),
+            ApprovalsCommand::Reset => approves("approvals reset"),
         },
         Command::Stats(stats) => match stats {
             StatsCommand::Show { .. } => Standing::Safe,

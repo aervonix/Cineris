@@ -766,6 +766,7 @@ fn app_dialog(
         restyle: None,
         export: None,
         setup: None,
+        approvals: None,
     };
     let mut caps = super::capabilities(spec);
     caps.background = Some(background);

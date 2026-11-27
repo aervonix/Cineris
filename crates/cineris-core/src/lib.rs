@@ -79,7 +79,7 @@ pub use crate::manage::{
     Project, ProjectExtension, ProjectFiles, ProjectHookCommand, ProviderCredential, TrustState,
     Trusted,
 };
-pub use crate::person::{KeyRefusal, ResetReport};
+pub use crate::person::{ApprovalsHeld, HeldKey, KeyRefusal, ResetReport};
 pub use crate::policy::{
     AFTER_THE_LOOK, BEFORE_THE_APPROVAL_IS_OPEN, BEFORE_THE_NEW_LEVEL_IS_IN_FORCE,
     CHANGING_APPROVALS, PermissionDenial,

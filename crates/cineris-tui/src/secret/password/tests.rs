@@ -795,3 +795,68 @@ fn at_a_terminal_a_window_too_small_for_what_is_approved_takes_no_key() {
     }
     assert_eq!(read.password().as_deref(), Some("taken-pw"));
 }
+
+/// How many pastes were written over on this thread, after `run`.
+fn pastes_wiped_by(run: impl FnOnce()) -> usize {
+    let before = super::PASTES_WIPED.with(std::cell::Cell::get);
+    run();
+    super::PASTES_WIPED.with(std::cell::Cell::get) - before
+}
+
+/// Each paste the prompt reads is written over when it is done with: one
+/// thrown away as type-ahead, and one taken into the field.
+#[test]
+fn at_a_terminal_each_paste_is_written_over_once_read() {
+    let wiped = pastes_wiped_by(|| {
+        let read = asked(
+            &sign(),
+            &[b"\x1b[200~pasted-ahead\x1b[201~"],
+            &[Step::Typed(b"\x1b[200~s3cret-pw\x1b[201~"), ENTER],
+        );
+        assert_eq!(read.password().as_deref(), Some("s3cret-pw"));
+    });
+    assert_eq!(wiped, 2);
+}
+
+/// A yes or no asked while the terminal is taken, before the password's
+/// prompt (`cineris permissions trust`'s): a line typed after the
+/// question, echoed, then `Enter`; what was typed before it does not
+/// answer it; `Ctrl+C` answers nothing.
+#[test]
+fn at_a_terminal_a_yes_or_no_is_a_line_typed_after_the_question() {
+    let confirmed = |ahead: &[&[u8]], later: &[Step]| {
+        let seen = Rc::new(RefCell::new(Seen::default()));
+        let device = Typed {
+            size: (80, 24),
+            ahead: ahead.iter().map(|bytes| bytes.to_vec()).collect(),
+            later: later.iter().copied().collect(),
+            seen: Rc::clone(&seen),
+            exclusive: false,
+            base: Instant::now(),
+            elapsed: Duration::ZERO,
+        };
+        let mut terminal =
+            Terminal::with_device(device, crate::testkit::caps()).expect("a terminal");
+        let answer = confirm_on(&mut terminal, "Approve these extensions too?")
+            .expect("the terminal is read");
+        let written = std::mem::take(&mut seen.borrow_mut().written);
+        drop(terminal);
+        (answer, shown(&written, (80, 24)))
+    };
+    let (answer, screen) = confirmed(&[b"y\r"], &[Step::Typed(b"yes"), ENTER]);
+    assert_eq!(answer, Some(true));
+    assert!(
+        screen.shows("Approve these extensions too? [y/N] yes"),
+        "{}",
+        screen.dump()
+    );
+    for (typed, expected) in [
+        (&b"n"[..], Some(false)),
+        (b"", Some(false)),
+        (b"yess", Some(false)),
+        (b"\x03", None),
+    ] {
+        let (answer, _) = confirmed(&[], &[Step::Typed(typed), ENTER]);
+        assert_eq!(answer, expected, "{typed:?}");
+    }
+}

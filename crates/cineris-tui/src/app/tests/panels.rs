@@ -1126,6 +1126,7 @@ fn the_turn_summary_says_the_checks_verdict() {
         restyle: None,
         export: None,
         setup: None,
+        approvals: None,
     };
     let mut app = App::new(Box::new(link.clone()), start, &caps(), 99, 40, now);
     opened(&mut app, &link, now);

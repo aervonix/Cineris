@@ -144,6 +144,7 @@ impl Drive {
             restyle: None,
             export: None,
             setup: Some(Arc::new(setup.clone())),
+            approvals: None,
         };
         let mut caps = super::capabilities(spec);
         caps.background = Some(background);

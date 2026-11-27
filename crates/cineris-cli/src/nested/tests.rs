@@ -46,6 +46,9 @@ fn each_command_is_refused_by_the_engine_exactly_when_its_standing_says() {
         (&["auth", "status"], false),
         (&["auth", "login", "anthropic"], true),
         (&["auth", "logout", "anthropic"], true),
+        (&["approvals", "status"], false),
+        (&["approvals", "setup"], true),
+        (&["approvals", "reset"], true),
         (&["models"], false),
         (&["usage"], false),
         (&["stats"], false),
@@ -99,6 +102,11 @@ fn each_command_is_refused_by_the_engine_exactly_when_its_standing_says() {
             )
             | Command::Auth(
                 AuthCommand::Status | AuthCommand::Login { .. } | AuthCommand::Logout { .. },
+            )
+            | Command::Approvals(
+                crate::args::ApprovalsCommand::Status
+                | crate::args::ApprovalsCommand::Setup
+                | crate::args::ApprovalsCommand::Reset,
             )
             | Command::Models
             | Command::Usage(_)
@@ -251,6 +259,9 @@ fn what_only_the_shell_knows_is_safe_only_after_a_reading_action() {
         (&["ext"], false),
         (&["ext", "add"], false),
         (&["permissions"], false),
+        (&["approvals"], false),
+        (&["approvals", "status"], true),
+        (&["approvals", "reset"], false),
         (&["stats"], false),
         (&["-p"], false),
         (&[], false),
@@ -297,6 +308,7 @@ fn every_subcommand_is_in_the_table_the_parser_reads() {
         Topic::Config,
         Topic::Permissions,
         Topic::Auth,
+        Topic::Approvals,
         Topic::Models,
         Topic::Usage,
         Topic::Stats,
@@ -317,6 +329,7 @@ fn every_subcommand_is_in_the_table_the_parser_reads() {
             | Topic::Config
             | Topic::Permissions
             | Topic::Auth
+            | Topic::Approvals
             | Topic::Models
             | Topic::Usage
             | Topic::Stats

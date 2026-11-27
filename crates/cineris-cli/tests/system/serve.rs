@@ -258,6 +258,15 @@ fn transcripts(
         // A fresh list: a gate a scenario opens is opened for good.
         let mut out = Vec::new();
         for (number, scenario) in conformance::scenarios().into_iter().enumerate() {
+            // A yes to a trust question is signed with the person's key,
+            // and `serve` has no way yet to open their approvals (the
+            // signed approvals step's second pull request gives it one): a
+            // scenario that signs is left out on both sides, and runs in
+            // `cineris-rpc`'s conformance test, whose cores have their
+            // approvals open.
+            if scenario.signs() {
+                continue;
+            }
             let workspace = work.join(format!("s{number:02}"));
             std::fs::create_dir_all(&workspace).unwrap();
             for (path, text) in &scenario.files {
@@ -271,7 +280,7 @@ fn transcripts(
             let workspace = workspace.to_str().unwrap().to_owned();
             out.push((
                 scenario.name,
-                conformance::run(&scenario, carrier, &workspace, &known),
+                conformance::run(&scenario, carrier, &workspace, &known, None),
             ));
         }
         out
@@ -299,7 +308,13 @@ fn sys_serve_stdio_conforms_to_the_core_in_process() {
         assert_eq!(served.end(), Some(0), "the server's exit");
         transcripts
     });
-    assert_eq!(in_process.len(), conformance::scenarios().len());
+    assert_eq!(
+        in_process.len(),
+        conformance::scenarios()
+            .iter()
+            .filter(|scenario| !scenario.signs())
+            .count()
+    );
     for ((name, first), (_, second)) in in_process.iter().zip(&over_stdio) {
         for (at, (one, other)) in first.0.iter().zip(&second.0).enumerate() {
             if one != other {

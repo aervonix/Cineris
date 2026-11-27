@@ -241,6 +241,9 @@ pub(crate) enum Command {
     Permissions(PermissionsCommand),
     /// `cineris auth …`
     Auth(AuthCommand),
+    /// `cineris approvals …`: the password the person's approvals are
+    /// signed with (the signed approvals step).
+    Approvals(ApprovalsCommand),
     /// `cineris models`
     Models,
     /// `cineris usage …`
@@ -440,6 +443,7 @@ pub(crate) enum Topic {
     Config,
     Permissions,
     Auth,
+    Approvals,
     Models,
     Usage,
     Stats,
@@ -571,6 +575,20 @@ pub(crate) enum AuthCommand {
     Logout { provider: String },
 }
 
+/// `cineris approvals …` (the signed approvals step): the password every
+/// stored approval of the person's is signed with, typed at a terminal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ApprovalsCommand {
+    /// `setup`: choose the password, typed twice; refused when one is set.
+    Setup,
+    /// `reset`: a new password, after a warning that every approval asks
+    /// again.
+    Reset,
+    /// `status`: what is set up and what carries a signature, checking
+    /// nothing.
+    Status,
+}
+
 /// A mistake on the command line, said to the person who typed it.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct UsageError(pub(crate) String);
@@ -630,6 +648,7 @@ pub(crate) const SUBCOMMANDS: &[(&str, Topic)] = &[
     ("config", Topic::Config),
     ("permissions", Topic::Permissions),
     ("auth", Topic::Auth),
+    ("approvals", Topic::Approvals),
     ("models", Topic::Models),
     ("usage", Topic::Usage),
     ("stats", Topic::Stats),
@@ -963,6 +982,7 @@ fn subcommand(topic: Topic, parser: &mut Parser) -> Result<Command, UsageError> 
                 Topic::Config => "config",
                 Topic::Permissions => "permissions",
                 Topic::Auth => "auth",
+                Topic::Approvals => "approvals",
                 Topic::Models => "models",
                 Topic::Usage => "usage",
                 Topic::Stats => "stats",
@@ -1089,6 +1109,20 @@ fn subcommand(topic: Topic, parser: &mut Parser) -> Result<Command, UsageError> 
                 "logout" => Ok(Command::Auth(AuthCommand::Logout {
                     provider: named(provider)?,
                 })),
+                other => Err(wrong(other)),
+            }
+        }
+        Topic::Approvals => {
+            if let Some(argument) = parser.next()? {
+                return match argument {
+                    Arg::Short('h') | Arg::Long("help") => Ok(Command::Help(topic)),
+                    other => Err(unexpected(&other)),
+                };
+            }
+            match action.as_str() {
+                "setup" => Ok(Command::Approvals(ApprovalsCommand::Setup)),
+                "reset" => Ok(Command::Approvals(ApprovalsCommand::Reset)),
+                "status" => Ok(Command::Approvals(ApprovalsCommand::Status)),
                 other => Err(wrong(other)),
             }
         }
@@ -1773,6 +1807,32 @@ mod tests {
             }))
         );
         assert_eq!(parse_words(&["config"]), Ok(Command::Help(Topic::Config)));
+        for (word, command) in [
+            ("setup", ApprovalsCommand::Setup),
+            ("reset", ApprovalsCommand::Reset),
+            ("status", ApprovalsCommand::Status),
+        ] {
+            assert_eq!(
+                parse_words(&["approvals", word]),
+                Ok(Command::Approvals(command))
+            );
+        }
+        assert_eq!(
+            parse_words(&["approvals"]),
+            Ok(Command::Help(Topic::Approvals))
+        );
+        assert_eq!(
+            parse_words(&["approvals", "reset", "--help"]),
+            Ok(Command::Help(Topic::Approvals))
+        );
+        // The password is never an argument.
+        for words in [
+            &["approvals", "setup", "hunter2hunter2"][..],
+            &["approvals", "setup", "--password", "x"],
+            &["approvals", "unlock"],
+        ] {
+            assert!(parse_words(words).is_err(), "{words:?}");
+        }
         // After a flag, the same word is part of the prompt.
         assert_eq!(
             run_of(&["-p", "sessions"]).prompt.as_deref(),

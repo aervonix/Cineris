@@ -2214,6 +2214,7 @@ fn the_last_step_waits_for_the_full_screens_search() {
         restyle: None,
         export: None,
         setup: Some(Arc::new(setup.clone())),
+        approvals: None,
     };
     let mut app = crate::app::App::new(
         Box::new(link.clone()),

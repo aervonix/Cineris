@@ -67,71 +67,6 @@ impl Running {
     }
 }
 
-/// [`Running`], with a thread that waits for the binary to exit and opens
-/// `exited` when it has: a test bounds its wait for the exit, and sees an
-/// exit that comes while it waits for something else.
-struct Watched {
-    running: Running,
-    exited: Gate,
-    waiter: std::thread::JoinHandle<Exit>,
-}
-
-impl Watched {
-    fn start(machine: &Machine, arguments: &[&str]) -> Self {
-        let running = Running::start(machine, arguments);
-        let exited = Gate::new();
-        let waiter = {
-            let (tree, exited) = (running.tree.clone(), exited.clone());
-            std::thread::spawn(move || {
-                let exit = tree.wait().unwrap();
-                exited.open();
-                exit
-            })
-        };
-        Self {
-            running,
-            exited,
-            waiter,
-        }
-    }
-
-    /// Waits up to [`LIMIT`] for `done`, and no longer once the binary has
-    /// exited. Whether `done` came. Nothing announces `done` (a file that
-    /// appears), so it is asked again every [`LOOK_AGAIN`], the thread
-    /// waiting on the exit in between rather than spinning: an exit ends
-    /// the wait at once.
-    fn until(&self, what: &str, done: impl Fn() -> bool) -> bool {
-        /// How long the thread waits on the exit before it asks again.
-        const LOOK_AGAIN: Duration = Duration::from_millis(5);
-        let _doing = cineris_testkit::watch::doing(format!("waits for {what}, up to {LIMIT:?}"));
-        let began = Instant::now();
-        loop {
-            if done() {
-                return true;
-            }
-            let left = LIMIT.saturating_sub(began.elapsed());
-            if left.is_zero() {
-                return false;
-            }
-            if self.exited.wait(left.min(LOOK_AGAIN)) {
-                // What the binary did before it exited is all there is.
-                return done();
-            }
-        }
-    }
-
-    /// What the binary left, and whether it exited by itself within
-    /// `limit`: when it had not, it was killed.
-    fn end_within(self, limit: Duration) -> (Run, bool) {
-        let by_itself = self.exited.wait(limit);
-        if !by_itself {
-            let _ = self.running.tree.kill();
-        }
-        let exit = self.waiter.join().unwrap();
-        (self.running.read(exit), by_itself)
-    }
-}
-
 /// A response that has begun and goes no further until the client hangs
 /// up: the run is waiting on the model when the signal comes. `begun` opens
 /// when the server has sent all it will send, so a signal sent after it
@@ -183,11 +118,11 @@ fn sys_ctrl_break_interrupts_the_turn_and_exits_143() {
     interrupted_by(|tree| tree.interrupt().unwrap(), 143, "sys_ctrl_break");
 }
 
-/// The project's extension `probe`, approved with the project as
-/// `permissions trust --extension probe=HASH` approves it, by the hash
-/// `permissions trust` shows: its command `spin`
-/// notes in the project's values that it runs, then runs until it is
-/// stopped. The file the note is kept in, which is there once it runs.
+/// The project's extension `probe`, approved with the project's trust at a
+/// terminal, signed with the person's approvals password (the signed
+/// approvals step): its command `spin` notes in the project's values that
+/// it runs, then runs until it is stopped. The file the note is kept in,
+/// which is there once it runs.
 fn spinning_command(machine: &Machine) -> PathBuf {
     let folder = machine.workspace.join(".cineris/extensions/probe");
     std::fs::create_dir_all(&folder).unwrap();
@@ -205,10 +140,13 @@ fn spinning_command(machine: &Machine) -> PathBuf {
          } });\n",
     )
     .unwrap();
-    let listed = machine.run(&["permissions", "trust"]);
-    let named = format!("probe={}", crate::shown_hash(&listed.stdout, "`probe` in"));
+    machine.person();
     machine
-        .run(&["permissions", "trust", "--extension", &named])
+        .signing(
+            &["permissions", "trust"],
+            &["y"],
+            crate::approvals::PASSWORD,
+        )
         .expect_code(0);
     // `projects/<project key>/extensions/project-probe.json` in the state
     // directory (`cineris_core::ext::state`).
@@ -230,41 +168,44 @@ fn spinning_command(machine: &Machine) -> PathBuf {
 /// would run for its whole time otherwise (30 s from when it is asked,
 /// whatever its manifest gives its tools), and the wait for the exit is far
 /// shorter than that.
-fn command_stopped_by(signal: impl FnOnce(&Tree), code: i32, test: &str) {
-    let machine = Machine::new(test);
+///
+/// The run is at a terminal of its own (since the signed approvals step: a
+/// headless run uses the person's approvals only where it can ask for
+/// their password), whose binary is its own process group; the signal is
+/// sent to it, by its process id, as a terminal's key would send it.
+fn command_stopped_by(code: i32, test: &str) {
+    let mut machine = Machine::new(test);
+    machine.quick_dialogs();
     let values = spinning_command(&machine);
-    let running = Watched::start(&machine, &["-p", "/probe:spin", "--output", "json"]);
-    if !running.until("the command to run", || values.exists()) {
-        let (run, by_itself) = running.end_within(Duration::ZERO);
-        panic!(
-            "the command did not run (the binary {}):\n{}",
-            if by_itself {
-                "exited first"
-            } else {
-                "was killed"
-            },
-            crate::shown(&run)
+    let mut session = machine.tui_grouped(&["-p", "/probe:spin", "--output", "json"]);
+    session.wait_for(LIMIT, "the approvals' password", |t| {
+        t.shows("to use this session's approvals")
+    });
+    crate::approvals::type_password(&mut session, crate::approvals::PASSWORD);
+    let deadline = Instant::now() + LIMIT;
+    while !values.exists() {
+        assert!(
+            Instant::now() < deadline && !session.ended(),
+            "the command did not run:\n{}",
+            session.screen().dump()
         );
+        session.step(Duration::from_millis(20));
     }
     let kept: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&values).unwrap()).unwrap();
     assert_eq!(kept["values"]["started"], true, "{kept}");
 
-    signal(&running.running.tree);
-    let (run, by_itself) = running.end_within(LIMIT);
-    assert!(
-        by_itself,
-        "the binary was still running {LIMIT:?} after the signal, and was killed:\n{}",
-        crate::shown(&run)
-    );
+    crate::tui::interrupt_the_binary(&session);
+    let run = crate::approvals::ended(&mut session);
     // Standard error names the command and whose it is before it runs.
     assert!(
-        run.stderr
+        run.screen
             .contains("Sending `/probe:spin`, the project's extension `probe`'s command."),
         "{}",
-        run.stderr
+        run.screen
     );
-    let record = run.expect_code(code).json();
+    run.expect_code(code);
+    let record = run.json();
     assert_eq!(record["outcome"], "interrupted", "{record}");
     assert!(
         machine.server.requests().is_empty(),
@@ -272,20 +213,16 @@ fn command_stopped_by(signal: impl FnOnce(&Tree), code: i32, test: &str) {
     );
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[test]
 fn sys_ctrl_c_stops_a_running_extension_command() {
-    command_stopped_by(|tree| tree.interrupt().unwrap(), 130, "sys_sigint_command");
+    command_stopped_by(130, "sys_sigint_command");
 }
 
 #[cfg(windows)]
 #[test]
 fn sys_ctrl_break_stops_a_running_extension_command() {
-    command_stopped_by(
-        |tree| tree.interrupt().unwrap(),
-        143,
-        "sys_ctrl_break_command",
-    );
+    command_stopped_by(143, "sys_ctrl_break_command");
 }
 
 /// The command a shell runs to start `spec`: the test binary, quoted for

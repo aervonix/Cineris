@@ -45,8 +45,8 @@ use cineris_protocol::jsonrpc::RequestId;
 use cineris_protocol::message::Part;
 use cineris_protocol::methods::{
     CommandCall, Disposition, ModelsListResult, Op, OpResult, ServerRequest, ServerResponse,
-    SessionForkParams, SessionListParams, SessionNewParams, SessionRef, TurnInterruptParams,
-    TurnStartParams,
+    SessionForkParams, SessionListParams, SessionNewParams, SessionRef, TrustResponse,
+    TurnInterruptParams, TurnStartParams,
 };
 use cineris_protocol::model::{ModelInfo, ModelRole};
 use cineris_protocol::session::{SandboxStatus, SessionSettings, SessionState};
@@ -54,6 +54,7 @@ use cineris_protocol::usage::{CostBasis, SessionUsage, UsageTotals};
 use cineris_protocol::{ErrorData, SessionEvent, SessionId, Speed};
 use cineris_term::{Capabilities, Cursor, Event as TermEvent, Key, Line};
 
+mod approvals;
 mod commands;
 mod custom;
 mod export;
@@ -484,6 +485,10 @@ pub struct App {
     /// The approvals password asked (since the signed approvals), the one
     /// shown first: while one is, keys and pastes go to it alone.
     passwords: VecDeque<password::PasswordDialog>,
+    /// The program's approvals, and where the application is with them
+    /// (the signed approvals step): `None` where the program gives none
+    /// (`cineris attach`).
+    approvals: Option<approvals::Here>,
     /// When the running turn began, from this app's point of view.
     running: Option<Instant>,
     /// Whether a turn runs, as the core last said: the open, the history's
@@ -652,6 +657,7 @@ impl App {
             usage: None,
             dialogs: VecDeque::new(),
             passwords: VecDeque::new(),
+            approvals: start.approvals.map(approvals::Here::new),
             restyle: start.restyle,
             writer: start.export,
             points: None,
@@ -758,6 +764,19 @@ impl App {
     /// "Start-up": after the first frame), and a dialog's first starts its
     /// guard.
     pub fn drawn(&mut self, at: Instant) {
+        // After the first frame, the approvals' password when the session
+        // has approvals to use: the open waits for it (the signed
+        // approvals step). It is asked once this frame's own bookkeeping is
+        // done: the frame just written did not show it.
+        let unlock = self.approvals_look();
+        self.frame_drawn(at);
+        if unlock {
+            self.ask_unlock(None);
+        }
+    }
+
+    /// [`drawn`](Self::drawn), but for the approvals' password.
+    fn frame_drawn(&mut self, at: Instant) {
         // The first run holds the session until the configuration file is
         // written and read again (since step 25).
         if !self.first_run_holds_open()
@@ -1662,6 +1681,16 @@ impl App {
             self.mapper.answered(&mut self.transcript, call);
         }
         if let DialogId::Request(id) = dialog.id {
+            // A yes to a trust question that proposes what it writes is
+            // answered once the person has signed it (the signed approvals
+            // step).
+            if let ServerResponse::Trust(TrustResponse { trusted: true, .. }) = &response
+                && let Asks::Trust { request } = dialog.asks
+                && request.proposal.is_some()
+            {
+                self.trust_yes(id, request);
+                return;
+            }
             self.link.respond(id, response);
         }
     }
@@ -1669,6 +1698,11 @@ impl App {
     // ------------------------------------------------------------- core
 
     fn send_open(&mut self, open: Open) {
+        // While the approvals' password is asked for, the open waits for
+        // its answer: the approvals open first, or not at all.
+        let Some(open) = self.approvals_hold(open) else {
+            return;
+        };
         self.opening = true;
         let (op, pending) = match open {
             Open::New {
@@ -1743,6 +1777,10 @@ impl App {
         }
         // The first run's worker wakes the loop when it answers (step 25).
         if self.first_run_answers() {
+            drained.changed = true;
+        }
+        // So does each call of the approvals (the signed approvals step).
+        if self.approvals_answers() {
             drained.changed = true;
         }
         let mut taken = 0;

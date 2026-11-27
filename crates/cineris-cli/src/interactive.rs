@@ -48,6 +48,7 @@ use cineris_protocol::session::SessionSettings;
 use cineris_protocol::{ErrorData, ErrorKind, SessionId};
 use cineris_rpc::lane::Dispatcher;
 use cineris_rpc::order::{Next, Order};
+use cineris_tui::app::approvals::Refused;
 use cineris_tui::app::{
     self, ColorDepth, Exit, Inbound, Link, Open, Overrides, Start, Ticket, Waker,
 };
@@ -186,6 +187,13 @@ pub(crate) fn run(run: Run, name: &'static str, _started: Instant) -> u8 {
             file,
         )) as Arc<dyn app::Setup>
     });
+    // The person's approvals, which the application opens when a session
+    // with approvals to use opens, and signs the trust question's yes with
+    // (the signed approvals step).
+    let approvals: Arc<dyn app::Approvals> = Arc::new(CoreApprovals {
+        core: core.core.clone(),
+        workspace: workspace.clone(),
+    });
 
     // A panic of the interface's own unwinds to here: the terminal has been
     // put back by then (the terminal layer's hook, and its drop), and the
@@ -212,6 +220,7 @@ pub(crate) fn run(run: Run, name: &'static str, _started: Instant) -> u8 {
                 restyle: Some(Box::new(restyle)),
                 export: Some(crate::export::writer(started_in)),
                 setup,
+                approvals: Some(approvals),
             };
             (Box::new(link) as Box<dyn Link>, start)
         })
@@ -241,6 +250,85 @@ pub(crate) fn run(run: Run, name: &'static str, _started: Instant) -> u8 {
     // A signal's watchdog on Windows waits for this.
     cineris_tui::app::signal_ended();
     code
+}
+
+/// The person's approvals as the application uses them (the signed
+/// approvals step; `cineris_tui::app::approvals`): the key made from the
+/// password the application's dialog read, on the call's own thread, and
+/// dropped once it has opened the approvals or signed.
+struct CoreApprovals {
+    core: Core,
+    /// The workspace the session opens in: whose project's entry is looked
+    /// at.
+    workspace: PathBuf,
+}
+
+impl app::Approvals for CoreApprovals {
+    fn to_use(&self) -> bool {
+        if self.core.approvals_open() {
+            return false;
+        }
+        let project = self.core.project(&self.workspace).ok();
+        self.core
+            .approvals_held(project.as_ref())
+            .is_ok_and(|held| held.to_use())
+    }
+
+    fn state(&self) -> app::ApprovalsState {
+        if self.core.approvals_open() {
+            app::ApprovalsState::Open
+        } else if matches!(self.core.approval_key(), Ok(None)) {
+            app::ApprovalsState::NotSetUp
+        } else {
+            app::ApprovalsState::Locked
+        }
+    }
+
+    fn unlock(&self, password: &cineris_base::Password) -> Result<(), Refused> {
+        crate::approvals::untraced(crate::approvals::traced).map_err(Refused::Failed)?;
+        let key = self
+            .core
+            .person_key(password.expose_bytes())
+            .map_err(refused)?;
+        self.core.open_approvals(&key).map_err(refused)
+    }
+
+    fn set_up(&self, password: &cineris_base::Password) -> Result<(), Refused> {
+        crate::approvals::untraced(crate::approvals::traced).map_err(Refused::Failed)?;
+        self.core
+            .set_up_approvals(password.expose_bytes())
+            .map(drop)
+            .map_err(refused)
+    }
+
+    fn sign(
+        &self,
+        password: &cineris_base::Password,
+        proposal: &cineris_protocol::methods::ApprovalProposal,
+    ) -> Result<String, Refused> {
+        crate::approvals::untraced(crate::approvals::traced).map_err(Refused::Failed)?;
+        // Rebuilt here, as the store makes it: what is signed is what the
+        // question proposes, whatever else it says.
+        let statement = cineris_core::signed::statement_of(proposal).map_err(|why| {
+            Refused::Failed(format!("what the question proposes does not read: {why}"))
+        })?;
+        let key = self
+            .core
+            .person_key(password.expose_bytes())
+            .map_err(refused)?;
+        self.core.open_approvals(&key).map_err(refused)?;
+        Ok(key.sign(&statement).to_string())
+    }
+}
+
+/// A refusal of the core's, as the application takes it: one that says the
+/// password was not the person's asks again.
+fn refused(refusal: cineris_core::KeyRefusal) -> Refused {
+    match refusal {
+        cineris_core::KeyRefusal::NotThePassword { .. }
+        | cineris_core::KeyRefusal::NotTheOpenKey => Refused::NotThePassword(refusal.to_string()),
+        other => Refused::Failed(other.to_string()),
+    }
 }
 
 /// The exit code of the interface's end, and the line to print for it. A

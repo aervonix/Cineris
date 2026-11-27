@@ -58,12 +58,16 @@ Commands:
                trust it: the next session there asks again
 
 Options:
-  --extension NAME=HASH  With trust, where there is no terminal to ask at:
-                         approve the extension NAME as it is shown, with
-                         the hash it is shown with. Again for each one
+  --extension NAME=HASH  With trust: the extension NAME, with the hash it
+                         is shown with. Again for each one
   --hook NAME=HASH       The same, for one of the project's hooks
-  At a terminal the question decides; a name or hash given that is not
-  one shown refuses the trust, there too.
+  A name or hash given that is not one shown refuses the trust. The
+  question decides which of them are approved.
+
+A project's trust is signed with your approvals password: trust asks for
+it at a terminal once what it trusts has been shown, and esc trusts
+nothing. With no terminal there is no trust, whatever names and hashes are
+given. With no password set, the first yes sets one (`{name} approvals`).
 
 None of these runs under a session's command: run it in your own terminal.
 
@@ -196,11 +200,17 @@ Commands:
                   your folder of extensions and approve it
 
 Options:
-  --hash HASH     With add, remove or disable, where there is no
-                  terminal to ask at: do it, for what has the hash shown
-                  (disable asks only of one that holds gates). At a
-                  terminal the question decides; a hash given that is not
-                  the one shown refuses, there too
+  --hash HASH     The hash of what is shown: a hash given that is not that
+                  one refuses, at a terminal too. With disable, or remove
+                  of a folder nothing approves, where there is no terminal
+                  to ask at, it does it (disable asks only of one that
+                  holds gates)
+
+add, and remove of an extension you approved, change your approvals, which
+are signed with your approvals password: the yes is the password, typed at
+a terminal once what is approved has been shown, and esc is no. With no
+terminal there is no approval, whatever hash is given. With no password
+set, the first yes sets one (`{name} approvals`).
 
 add, remove and disable do not run under a session's command: run them
 in your own terminal.
@@ -268,6 +278,41 @@ List the models of the catalog, the built-in one and the user's own, with
 the provider that serves each and its context window.
 "
         ),
+        Topic::Approvals => format!(
+            "\
+Usage: {name} approvals <COMMAND>
+
+What you approve and Cineris keeps (a project's trust, the extensions you
+add) is signed with a key made from a password only you know, each time you
+type it. What is not signed by it counts for nothing, so a program that
+writes Cineris's files cannot approve anything for you.
+
+Commands:
+  setup     Choose the password, typed twice, at least 12 characters.
+            Refused when one is set: reset sets a new one
+  reset     Set a new password, for one you have forgotten: every approval
+            you gave asks again, and what an approval let run stays held
+            back until you approve it again
+  status    Whether a password is set, the key's fingerprint and when it
+            was made, and how many entries of your approvals carry a
+            signature. It types no password and checks nothing: a
+            signature it counts is not checked
+
+The password is typed at a terminal, never on the command line or on
+standard input, and is not shown. It is the text exactly as typed: an
+accented letter typed as one character and the same letter typed as a
+letter and an accent are two different passwords. A password typed while a
+debugger is attached to Cineris is refused.
+
+A session that has approvals to use asks for the password when it opens;
+esc there opens it without them. With no terminal there is no approval:
+`{name} ext add`, `ext remove` and `permissions trust` ask for the password,
+and refuse without a terminal.
+
+setup and reset do not run under a session's command: run them in your own
+terminal.
+"
+        ),
         Topic::Auth => format!(
             "\
 Usage: {name} auth <COMMAND>
@@ -303,6 +348,7 @@ Commands:
   config        Show or check the configuration
   permissions   Stored approvals and project trust
   auth          Provider keys
+  approvals     The password your approvals are signed with
   models        The models of the catalog
   usage         What was used, what it cost, and where the time went
   stats         The local statistics: show or reset
@@ -350,6 +396,7 @@ mod tests {
             Topic::Config,
             Topic::Permissions,
             Topic::Auth,
+            Topic::Approvals,
             Topic::Models,
             Topic::Usage,
             Topic::Stats,

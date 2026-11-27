@@ -1,10 +1,14 @@
 //! The three examples under `examples/` (`docs/steps/28/answered.md`, point
 //! 10, "3c"), run as their READMEs say, on one machine: each extension added
-//! with `cineris ext add` and the hash it shows, the command file copied
-//! into the user's `commands/`, and a workspace that is a git repository
-//! with a tag and two commits after it.
+//! with `cineris ext add` at a terminal, signed with the person's approvals
+//! password (the signed approvals step), the command file copied into the
+//! user's `commands/`, and a workspace that is a git repository with a tag
+//! and two commits after it.
 //!
-//! One release, in two headless runs against the scripted model, with the
+//! One release, in two headless runs against the scripted model, each at a
+//! terminal of its own, where it asks for the approvals' password before
+//! its session opens (a headless run with no terminal uses no approvals),
+//! with the
 //! rules the READMEs of `release` and `md-outline` offer in the user's
 //! configuration, as they are written there: `/changelog:draft v0.1.0` (the
 //! script command, its `git log` allowed by the README's rule for its line),
@@ -75,7 +79,9 @@ impl Release {
             offered_rule("examples/release/README.md"),
             offered_rule("examples/md-outline/README.md")
         );
-        let machine = Machine::with_config("sys_examples", &config);
+        let mut machine = Machine::with_config("sys_examples", &config);
+        machine.quick_dialogs();
+        machine.person();
         for folder in [
             "examples/md-outline",
             "examples/shell-gate",
@@ -103,7 +109,7 @@ impl Release {
 
         machine.reply_text("Drafted.");
         let before = machine.server.requests().len();
-        let draft = machine.run(&["-p", "/changelog:draft v0.1.0"]);
+        let draft = at_a_terminal(&machine, &["-p", "/changelog:draft v0.1.0"]);
         let draft_sent = sent(&machine, before);
 
         // A response for each step, its calls together.
@@ -123,7 +129,7 @@ impl Release {
         reply_calls(&machine, &shell);
         machine.reply_text("Released.");
         let before = machine.server.requests().len();
-        let notes = machine.run(&["-p", "/release-notes 0.2.0"]);
+        let notes = at_a_terminal(&machine, &["-p", "/release-notes 0.2.0"]);
         let notes_sent = sent(&machine, before);
         Self {
             machine,
@@ -183,23 +189,24 @@ fn reply_calls(machine: &Machine, calls: &[(&str, &str, Value)]) {
         .push(cineris_testkit::ServerReply::sse().send(crate::sse(&events)));
 }
 
-/// Adds the extension in `folder` as its README says where there is no
-/// terminal to ask at: once to be shown its hash, then with `--hash`.
+/// Adds the extension in `folder` as its README says: shown at a terminal,
+/// and approved with the person's approvals password.
 fn add(machine: &Machine, folder: &Path) {
     let path = folder.to_string_lossy().into_owned();
-    let shown_first = machine.run(&["ext", "add", &path]);
-    shown_first.expect_code(2);
-    let at = shown_first
-        .stdout
-        .find("(its hash is ")
-        .unwrap_or_else(|| panic!("no hash shown: {}", shown(&shown_first)));
-    let hash: String = shown_first.stdout[at + "(its hash is ".len()..]
-        .chars()
-        .take_while(char::is_ascii_hexdigit)
-        .collect();
     machine
-        .run(&["ext", "add", &path, "--hash", &hash])
+        .signing(&["ext", "add", &path], &[], crate::approvals::PASSWORD)
         .expect_code(0);
+}
+
+/// A headless run at a terminal of its own, which asks for the approvals'
+/// password before its session opens: the person's is typed.
+fn at_a_terminal(machine: &Machine, arguments: &[&str]) -> Run {
+    let mut session = machine.tui(arguments);
+    session.wait_for(crate::tui::LIMIT, "the approvals' password", |t| {
+        t.shows("to use this session's approvals")
+    });
+    crate::approvals::type_password(&mut session, crate::approvals::PASSWORD);
+    crate::approvals::ended(&mut session).as_run()
 }
 
 /// The bodies of the requests the model was sent after the first `before`.

@@ -679,6 +679,31 @@ fn the_search_does_not_move_the_window_under_a_dialog() {
     );
 }
 
+/// The password dialog's row of keys is its own in the full screen: the
+/// search's row, open under it, does not take its place (the signed
+/// approvals step: the search was drawn over the dialog's hint row).
+#[test]
+fn the_search_row_does_not_draw_over_the_password_dialogs_keys() {
+    use crate::secret::{PasswordAsk, Purpose};
+    let now = Instant::now();
+    let (mut app, _link) = opened_app(Presenter::Fullscreen, 99, 30, now);
+    key(&mut app, "ctrl+f", now);
+    super::type_text(&mut app, "zqx", now);
+    let rows = text(&app.screen_frame(now).0);
+    assert!(rows[29].contains("zqx"), "the search's row: {rows:#?}");
+    app.ask_password(
+        PasswordAsk::new(Purpose::Sign, vec!["the extension `x`".to_owned()]),
+        |_, _| {},
+    );
+    let _ = app.screen_frame(now);
+    app.drawn(now);
+    let due = app.deadline().expect("the field is due");
+    let rows = text(&app.screen_frame(due).0);
+    app.drawn(due);
+    assert!(rows[29].contains("enter approves"), "{rows:#?}");
+    assert!(!rows[29].contains("zqx"), "{rows:#?}");
+}
+
 /// A search's query holds at most 256 characters, however much is typed
 /// or pasted; with the ASCII glyphs, the row that says there is more below
 /// uses theirs (the review of step 25).

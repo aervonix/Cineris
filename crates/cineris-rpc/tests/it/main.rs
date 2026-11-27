@@ -545,7 +545,7 @@ pub fn probing(test: &str, connect: &str) -> Option<(World, CoreThread)> {
 
 /// The person's key, made from a password at a cost small enough for a
 /// test: what signs an approval of the tests' own.
-fn person_key() -> cineris_core::signed::PersonKey {
+pub fn person_key() -> cineris_core::signed::PersonKey {
     use cineris_core::signed::{Cost, KeyFile, Salt};
     KeyFile::make(
         b"the person's own password",

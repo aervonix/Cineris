@@ -178,6 +178,7 @@ pub(crate) fn enter() {
             restyle: None,
             export: None,
             setup: None,
+            approvals: None,
         };
         (Box::new(Quiet { sent: 0 }) as Box<dyn Link>, start)
     });

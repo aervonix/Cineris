@@ -8,6 +8,11 @@
 //! workspace of its own (`work/sNN`), so that what the core knows of a
 //! project never carries from one scenario to the next, and the scenarios
 //! cost one core a carrier, not one each.
+//!
+//! **A yes is signed** (the signed approvals step): each core has its
+//! approvals open with the person's key, as after they typed their
+//! password, and a yes to a trust question is signed with that key, as
+//! the person's front end signs it.
 
 use cineris_testkit::conformance::{self, Carrier, Transcript};
 
@@ -20,6 +25,9 @@ fn transcripts(
 ) -> Vec<(&'static str, Transcript)> {
     let world = World::new(test);
     let core = world.core();
+    core.core
+        .open_approvals(&crate::person_key())
+        .expect("the approvals open");
     let mut carrier = connect(&world, &core);
     let root = world.root.to_str().unwrap().to_owned();
     let server = world.server.base_url();
@@ -38,12 +46,20 @@ fn transcripts(
             world.server.push(reply);
         }
         let workspace = workspace.to_str().unwrap().to_owned();
-        let transcript = conformance::run(&scenario, carrier.as_mut(), &workspace, &known);
+        let transcript =
+            conformance::run(&scenario, carrier.as_mut(), &workspace, &known, Some(&sign));
         out.push((scenario.name, transcript));
     }
     drop(carrier);
     drop(core);
     out
+}
+
+/// Signs `proposal` as the person's front end signs a yes: with the key the
+/// core's approvals are open with, over the statement rebuilt from it.
+fn sign(proposal: &cineris_protocol::methods::ApprovalProposal) -> String {
+    let statement = cineris_core::signed::statement_of(proposal).expect("the proposal reads");
+    crate::person_key().sign(&statement).to_string()
 }
 
 /// Says where two transcripts first differ.

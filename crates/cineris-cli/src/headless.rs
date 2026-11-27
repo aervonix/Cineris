@@ -17,6 +17,16 @@
 //!
 //! Standard output carries the result and nothing else. Diagnostics go to
 //! standard error, through the log's stderr sink and the notices.
+//!
+//! **The person's approvals** (the signed approvals step): with standard
+//! input and standard output both terminals, the run takes the terminal
+//! before anything slow, so that a password typed early is not echoed;
+//! once its core has started, and when something carries a signature to
+//! use, it asks for the approvals' password there before it opens the
+//! session (`crate::approvals::open_at_start`). The main thread watches
+//! for signals only once the terminal is put back, so that the terminal's
+//! own handlers never outlive it. With no terminal, nothing is asked: the
+//! run uses no approvals, and says so once when it had some to use.
 
 use std::ffi::OsString;
 use std::io::{self, IsTerminal, Read, Write};
@@ -75,6 +85,16 @@ struct Plan {
     /// Could not mark its commands as a session's: what it says of that,
     /// and its level is at most `supervised`.
     unmarked: Option<String>,
+    /// The terminal taken for the approvals' password, at a terminal, and
+    /// what tells the main thread that it is put back.
+    asking: Option<Asking>,
+}
+
+/// The terminal a headless run took for the approvals' password, before
+/// anything slow. Dropped, it is put back, and the main thread told.
+struct Asking {
+    terminal: cineris_tui::secret::PasswordTerminal,
+    left: tokio::sync::oneshot::Sender<()>,
 }
 
 /// What a headless run's standing is: whether it runs under a session's
@@ -228,11 +248,23 @@ pub(crate) fn run(run: Run, name: &'static str, started: Instant) -> u8 {
     let (done, finished) = tokio::sync::oneshot::channel::<u8>();
     let handle = log.clone();
     let quiet = run.quiet;
+    // At a terminal, the terminal for the approvals' password, taken before
+    // anything slow: from here a password typed early is not echoed. Its
+    // signals are left to this run's own watch, which starts once it is
+    // put back.
+    let (asking, left) = match taken_for_the_password(&env) {
+        Some(terminal) => {
+            let (left, put_back) = tokio::sync::oneshot::channel::<()>();
+            (Some(Asking { terminal, left }), Some(put_back))
+        }
+        None => (None, None),
+    };
     let plan = Plan {
         standing: standing.into_inner(),
         // Set from the standing before the core starts.
         capped: true,
         unmarked: None,
+        asking,
         run,
         prompt,
         name,
@@ -272,6 +304,12 @@ pub(crate) fn run(run: Run, name: &'static str, started: Instant) -> u8 {
         .map(|runtime| {
             let core_done = Arc::clone(&core_done);
             runtime.block_on(async move {
+                // Watched once the terminal taken for the password is put
+                // back: the terminal's handlers would restore the ones
+                // there when it was taken, over this watch's.
+                if let Some(put_back) = left {
+                    let _ = put_back.await;
+                }
                 let watch = signals::watch(interrupts, Arc::clone(&core_done));
                 race_done(finished, writer_finished, &core_done, watch).await;
             });
@@ -450,10 +488,11 @@ impl Front<'_> {
 }
 
 async fn drive(
-    plan: Plan,
+    mut plan: Plan,
     lines: &mpsc::Sender<String>,
     interrupted: mpsc::UnboundedReceiver<Interrupt>,
 ) -> u8 {
+    let asking = plan.asking.take();
     let run = &plan.run;
     let mut front = Front {
         plan: &plan,
@@ -465,11 +504,55 @@ async fn drive(
     };
     let core = match start_core(&plan) {
         Ok(core) => core,
-        Err(error) => return failed(&mut front, *error).await,
+        Err(error) => {
+            drop(asking);
+            return failed(&mut front, *error).await;
+        }
     };
+    // The person's approvals, before the session opens: what a session
+    // checks its stores with is the key it had when it opened.
+    approvals(&core, &front, asking);
     let code = in_core(&core, &mut front).await;
     core.shutdown().await;
     code
+}
+
+/// Takes the terminal for the approvals' password, when standard input and
+/// standard output are both terminals: `None` otherwise, or when it cannot
+/// be taken (the run then asks nothing). The configuration is read for its
+/// `[terminal]` settings, as `auth login` reads it.
+fn taken_for_the_password(env: &Env) -> Option<cineris_tui::secret::PasswordTerminal> {
+    if !crate::approvals::at_terminal() {
+        return None;
+    }
+    let overrides = cineris_config::load(&cineris_config::LoadOptions::new(env.clone()))
+        .map(|loaded| crate::interactive::overrides(&loaded.settings.terminal))
+        .unwrap_or_default();
+    cineris_tui::secret::PasswordTerminal::enter_leaving_signals(overrides).ok()
+}
+
+/// Opens the person's approvals in a run's core when it has some to use and
+/// took the terminal to ask for them; says on standard error, once, when it
+/// goes on without them. A run under a session's command has no person,
+/// and asks nothing. The terminal is put back, and the main thread told,
+/// before this returns.
+fn approvals(core: &Core, front: &Front<'_>, asking: Option<Asking>) {
+    if front.plan.capped {
+        drop(asking);
+        return;
+    }
+    let (terminal, left) = match asking {
+        Some(Asking { terminal, left }) => (Some(terminal), Some(left)),
+        None => (None, None),
+    };
+    let project = core.project(&front.plan.workspace).ok();
+    let said = crate::approvals::open_at_start(core, project.as_ref(), terminal);
+    if let Some(left) = left {
+        let _ = left.send(());
+    }
+    if let Some(said) = said {
+        front.say(&said);
+    }
 }
 
 /// Everything after the core started: the session, the turn and the
@@ -948,6 +1031,9 @@ fn start_core(plan: &Plan) -> Result<Core, OpError> {
             log.add_secret(secret);
         }));
     }
+    // Held here by the tests of a password typed before the prompt
+    // (`cineris_base::hook::HOLD_CORE`).
+    cineris_base::hook::hold_core();
     Core::start(options)
 }
 

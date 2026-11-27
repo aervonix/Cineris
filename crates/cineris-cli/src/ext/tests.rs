@@ -25,18 +25,20 @@ struct World {
     key: cineris_core::signed::PersonKey,
 }
 
-/// The person's key of every [`World`]: one password and one salt, at a
-/// test's cost.
-fn person_key() -> cineris_core::signed::PersonKey {
+/// The person's key of every [`World`], and the key file it is of: one
+/// password and one salt, at a test's cost.
+fn person_key() -> (
+    cineris_core::signed::KeyFile,
+    cineris_core::signed::PersonKey,
+) {
     use cineris_core::signed::{Cost, KeyFile, Salt};
-    let (_, key) = KeyFile::make(
+    KeyFile::make(
         b"the person's own password",
         Salt::from_bytes([7; Salt::LEN]),
         Cost::new(64, 1, 1).unwrap(),
         cineris_protocol::ids::Timestamp::new("2026-11-25T10:00:00Z"),
     )
-    .unwrap();
-    key
+    .unwrap()
 }
 
 impl World {
@@ -59,7 +61,16 @@ impl World {
         options.dirs = Some(dirs.clone());
         options.clock = Arc::new(clock);
         let core = Core::start(options).unwrap();
-        let key = person_key();
+        // The key file the person's set-up wrote: a change is signed only
+        // with a key that opens it.
+        let (file, key) = person_key();
+        let state = cineris_config::StateDir::from_dirs(&dirs).unwrap();
+        std::fs::create_dir_all(state.root()).unwrap();
+        file.write(
+            &state.root().join(cineris_core::signed::KEY_FILE),
+            &cineris_base::SystemClock::new(),
+        )
+        .unwrap();
         core.open_approvals(&key).unwrap();
         let project = core.project(&workspace).unwrap();
         Self {
@@ -195,7 +206,7 @@ fn an_extension_is_added_listed_turned_off_and_removed() {
     World::extension(&kept, "tracker", "find_more");
     let again = world.core.extension_to_add(&world.project, &kept).unwrap();
     assert!(again.in_place && again.pinned_before.is_some());
-    assert!(add_question(&again).contains(&again.destination));
+    assert!(add_signed(&again).join(" ").contains(&again.destination));
     // Removed with no yes: unpinned, its folder left as it is.
     let removal = world
         .core
@@ -336,9 +347,9 @@ fn what_cannot_be_added_or_removed_is_refused_first() {
     let other = world.dir.join("src/other");
     World::extension(&other, "other", "new");
     let to_add = world.core.extension_to_add(&world.project, &other).unwrap();
-    let question = add_question(&to_add);
+    let question = add_signed(&to_add).join(" ");
     assert!(
-        question.contains(&format!("replace `{}`", to_add.destination))
+        question.contains(&format!("replacing `{}`", to_add.destination))
             && question.contains("holds something else"),
         "{question}"
     );
@@ -452,6 +463,31 @@ fn a_yes_is_the_persons_at_a_terminal_and_the_shown_hash_without_one() {
     );
     let said = not_done(Answer::No, true, None, shown, "`x` was not added");
     assert_eq!(said, "`x` was not added");
+}
+
+/// A signed change (`add`, `remove` of a pinned extension) is asked for
+/// only at a terminal, where the password is the yes; a hash given that is
+/// not the one shown refuses before anything is asked; and with no
+/// terminal, the right hash approves nothing (the signed approvals step:
+/// the owner accepted that scripted approval stops working without a
+/// person).
+#[test]
+fn a_signed_change_is_asked_only_at_a_terminal_and_no_hash_replaces_it() {
+    let shown = Some("ab12");
+    assert_eq!(signing(true, None, shown), Signing::Ask);
+    assert_eq!(signing(true, Some(" AB12 "), shown), Signing::Ask);
+    assert_eq!(signing(false, Some("ab12"), shown), Signing::NoTerminal);
+    assert_eq!(signing(false, None, shown), Signing::NoTerminal);
+    for at_terminal in [true, false] {
+        assert_eq!(
+            signing(at_terminal, Some("ab13"), shown),
+            Signing::HashDiffers
+        );
+        assert_eq!(
+            signing(at_terminal, Some("ab12"), None),
+            Signing::HashDiffers
+        );
+    }
 }
 
 /// A leading `~` is the home directory, as a shell would make it, where

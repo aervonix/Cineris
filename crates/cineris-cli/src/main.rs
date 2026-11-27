@@ -13,6 +13,7 @@
 //! | [`exit`] | The exit codes. |
 //! | [`signals`] | Ctrl-C, SIGTERM and the console's events. |
 //! | [`commands`] | The subcommands: sessions, configuration, permissions, credentials. |
+//! | [`approvals`] | `cineris approvals`, and the password typed at a terminal for the subcommands that sign. |
 //! | [`serve`] | The RPC server over standard input and output. |
 //!
 //! The program behaves identically under both names. It reads the name it
@@ -31,6 +32,7 @@
               environment, outside the core's runtime"
 )]
 
+mod approvals;
 mod args;
 mod attach;
 mod commands;
@@ -126,6 +128,7 @@ fn dispatch(command: Command, name: &'static str, started: Instant) -> u8 {
         Command::Config(command) => commands::config(command, name),
         Command::Permissions(command) => commands::permissions(command, name),
         Command::Auth(command) => commands::auth(command, name),
+        Command::Approvals(command) => approvals::approvals(command, name),
         Command::Models => commands::models(name),
         Command::Usage(command) => commands::usage(command, name),
         Command::Stats(command) => commands::stats(command, name),
@@ -255,11 +258,33 @@ pub(crate) fn nested_run(name: &str, run: &crate::args::Run) -> Result<bool, u8>
 }
 
 /// Writes `text` to standard output. A reader that has gone (`| head`)
-/// ends the output quietly, where `print!` would panic.
+/// ends the output quietly, where `print!` would panic. While the terminal
+/// is taken for the approvals' password, in raw mode, each line break is
+/// written as the terminal needs it there ([`approvals::raw`]).
 pub(crate) fn print_out(text: &str) {
     use std::io::Write as _;
+    let text = for_the_terminal(text);
     let mut out = std::io::stdout().lock();
     let _ = out.write_all(text.as_bytes()).and_then(|()| out.flush());
+}
+
+/// Writes `text` to standard error, as [`print_out`] writes standard
+/// output.
+pub(crate) fn print_err(text: &str) {
+    use std::io::Write as _;
+    let text = for_the_terminal(text);
+    let mut err = std::io::stderr().lock();
+    let _ = err.write_all(text.as_bytes()).and_then(|()| err.flush());
+}
+
+/// `text` with each line break a carriage return and a line feed while the
+/// terminal is in raw mode, which writes a line feed alone as a step down.
+fn for_the_terminal(text: &str) -> std::borrow::Cow<'_, str> {
+    if approvals::raw() && text.contains('\n') {
+        std::borrow::Cow::Owned(text.replace("\r\n", "\n").replace('\n', "\r\n"))
+    } else {
+        std::borrow::Cow::Borrowed(text)
+    }
 }
 
 /// Text as it is safe to show at a terminal: every character that would act

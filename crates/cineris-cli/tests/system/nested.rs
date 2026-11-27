@@ -20,8 +20,9 @@ struct Nested {
 /// The subcommands that approve, trust or answer for the person, each run
 /// by the script under the session's command: since the review of step 28
 /// (finding 1), `project`'s changes, `auth login` and `logout`, and `stats
-/// reset` among them.
-fn approving(folder: &Path) -> [Vec<String>; 23] {
+/// reset` among them, and since the signed approvals step `approvals setup`
+/// and `reset`.
+fn approving(folder: &Path) -> [Vec<String>; 25] {
     let folder = folder.to_string_lossy().into_owned();
     let words = |line: &[&str]| -> Vec<String> { line.iter().map(|w| (*w).to_owned()).collect() };
     [
@@ -57,6 +58,10 @@ fn approving(folder: &Path) -> [Vec<String>; 23] {
         words(&["auth", "login", "anthropic"]),
         words(&["auth", "logout", "anthropic"]),
         words(&["stats", "reset"]),
+        // The password every approval is signed with (the signed approvals
+        // step): guard B refuses setting it, or a new one.
+        words(&["approvals", "setup"]),
+        words(&["approvals", "reset"]),
     ]
 }
 
@@ -343,6 +348,8 @@ fn an_approving_subcommand_refuses_under_a_sessions_command(world: &Nested) {
         "`cineris auth login` was refused",
         "`cineris auth logout` was refused",
         "`cineris stats reset` was refused",
+        "`cineris approvals setup` was refused",
+        "`cineris approvals reset` was refused",
     ] {
         assert!(said.contains(what), "{what}: {said}\n{}", shown(&world.run));
     }
@@ -350,6 +357,7 @@ fn an_approving_subcommand_refuses_under_a_sessions_command(world: &Nested) {
     let machine = &world.machine;
     let state = machine.dirs().state.unwrap();
     assert!(!state.join("pins.toml").exists(), "{said}");
+    assert!(!state.join("approval-key.toml").exists(), "{said}");
     assert!(!state.join("trust.toml").exists(), "{said}");
     let config = machine.dirs().config.unwrap();
     assert!(

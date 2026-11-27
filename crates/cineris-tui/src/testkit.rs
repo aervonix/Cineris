@@ -530,6 +530,7 @@ fn first_run_app_opening(
         restyle: None,
         export: None,
         setup: Some(setup),
+        approvals: None,
     };
     let app = App::new(
         Box::new(link.clone()),
@@ -549,6 +550,39 @@ fn app_built_with(
     settings: Settings,
     highlighter: Highlighter,
 ) -> (App, Scripted) {
+    app_built_full(now, prompt, open, settings, highlighter, None)
+}
+
+/// As [`app`], with the program's approvals `approvals` (the signed
+/// approvals step): a fake, for the tests of the password at a session's
+/// opening and at the trust question's yes.
+#[must_use]
+pub fn app_with_approvals(
+    now: Instant,
+    approvals: Arc<dyn crate::app::Approvals>,
+) -> (App, Scripted) {
+    app_built_full(
+        now,
+        None,
+        Open::New {
+            workspace: WORKSPACE.to_owned(),
+            settings: SessionSettings::default(),
+            ephemeral: false,
+        },
+        Settings::default(),
+        Highlighter::off(),
+        Some(approvals),
+    )
+}
+
+fn app_built_full(
+    now: Instant,
+    prompt: Option<&str>,
+    open: Open,
+    settings: Settings,
+    highlighter: Highlighter,
+    approvals: Option<Arc<dyn crate::app::Approvals>>,
+) -> (App, Scripted) {
     let link = Scripted::default();
     let start = Start {
         version: "0.1.0".to_owned(),
@@ -565,6 +599,7 @@ fn app_built_with(
         restyle: None,
         export: None,
         setup: None,
+        approvals,
     };
     let app = App::new(Box::new(link.clone()), start, &caps(), 99, 40, now);
     (app, link)

@@ -29,7 +29,7 @@ pub mod password;
 
 pub use password::{
     PasswordAsk, PasswordInput, PasswordPrompt, PasswordTerminal, PromptRows, Prompted, Purpose,
-    read_password, read_password_on,
+    confirm_on, read_password, read_password_on,
 };
 
 use std::io;
@@ -803,7 +803,13 @@ mod tests {
             (Ready::Input, b"\x1b[200~x\r\n\x1b[201~"),
             (Ready::Input, b"\r"),
         ];
+        let wiped = || crate::secret::password::PASTES_WIPED.with(std::cell::Cell::get);
+        let before = wiped();
         let (read, written, waits) = login(steps);
+        // Each of its three pastes, refused or taken, is written over once
+        // read (the signed approvals' review: a paste's string left to drop
+        // unwiped failed nothing).
+        assert_eq!(wiped() - before, 3);
         let screen = |step: usize| shown(&written[..waits[step + 1]]);
         let emptied = screen(1);
         assert!(emptied.shows("0 characters, hidden"), "{}", emptied.dump());
