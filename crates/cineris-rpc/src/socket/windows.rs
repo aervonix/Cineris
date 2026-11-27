@@ -70,6 +70,13 @@
 //!   Windows has no sandbox in the first release: what keeps a command from
 //!   answering its session's approvals there is the person who approved
 //!   the command (`docs/security.md`, section 5).
+//! - **The front end's check of each client's process** ([`super::PeerCheck`]),
+//!   after that: `cineris serve` refuses a client under any harness's
+//!   session's command, read as the approving subcommands read their own
+//!   process (the review of step 28, finding 3: another harness's command,
+//!   another session of Cineris's included, could otherwise answer this
+//!   server's trust questions and approvals). It is as thin, for the same
+//!   reasons.
 //!
 //! **The client** ([`connect`], for `cineris attach`) checks the server from
 //! the handle it opened, before it sends anything: the pipe's owner must be
@@ -144,7 +151,7 @@ use windows_sys::Win32::System::Threading::{
     PROCESS_QUERY_LIMITED_INFORMATION,
 };
 
-use super::{Accepted, ListenOptions, Place};
+use super::{Accepted, ListenOptions, PeerCheck, Place};
 
 /// How every pipe's whole name begins.
 const PIPES: &str = r"\\.\pipe\";
@@ -653,11 +660,13 @@ fn client_token(pipe: BorrowedHandle<'_>) -> io::Result<OwnedHandle> {
 
 /// The check of a connected client: `Ok` with how to name it in the log, or
 /// `Err` with why it is refused. It impersonates, so it runs on a thread of
-/// its own. `job` is the job of the server's own commands.
+/// its own. `job` is the job of the server's own commands; `peer_check` the
+/// front end's check of each client's process, after it.
 fn check(
     pipe: BorrowedHandle<'_>,
     server: Server,
     job: BorrowedHandle<'_>,
+    peer_check: Option<&PeerCheck>,
 ) -> Result<String, String> {
     let pid = client_process(pipe);
     let peer = pid.map_or_else(|| "pid unknown".to_owned(), |pid| format!("pid {pid}"));
@@ -694,6 +703,9 @@ fn check(
             return Err(format!("one of the server's own commands ({peer})"));
         }
     }
+    if let Some(why) = peer_check.and_then(|check| check.refusal(pid)) {
+        return Err(format!("a client refused ({peer}): {why}"));
+    }
     Ok(peer)
 }
 
@@ -717,6 +729,7 @@ async fn admit(
     mut pipe: NamedPipeServer,
     server: Server,
     job: BorrowedHandle<'static>,
+    peer_check: Option<PeerCheck>,
 ) -> Accepted {
     let mut first = vec![0; FIRST];
     let count = match pipe.read(&mut first).await {
@@ -731,7 +744,7 @@ async fn admit(
     let checking = std::thread::Builder::new()
         .name("cineris-pipe-check".to_owned())
         .spawn(move || {
-            let verdict = check(pipe.as_handle(), server, job);
+            let verdict = check(pipe.as_handle(), server, job, peer_check.as_ref());
             let _ = told.send((pipe, verdict));
         });
     if let Err(error) = checking {
@@ -776,6 +789,9 @@ pub(super) struct Listener {
     server: Server,
     /// The job of the server's own commands.
     job: BorrowedHandle<'static>,
+    /// The front end's check of each client's process, after the server's
+    /// own.
+    peer_check: Option<PeerCheck>,
     /// The first instance, until the first `accept` takes it into the
     /// runtime it runs in: binding needs no runtime.
     bound: Option<OwnedHandle>,
@@ -823,6 +839,7 @@ impl Listener {
             description,
             server,
             job,
+            peer_check: options.peer_check.clone(),
             bound: Some(first),
             waiting: None,
             checking: JoinSet::new(),
@@ -886,7 +903,12 @@ impl Listener {
         {
             oldest.abort();
         }
-        let started = self.checking.spawn(admit(connected, self.server, self.job));
+        let started = self.checking.spawn(admit(
+            connected,
+            self.server,
+            self.job,
+            self.peer_check.clone(),
+        ));
         self.order.push_back(started);
         Ok(())
     }

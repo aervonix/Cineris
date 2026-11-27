@@ -1,0 +1,72 @@
+# Step 28 fixes: the guards of the harness's own approvals
+
+The guards' findings of the independent review of step 28 (findings 1, 2, 3, 7, 8, 17 and the guards' part of 19), on `main` at `5eda6204`: the permission path and the process layer. Each finding below has its outcome, its test, what the test showed before the fix, the fix, its break and the docs it changed. The breaks are in `mutations/step-28-fixes-guards.breaks`.
+
+## 1. `cineris project`'s changes had no guard B
+
+- **Outcome:** fixed. `project add`, `accept`, `edit`, `promote`, `disable` and `delete` call `not_under_a_session` before the core starts; `project list` and `path` only read.
+- **`auth login` and `logout`, and `stats reset`, decided the same way: refused under a session's command.** A key chooses the account every later session spends on and sends its conversations to, so storing one, or removing the person's, answers for the person; the statistics are the person's record of what their sessions spent, which a session's command should not wipe. None has a use from a session's command that a person would miss: `auth status` and `stats show` only read and stay open. A refused all three already.
+- **Test:** `cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused`, rule `an_approving_subcommand_refuses_under_a_sessions_command`: the session's script now also runs `project add fact`, `project add command … --purpose check --command 'touch review-ran.txt'`, `project accept k_1`, `project accept --shared`, `project edit`, `promote`, `disable`, `delete`, `auth login anthropic`, `auth logout anthropic` and `stats reset`; each must say it was refused, and `project list --all --json` must then list no entry.
+- **On `main`:** the review's `sys_review_project_add_under_a_sessions_command` (linux-22.04, run 45938789790) printed `Added k_1` under a session's command, and a later `--permission-mode supervised` run ran the `touch` with `permission_denials: []`.
+- **Breaks:** `project-change-not-under-a-session`, `project-add-not-under-a-session`, `auth-login-not-under-a-session`, `stats-reset-not-under-a-session`. Verdicts: below.
+- **Docs:** 06, "B" (the list of subcommands, and the parenthesis that left `project` to A alone); `cineris_sandbox::session`'s module doc.
+
+## 2. Windows: B's walk for a service's start fell open at its bound
+
+- **Outcome:** fixed. `started_by_a_service` returns `Unknown` (refuses) when the line still goes up through interpreters and runtimes past its 64, as Linux's walk refuses past its own bound. `line_of` reads this process and 64 parents, so the walk meets its bound before the line read runs out.
+- **Twin, fixed:** `parents`, the line of parents whose jobs are asked first and which reads through any program, ended at 64 and said nothing more; a command outside its harness's job (it let its jobs let it leave) with 65 programs of its own between it and its harness read as under no session. Past the bound it now keeps the next process, a harness when it is one and not known otherwise, which refuses where nothing holds the process.
+- **Tests:** `cineris-sandbox session::tests::a_services_start_through_more_interpreters_than_the_bound_is_not_known` (the walk on the system's list and on the line `line_of` describes, through 3, 63, 64 and 74 interpreters); `session::tests::the_line_of_parents_is_read_through_any_program_to_its_end` (the line past its bound, a harness past it, and `judged`'s verdict); `cineris-sandbox::it session::sys_a_services_start_through_more_interpreters_than_the_bound_is_refused` (Windows: a task host's start through 3 and 63 interpreters is under a session, through 64 not known).
+- **On `main`:** the review's `sys_review_a_service_start_through_64_interpreters_is_seen` gave `probed: nothing` (windows, runs 45938791938 and 45939453799), the controls at 3 and 63 under a session.
+- **Breaks:** `service-walk-falls-open-at-its-bound`, `line-of-parents-falls-open-at-its-bound`.
+- **Docs:** 06, "B" (the line of parents, and what a service starts); the module doc.
+
+## 3. The RPC socket refused only its own server's commands
+
+- **Outcome:** fixed. `ListenOptions` takes a `PeerCheck` from the front end, asked of every peer the listener's own checks admit (after the refusal of the server's own commands, on both systems), and `cineris serve` passes one that refuses a peer under any harness's session's command, read as B reads its own process: `cineris_sandbox::session::under_a_session_of(pid)`, new. `cineris-rpc` gets no new dependency. On Linux the peer's line is read from its parent up by B's rules, the peer itself must be shown, and a parent `/proc` does not show (the first included) ends the line elsewhere, as the socket's walk did since the second review of step 27's second part. On Windows the same check as B's, for another process: its line of parents, every running harness's job (asked with `IsProcessInJob` of a handle of the peer), and a service's start. The server's own process passes (it is in its own job on Windows).
+- **Tests:** `cineris-cli::system guards::sys_another_harnesss_command_is_refused_at_the_socket` (both systems): the person's `serve --socket`, and a headless run at `unrestricted` whose command runs this test binary as a raw client naming no Cineris (`initialize`, `session/new`, the trust question answered trusted): it is closed unanswered and the project stays not trusted; the same client run by the test is served. `cineris-rpc::it socket::a_peer_the_front_ends_check_refuses_is_closed_unanswered` and `pipe::a_client_the_front_ends_check_refuses_is_closed_unanswered`: the listener refuses what its check refuses, gives the check the peer's process, and serves what it admits. `cineris-sandbox session::tests::a_peers_line_ends_elsewhere_at_a_first_parent_not_shown` and `session::sys::tests::sys_another_processs_line_is_read_as_this_ones` (Linux).
+- **On `main`:** the review's `sys_review_another_harnesss_command_answers_trust_through_the_socket` (linux-22.04, run 45939451208) opened the session `trust: trusted`, and `permissions list` then said trusted.
+- **Breaks:** `serve-passes-no-peer-check`, `socket-ignores-the-peer-check`, `pipe-ignores-the-peer-check` (`os: windows`), `a-peers-line-is-not-read`.
+- **Docs:** security.md, sections 3 and 5 (the mitigation and its residual); 11-rpc-protocol (the socket's bullets); 06, "B"; 12-extensions (the guards' sentence); `cineris_rpc::socket`'s two modules' docs.
+
+## 7. Linux: a harness that is process 1 was never seen
+
+- **Outcome:** fixed. The walk ends only at process 0 or at a process that is its own parent, and reads process 1 as any other; a process 1 `/proc` does not show (another user's, under `hidepid`) ends the line elsewhere even as the first parent, as it cannot have gone. `harness()`, which finds the session's process whose environment a nested run's stores are compared with, reads it the same way.
+- **Twin, fixed:** `moved_stores` on Linux compared only the `CINERIS_` variables when no harness was found on the line (a line that could not be read), so a nested run whose line was made unreadable on purpose (a process of it named in bytes that are not UTF-8) ran, capped, reading the stores `XDG_STATE_HOME` named. It now refuses there, as Windows refuses when the session said nothing.
+- **Tests:** `cineris-sandbox session::tests::a_harness_that_is_process_1_is_seen_and_the_line_ends_at_process_0`; `cineris-cli::system guards::sys_a_harness_that_is_process_1_is_seen` (Linux, `unshare -Urpf --mount-proc` around the headless run, which is shown to be process 1: `ext add` and `permissions trust` refused, no `pins.toml`, and a nested run held to `read-only` with its stores compared); `guards::sys_a_nested_run_whose_line_cannot_be_read_is_refused_with_its_stores_moved`.
+- **On `main`:** the review's `sys_review_approving_under_a_harness_that_is_process_1` (linux-22.04, run 45938789790): "Approved `tracker` … pinned", "Trusted …", `pins.toml` written.
+- **Breaks:** `walk-stops-before-process-1`, `stores-harness-stops-before-process-1`, `stores-not-compared-without-a-harness`.
+- **Docs:** 06, "B" and "A headless run under a session's command"; the module doc.
+
+## 8. Linux: a pid namespace of the command's own hides every parent
+
+- **Outcome:** stated, not built against, as the maintainers settled. `getppid` reads 0 at the namespace's edge, whoever reaps the process, so step 32's subreaper does not close it. A rule on a pid namespace would refuse every WSL 2 user, a rule on a user namespace every toolbox and distrobox user, Docker and dev containers have a pid namespace of their own, and a namespace's legitimate first process has a parent of 0 as the attack's does; `bwrap --unshare-user --unshare-pid` works on Ubuntu 24.04 where `unshare -Ur` is refused. Approvals signed with a key that needs a person close it, and the kernel-identified channel of `a-nested-run-under-a-session-is-capped-at-read-only` would for a nested run. The RPC socket is not reached by it: the server reads a peer in its own namespace.
+- **Docs:** 06, "What is left"; security.md section 3's residual (and section 5's, which it does not reach); `what-the-guards-of-the-harnesss-own-approvals-do-not-reach`, `a-session-of-its-own-in-the-sandbox`, `a-nested-run-under-a-session-is-capped-at-read-only`; `session.rs`'s module doc.
+
+## 17. Windows: `ProgramData` moved the managed configuration
+
+- **Outcome:** fixed by adding `ProgramData` to A's `moves_stores` and to B's Windows `STORES`, not by reading the folder with `SHGetKnownFolderPath(FOLDERID_ProgramData)`. The known folder would also close `setx ProgramData …` for the person's own later runs, but it changes `cineris-config` and its tests, outside this part; the list is the guards' own mechanism, as for every other variable, and the `setx` twin is stated with `setx CINERIS_CONFIG` in the guards' item, with the known folder as its recommendation.
+- **Tests:** two rows of A's table (`set ProgramData=x& cineris -p go`, `$env:PROGRAMDATA='x'; cineris -p go`), held by `cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines`; the nested system test's rule `each_variable_that_moves_the_stores_refuses_a_nested_run` (Windows).
+- **Breaks:** `a-refuses-no-programdata`, `b-stores-no-programdata` (`os: windows`).
+- **Docs:** 06 (A's list and the nested run's); `approving.rs`'s module doc.
+
+## 19 (the guards' part). B's store-moving variables had no test
+
+- **Outcome:** fixed. The nested system test moves each variable of B's list for one nested headless run of its script (Linux: `HOME`, `XDG_CONFIG_HOME`, `XDG_STATE_HOME`, `XDG_DATA_HOME`, `CINERIS_CONFIG`, `CINERIS_DATA_DIR`; Windows: `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, `ProgramData`, `CINERIS_CONFIG`, `CINERIS_DATA_DIR`), and its rule `each_variable_that_moves_the_stores_refuses_a_nested_run` requires each to be refused naming the variable, with nothing on its standard output.
+- **Breaks:** `b-stores-no-xdg-state-home`, `b-stores-no-localappdata` (`os: windows`).
+
+## The lower-confidence notes
+
+Each is in `what-the-guards-of-the-harnesss-own-approvals-do-not-reach` (Windows session 0 and S4U tasks; Linux `ptrace` where Yama allows it; `hidepid` ending B's walk; install names other than `cineris` and `cin`), except `permissions trust` showing the rules after trusting, which is an item of its own, `permissions-trust-shows-the-rules-after-trusting`.
+
+## Docs corrected beside the findings
+
+- 06: another user's process does not end the line where `/proc` shows its `stat` (only `hidepid` hides it); a process of the same user at the same integrity can read another's environment from its process block on Windows (what is compared is the harness's word, inherited).
+- Pid namespaces are named in 06, security.md and the items, not only in `session.rs`.
+
+## Set-ups considered, so that no fix refuses a person's own approvals
+
+A plain terminal; SSH (`sshd` another user's, shown or hidden); `sudo`; tmux and screen (their server the person's, started outside any harness); a terminal a logon task opened (Windows, before any harness: the time rule is unchanged); WSL 2 (process 1 is `/init`, whose parent is 0); Docker and dev containers (process 1 an entry point that runs no sessions; `docker exec` gives a parent of 0); a container whose entry point is Cineris itself (its own sessions' commands are refused, as they should be; `docker exec` into it is not); toolbox and distrobox; a CI runner (Linux: the runner's processes; Windows: a service started the runner long before any harness, and the runner is no interpreter). For the socket: an editor's client, `cineris attach` from a terminal, and a client whose launcher exits as it connects (a first parent not shown ends its line elsewhere). For the bounds: no ordinary line of parents is near 64 deep. Process 1 is now read on every check: one more `stat` and an identity read that fails for a root process.
+
+## Verdicts and runs
+
+To be filled.

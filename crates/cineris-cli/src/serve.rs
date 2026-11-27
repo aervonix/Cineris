@@ -31,7 +31,7 @@ use std::time::Duration;
 use cineris_base::{CancelToken, SharedTimer};
 use cineris_config::{Env, LoadOptions};
 use cineris_core::{Core, TokioTimer};
-use cineris_rpc::{ListenOptions, Listener, Place, ServeOptions, Transport};
+use cineris_rpc::{ListenOptions, Listener, PeerCheck, Place, ServeOptions, Transport};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::args::Serve;
@@ -318,7 +318,22 @@ fn core_thread(
                 }
             },
         };
-        let listen = ListenOptions::new(own_folder);
+        let mut listen = ListenOptions::new(own_folder);
+        // A peer under any harness's session's command is refused, read as
+        // the approving subcommands read their own process, and not only
+        // this server's own commands, which the listener tells itself (the
+        // review of step 28, finding 3: another session's command answered
+        // this server's trust question).
+        // The server's own process, in its own job of sessions' commands on
+        // Windows, is its own client where it connects to itself.
+        listen.peer_check = Some(PeerCheck::new(|pid| {
+            if pid == std::process::id() {
+                return Ok(());
+            }
+            cineris_sandbox::session::under_a_session_of(pid)
+                .refusal()
+                .map_or(Ok(()), Err)
+        }));
         let listener = match Listener::bind(&place, &listen) {
             Ok(listener) => listener,
             Err(error) => {

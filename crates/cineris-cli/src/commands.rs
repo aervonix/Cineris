@@ -326,6 +326,13 @@ pub(crate) fn usage(command: UsageCommand, name: &'static str) -> Done {
 pub(crate) fn stats(command: StatsCommand, name: &'static str) -> Done {
     let context = Context::new(name);
     result((|| {
+        // The statistics are the person's record of what their sessions
+        // spent: a session's command may not wipe its own (the review of
+        // step 28, finding 1, which left this to be decided with
+        // `project`). Showing them only reads.
+        if command == StatsCommand::Reset {
+            crate::not_under_a_session(name, "stats reset")?;
+        }
         let core = context.core(&Common::default())?;
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_time()
@@ -461,6 +468,21 @@ pub(crate) fn project(command: ProjectCommand, name: &'static str) -> Done {
 
     let context = Context::new(name);
     result((|| {
+        // Every change approves for the person: an accepted or added
+        // command runs without asking once the project is trusted, and as
+        // a check at every turn's end; a fact goes into later sessions'
+        // system prompt; `accept --shared` takes every entry the
+        // repository's file holds. Refused under a session's command
+        // before anything is read (the review of step 28, finding 1); a
+        // listing and the files' places only read.
+        match &command {
+            ProjectCommand::List { .. } | ProjectCommand::Path => {}
+            ProjectCommand::Change { action, .. } => {
+                crate::not_under_a_session(name, &format!("project {action}"))?;
+            }
+            ProjectCommand::Edit { .. } => crate::not_under_a_session(name, "project edit")?,
+            ProjectCommand::Add { .. } => crate::not_under_a_session(name, "project add")?,
+        }
         let core = context.core(&Common::default())?;
         let project = context.project(&core)?;
         let fail = |error: OpError| context.fail(&error);
@@ -943,6 +965,16 @@ pub(crate) fn auth(command: AuthCommand, name: &'static str) -> Done {
         return result(login_at_terminal(&context, provider));
     }
     result((|| {
+        // A key chooses the account every later session spends on and sends
+        // its conversations to: a session's command may not store one for
+        // the person, nor remove theirs (the review of step 28, finding 1,
+        // which left this to be decided with `project`). The status only
+        // reads.
+        match &command {
+            AuthCommand::Status => {}
+            AuthCommand::Login { .. } => crate::not_under_a_session(name, "auth login")?,
+            AuthCommand::Logout { .. } => crate::not_under_a_session(name, "auth logout")?,
+        }
         let core = context.core(&Common::default())?;
         match command {
             AuthCommand::Status => {

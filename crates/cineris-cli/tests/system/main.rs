@@ -18,6 +18,7 @@
 //! | `runs` | Every exit code, each output format, and that standard output carries only the result. |
 //! | `signals` | Ctrl-C, SIGTERM and Ctrl-Break, in a turn and in an extension's running command; the second Ctrl-C; the guard of a killed harness; a run with no console. |
 //! | `commands` | The subcommands, and a project trusted through one. |
+//! | `guards` | The guards of the harness's own approvals where the review of step 28 found a way past: a harness that is process 1 (Linux), and another harness's command at `serve --socket`. |
 //! | `examples` | The three examples under `examples/`, added and run as their READMEs say. |
 //! | `live` | The one run against a real model, ignored: `cargo xtask live` starts it. |
 //! | `tools` | The real toolbox as a strict variant declares it. |
@@ -89,6 +90,7 @@ macro_rules! parts {
 mod commands;
 mod examples;
 mod first_run;
+mod guards;
 mod live;
 mod names;
 mod nested;

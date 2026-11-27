@@ -90,6 +90,37 @@ impl Place {
     }
 }
 
+/// A check of each peer's process the front end gives the listener: given
+/// the process id of a peer of the user that is not one of the server's own
+/// commands, `Err` with why it is refused. `cineris serve` refuses a peer
+/// that runs under any harness's session's command, read as the approving
+/// subcommands read their own process (`cineris_sandbox::session`), so that
+/// a command of another session cannot answer this server's trust questions
+/// and approvals (the review of step 28, finding 3); this crate tells only
+/// the server's own commands, and needs nothing of the sandbox for it.
+#[derive(Clone)]
+pub struct PeerCheck(std::sync::Arc<dyn Fn(u32) -> Result<(), String> + Send + Sync>);
+
+impl PeerCheck {
+    /// The check `check`, called on a thread that may block (it reads the
+    /// peer's process and its parents), once a connection.
+    #[must_use]
+    pub fn new(check: impl Fn(u32) -> Result<(), String> + Send + Sync + 'static) -> Self {
+        Self(std::sync::Arc::new(check))
+    }
+
+    /// Why the peer `pid` is refused, if it is.
+    pub(crate) fn refusal(&self, pid: u32) -> Option<String> {
+        (self.0)(pid).err()
+    }
+}
+
+impl std::fmt::Debug for PeerCheck {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("PeerCheck")
+    }
+}
+
 /// How a listener is made.
 #[derive(Debug, Clone, Default)]
 pub struct ListenOptions {
@@ -97,6 +128,11 @@ pub struct ListenOptions {
     /// owner-only when it is missing and held to that, where a folder the
     /// user named is only checked not to be writable by others.
     pub own_folder: bool,
+    /// The front end's check of each peer's process, after the refusal of
+    /// the server's own commands ([`PeerCheck`]); none checks nothing more.
+    /// It is asked of every peer that check admits, the server's own process
+    /// included, which may connect to itself.
+    pub peer_check: Option<PeerCheck>,
     /// Test only: the pipe's access list also admits everyone, and its
     /// label is lowered to low integrity, so that a test can show the check
     /// of a connection's token refusing another user, or a lower integrity,
@@ -117,6 +153,7 @@ impl ListenOptions {
     pub fn new(own_folder: bool) -> Self {
         Self {
             own_folder,
+            peer_check: None,
             #[cfg(feature = "test-hooks")]
             widen_access_for_tests: false,
             #[cfg(feature = "test-hooks")]

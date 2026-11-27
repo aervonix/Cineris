@@ -16,6 +16,11 @@ const HOST: &str = "cin-session-host";
 const TERMINAL: &str = "cin-session-terminal";
 const PROBE: &str = "cin-session-probe";
 
+/// The roles of `through`: a service's host that starts a chain of
+/// interpreters, and each of them.
+const CHAIN_HOST: &str = "cin-session-chain-host";
+const CHAIN: &str = "cin-session-chain";
+
 /// The test that runs a role.
 const ENTRY: &str = "session::the_roles_this_binary_is_run_again_in";
 
@@ -72,6 +77,22 @@ fn the_roles_this_binary_is_run_again_in() {
         let terminal = std::path::Path::new(&after[0]);
         let probe = std::path::Path::new(&after[1]);
         let status = in_role(terminal, TERMINAL, &[probe]).status().unwrap();
+        status.code().unwrap_or(99)
+    } else if has(CHAIN_HOST) || has(CHAIN) {
+        // After `--`: the interpreter's program, the probe's, and how many
+        // interpreters are still to come, this one among them when it is
+        // one.
+        let interpreter = std::path::Path::new(&after[0]);
+        let probe = std::path::Path::new(&after[1]);
+        let left: usize = after[2].parse().unwrap();
+        let left = if has(CHAIN) { left - 1 } else { left };
+        let status = if left == 0 {
+            in_role(probe, PROBE, &[]).status().unwrap()
+        } else {
+            let mut next = in_role(interpreter, CHAIN, &[interpreter, probe]);
+            next.arg(left.to_string());
+            next.status().unwrap()
+        };
         status.code().unwrap_or(99)
     } else if has(TERMINAL) {
         println!("ready");
@@ -161,4 +182,72 @@ fn sys_a_service_hosts_start_after_a_harness_began_is_under_a_session() {
     harness.wait().unwrap();
     assert_eq!(code, Some(11), "{said}");
     assert!(said.contains("`taskhostw.exe`, started it"), "{said}");
+}
+
+/// A harness of this user marked, then a program named as the task host (a
+/// link to this binary) starting `interpreters` programs named `cmd.exe`,
+/// each the next's parent, the last starting the probe (a copy of this
+/// binary): the probe's code, and what it said.
+fn through(test: &str, interpreters: usize) -> (Option<i32>, String) {
+    use std::process::Stdio;
+    let scratch = cineris_testkit::scratch::Scratch::outside("cineris-sandbox-session", test);
+    let own = std::env::current_exe().unwrap();
+    let link = |name: &str| {
+        let path = scratch.join(name);
+        if std::fs::hard_link(&own, &path).is_err() {
+            std::fs::copy(&own, &path).unwrap();
+        }
+        path
+    };
+    let host = link("taskhostw.exe");
+    let interpreter = link("cmd.exe");
+    let probe = scratch.join("probe.exe");
+    std::fs::copy(&own, &probe).unwrap();
+    let mut harness = in_role(&own, HARNESS, &[])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    read_up_to(
+        &mut std::io::BufReader::new(harness.stdout.take().unwrap()),
+        "marked",
+    );
+    let mut started = in_role(&host, CHAIN_HOST, &[&interpreter, &probe]);
+    started.arg(interpreters.to_string());
+    let out = started
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .unwrap();
+    drop(harness.stdin.take());
+    harness.wait().unwrap();
+    let said = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter(|line| line.starts_with("under") || line.starts_with("not known"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    (out.status.code(), said)
+}
+
+/// A service's host's start, after a harness began, through three
+/// interpreters and through 63, is under a session's command; through 64
+/// (`cmd /c` nested 64 times between WMI's host and the subcommand, or a
+/// batch file that calls itself), more than the walk reads, it is not
+/// known, which refuses: before the review of step 28 (finding 2) the walk
+/// ended at its bound and said nothing.
+#[test]
+fn sys_a_services_start_through_more_interpreters_than_the_bound_is_refused() {
+    let test = "sys_a_services_start_through_more_interpreters_than_the_bound_is_refused";
+    for interpreters in [3, 63] {
+        let (code, said) = through(&format!("{test}-{interpreters}"), interpreters);
+        assert_eq!(
+            code,
+            Some(11),
+            "through {interpreters} interpreters: {said}"
+        );
+    }
+    let (code, said) = through(&format!("{test}-64"), 64);
+    assert_eq!(code, Some(12), "through 64 interpreters: {said}");
+    assert!(said.contains("more than 64"), "{said}");
 }

@@ -9,6 +9,12 @@ use windows_sys::Win32::System::Threading::CREATE_BREAKAWAY_FROM_JOB;
 /// `JOB_OBJECT_SET_ATTRIBUTES`).
 const JOB_OBJECT_SET_ATTRIBUTES: u32 = 0x0010;
 
+/// This process's pseudo-handle, which has every right.
+fn this_process() -> HANDLE {
+    // SAFETY: plain call; the pseudo-handle is always valid.
+    unsafe { GetCurrentProcess() }
+}
+
 /// A job of the given security, named or not.
 fn job(name: Option<&str>, security: Option<&OwnerOnly>) -> OwnedHandle {
     let wide_name = name.map(wide);
@@ -223,7 +229,7 @@ fn sys_a_harnesss_job_that_cannot_be_opened_is_not_known() {
         let denied = OwnerOnly::from_sddl("D:P").unwrap();
         let planted = job(Some(&own_name()), Some(&denied));
         let named = named_for(pid, made, &OnceCell::new());
-        let direct = in_the_job_of(pid, made, &OnceCell::new());
+        let direct = in_the_job_of(pid, made, &OnceCell::new(), this_process());
         let under = under_a_session();
         drop(planted);
         assert_eq!(named, NamedFor::Cineris);
@@ -261,7 +267,7 @@ fn sys_a_job_that_cannot_be_opened_named_for_another_program_is_passed_over() {
     let denied = OwnerOnly::from_sddl("D:P").unwrap();
     let planted = job(Some(&own_name()), Some(&denied));
     let named = named_for(pid, made, &OnceCell::new());
-    let direct = in_the_job_of(pid, made, &OnceCell::new());
+    let direct = in_the_job_of(pid, made, &OnceCell::new(), this_process());
     let after = under_a_session();
     drop(planted);
     assert_eq!(named, NamedFor::Other);
@@ -736,7 +742,7 @@ fn sys_a_command_outside_its_harnesss_job_is_refused_by_its_harnesss_program() {
         };
         println!(
             "outside: {:?}",
-            in_the_job_of(harness, made, &OnceCell::new())
+            in_the_job_of(harness, made, &OnceCell::new(), this_process())
         );
         println!("probed: {:?}", under_a_session());
         return;
