@@ -552,11 +552,16 @@ fn check_glob(key: &str, glob: &str) -> Result<(), ManifestError> {
         return Err(refusal());
     }
     // Braces the compiler cannot read (one not closed, too many
-    // alternatives) are its to refuse, against the workspace: such a glob
-    // never compiles, so nothing of it is ever matched.
-    let Ok(alternatives) = cineris_policy::glob::brace_alternatives(glob) else {
-        return Ok(());
-    };
+    // alternatives) are refused here, as it would refuse them: let through,
+    // the glob's text went unchecked (`/etc/**}`, the review of the step 28
+    // fixes' third pull request).
+    let alternatives = cineris_policy::glob::brace_alternatives(glob).map_err(|error| {
+        refused(format!(
+            "`capabilities.{key}` has `{}`: {}",
+            in_code(glob),
+            error.problem
+        ))
+    })?;
     if alternatives
         .iter()
         .all(|alternative| is_relative_glob(alternative))

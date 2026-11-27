@@ -20,8 +20,9 @@ use cineris_base::path::{AbsPath, PathStyle};
 use cineris_base::{CancelToken, FakeClock};
 use cineris_ext::capability::Capabilities;
 use cineris_ext::engine::{
-    A_CALL_IS_STARTED, CallContext, CallError, GRACE, LoadError, MAX_ABANDONED, ScriptRuntime,
-    Source, Target, abandoned_threads, is_disabled,
+    A_CALL_IS_STARTED, A_MAIN_MODULE_IS_EVALUATED, A_THREAD_ENDS, CallContext, CallError,
+    EVALUATION_TIME, GRACE, Limit, LoadError, MAX_ABANDONED, ScriptRuntime, Source, Target,
+    abandoned_threads, is_disabled, threads_being_stopped,
 };
 use cineris_ext::folder::Snapshot;
 use cineris_ext::manifest::Manifest;
@@ -343,4 +344,150 @@ fn a_thread_whose_call_was_given_up_is_judged_by_the_next_start() {
     assert_eq!(abandoned_threads(), before + 1);
     started.release();
     assert_eq!(started.timed_out(), 0, "the held thread went on by itself");
+}
+
+/// Polls `future` once, with a waker that does nothing: the test drives it
+/// by hand, between moves of the clock.
+fn poll_once<F: std::future::Future + ?Sized>(future: std::pin::Pin<&mut F>) -> Poll<F::Output> {
+    future.poll(&mut Context::from_waker(Waker::noop()))
+}
+
+/// A thread that nobody judges (its call given up) is left running a grace
+/// after the extension's next start first saw it, whatever else happens
+/// meanwhile: another extension's thread that ends, which wakes the wait,
+/// does not begin its grace again (the review of the step 28 fixes' third
+/// pull request: each wake began a fresh grace, so a process where some
+/// thread ended at least once every 2 s kept the start waiting without
+/// bound, holding its session's runtime slot).
+#[test]
+fn a_wait_woken_by_another_thread_ending_keeps_its_grace() {
+    let timer = timer();
+    let stuck = tool(0);
+    let capabilities = capabilities(&stuck);
+    let runtime = start(&stuck, &timer).unwrap();
+    let other = start(&tool(1), &timer).unwrap();
+    let host = FakeHost::new();
+    let started = Hold::new(A_CALL_IS_STARTED);
+    {
+        let mut given_up = Box::pin(call(&runtime, &capabilities, &host, &timer));
+        assert!(poll_once(given_up.as_mut()).is_pending());
+        started.reach();
+    }
+    let mut next = Box::pin(starting(&stuck, &timer));
+    assert!(poll_once(next.as_mut()).is_pending(), "the start waits");
+    timer.advance(Duration::from_secs(1));
+    // Another extension's runtime goes: its thread is told, ends, and
+    // wakes the wait.
+    {
+        let ends = Hold::new(A_THREAD_ENDS);
+        drop(other);
+        ends.reach();
+        ends.release();
+    }
+    assert!(
+        poll_once(next.as_mut()).is_pending(),
+        "the start still waits"
+    );
+    timer.advance(GRACE - Duration::from_secs(1));
+    match poll_once(next.as_mut()) {
+        Poll::Ready(Err(LoadError::Disabled)) => {}
+        other => panic!(
+            "a grace after the start first saw the thread, it was not judged: the wait began \
+             again when another thread ended: {other:?}"
+        ),
+    }
+    assert!(runtime.was_abandoned());
+    started.release();
+    assert_eq!(started.timed_out(), 0, "the held thread went on by itself");
+}
+
+/// A start whose main module is evaluated just as its time runs out (in
+/// its grace) gives no runtime: its time ran out, and its thread, idle,
+/// ends, and is not left running for want of a shutdown, so the extension
+/// starts again at its next use (the review of the step 28 fixes' third
+/// pull request: the start gave a stopped runtime whose thread waited for a
+/// call for ever, which the next start then counted as left running,
+/// disabling the extension with nothing running).
+#[test]
+fn a_start_evaluated_as_its_time_runs_out_leaves_no_thread() {
+    let timer = timer();
+    let snapshot = tool(0);
+    let before = abandoned_threads();
+    let evaluated = Hold::new(A_MAIN_MODULE_IS_EVALUATED);
+    let ends = Hold::new(A_THREAD_ENDS);
+    let (first, ()) = block_on(join(starting(&snapshot, &timer), async {
+        evaluated.reach();
+        timer.sleeping_for(EVALUATION_TIME).await;
+        timer.advance(EVALUATION_TIME);
+        timer.sleeping_for(GRACE).await;
+        evaluated.release();
+    }));
+    assert!(
+        matches!(first, Err(LoadError::Limit(Limit::Time))),
+        "a start whose time ran out gave a runtime: {first:?}"
+    );
+    // Its thread ends by itself.
+    ends.reach();
+    ends.release();
+    assert_eq!(threads_being_stopped(), 0);
+    let next = start(&snapshot, &timer);
+    assert!(next.is_ok(), "{next:?}");
+    assert_eq!(abandoned_threads(), before);
+    assert!(!is_disabled(&snapshot.hash()));
+}
+
+/// Threads being stopped count toward the cap with those left running: a
+/// call made while three extensions' threads are left and a fourth's is in
+/// its grace waits for that one to be judged, and, once it is left, is
+/// refused past the cap. Let in, it could have left a fifth.
+#[test]
+fn a_call_waits_while_threads_being_stopped_would_reach_the_cap() {
+    let timer = timer();
+    let snapshots: Vec<Arc<Snapshot>> = (0..=MAX_ABANDONED).map(tool).collect();
+    let runtimes: Vec<ScriptRuntime> = snapshots
+        .iter()
+        .map(|snapshot| start(snapshot, &timer).unwrap())
+        .collect();
+    let host = FakeHost::new();
+    let started = Hold::new(A_CALL_IS_STARTED);
+    assert_eq!(abandoned_threads(), 0, "a test of its own process");
+    for index in 0..MAX_ABANDONED - 1 {
+        let capabilities = capabilities(&snapshots[index]);
+        let (result, ()) = block_on(join(
+            call(&runtimes[index], &capabilities, &host, &timer),
+            async {
+                started.reach_times(index + 1);
+                out_of_time(&timer).await;
+                timer.advance(GRACE);
+            },
+        ));
+        assert_eq!(result, Err(CallError::TimedOut));
+    }
+    assert_eq!(abandoned_threads(), MAX_ABANDONED - 1);
+    let in_grace = MAX_ABANDONED - 1;
+    let last = MAX_ABANDONED;
+    let graced = capabilities(&snapshots[in_grace]);
+    let waiting = capabilities(&snapshots[last]);
+    let (result, refused) = block_on(join(
+        call(&runtimes[in_grace], &graced, &host, &timer),
+        async {
+            started.reach_times(MAX_ABANDONED);
+            out_of_time(&timer).await;
+            // Three left and one being stopped: the call waits.
+            let mut call_past = Box::pin(call(&runtimes[last], &waiting, &host, &timer));
+            assert!(poll_once(call_past.as_mut()).is_pending());
+            timer.advance(GRACE);
+            call_past.await
+        },
+    ));
+    assert_eq!(result, Err(CallError::TimedOut));
+    assert!(runtimes[in_grace].was_abandoned());
+    assert_eq!(
+        refused,
+        Err(CallError::TooManyAbandoned(MAX_ABANDONED)),
+        "a call was let in while threads being stopped reached the cap"
+    );
+    assert!(!runtimes[last].was_abandoned());
+    started.release();
+    assert_eq!(started.timed_out(), 0, "a held thread went on by itself");
 }

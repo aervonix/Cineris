@@ -274,6 +274,7 @@ fn body(
             }),
         });
     let failed = loaded.is_err();
+    cineris_base::hook::point(super::A_MAIN_MODULE_IS_EVALUATED);
     let _ = ready.send(loaded);
     if !failed {
         work.serve();

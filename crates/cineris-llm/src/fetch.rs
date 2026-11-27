@@ -1547,6 +1547,44 @@ mod tests {
         assert!(printed.contains("authorization"), "{printed}");
     }
 
+    /// The system's resolver takes its places from the process's eight,
+    /// and from nowhere else: with all but one taken, a lookup takes the
+    /// last, and the next waits (the review of the step 28 fixes' third pull
+    /// request: nothing held the count or that the resolver used it). Only
+    /// `localhost` is looked up, which the system answers from its own
+    /// table.
+    #[test]
+    fn the_systems_lookups_take_the_processs_places() {
+        use std::task::{Context, Waker};
+        assert_eq!(LOOKUPS_LIMIT, 8);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let polled_once = |future: &mut BoxFuture<'_, io::Result<Vec<IpAddr>>>| {
+                future
+                    .as_mut()
+                    .poll(&mut Context::from_waker(Waker::noop()))
+                    .is_pending()
+            };
+            let others = u32::try_from(LOOKUPS_LIMIT - 1).unwrap();
+            let held = LOOKUPS.acquire_many(others).await.unwrap();
+            assert_eq!(LOOKUPS.available_permits(), 1);
+            let mut last = SystemResolver.resolve("localhost");
+            assert!(polled_once(&mut last));
+            assert_eq!(
+                LOOKUPS.available_permits(),
+                0,
+                "the system's lookup did not take a place of the process's"
+            );
+            let mut waits = SystemResolver.resolve("localhost");
+            assert!(polled_once(&mut waits));
+            drop(held);
+            drop(waits);
+            drop(last);
+        });
+    }
+
     /// A lookup whose future is dropped (its fetch out of time, or
     /// cancelled) keeps its place until the blocking lookup itself returns,
     /// so lookups given up at once never hold more of the blocking pool than

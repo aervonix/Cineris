@@ -26,7 +26,7 @@ mod thread;
 use std::future::poll_fn;
 use std::path::PathBuf;
 use std::pin::pin;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
 use std::task::Poll;
 use std::time::Duration;
@@ -82,7 +82,8 @@ pub fn runtimes_made() -> usize {
 /// a process, plus the calls and starts already running when the count
 /// reached it, which nothing can stop; and one an extension, plus one for
 /// each of its other runtimes (in the process's other sessions) whose call
-/// was already running when the first was told to stop.
+/// was already running, or whose start was already evaluating, when the
+/// first was told to stop.
 pub const MAX_ABANDONED: usize = 4;
 
 /// The threads this process abandoned, of every extension.
@@ -139,14 +140,10 @@ const THREAD_ENDED: u8 = 3;
 pub(crate) struct Watched {
     hash: ContentHash,
     state: AtomicU8,
-    /// When it was told to stop, in the order of tellings.
-    told: AtomicU64,
 }
 
 /// The threads told to stop that have neither ended nor been left running.
 static BEING_STOPPED: std::sync::Mutex<Vec<Arc<Watched>>> = std::sync::Mutex::new(Vec::new());
-/// The tellings so far: a wait knows which threads were told before it.
-static TELLINGS: AtomicU64 = AtomicU64::new(0);
 /// Told whenever a thread leaves [`BEING_STOPPED`].
 static SETTLED: tokio::sync::Notify = tokio::sync::Notify::const_new();
 
@@ -161,7 +158,6 @@ impl Watched {
         Arc::new(Self {
             hash,
             state: AtomicU8::new(THREAD_RUNS),
-            told: AtomicU64::new(0),
         })
     }
 
@@ -173,8 +169,6 @@ impl Watched {
         let mut stopping = being_stopped();
         if self.state.load(Ordering::SeqCst) == THREAD_RUNS {
             self.state.store(THREAD_TOLD, Ordering::SeqCst);
-            self.told
-                .store(TELLINGS.fetch_add(1, Ordering::SeqCst), Ordering::SeqCst);
             stopping.push(Arc::clone(self));
         }
     }
@@ -249,38 +243,61 @@ fn must_wait(hash: &ContentHash) -> bool {
 }
 
 /// Waits, on `timer`, while a start or a call of the extension of `hash`
-/// must ([`must_wait`]). A thread told to stop before a round of the wait
-/// began and still not ended a [`GRACE`] later is left running, judged here
-/// as its own call would judge it: a thread whose call or start was given
-/// up, or whose runtime was dropped, has nobody else to judge it.
+/// must ([`must_wait`]). Each thread being stopped is given a [`GRACE`] of
+/// its own from when this wait first sees it, and is left running when
+/// that grace has passed and it has not ended, judged here as its own call
+/// would judge it: a thread whose call or start was given up, or whose
+/// runtime was dropped, has nobody else to judge it. A thread that ends,
+/// or another being told, changes no grace already running (the review of
+/// the step 28 fixes' third pull request: a round begun again at every
+/// change could wait without bound while other threads kept ending). So
+/// the wait ends at most a grace after the last thread it saw told.
+///
+/// The timer has no clock, and a thread may be told where no timer is (a
+/// runtime dropped): the grace runs from when the wait sees the thread,
+/// which is never before it was told, so a thread is never judged early.
 async fn settle(hash: &ContentHash, timer: &dyn Timer) {
+    let mut watching: Vec<(Arc<Watched>, cineris_base::Sleep)> = Vec::new();
     loop {
         let mut settled = pin!(SETTLED.notified());
         settled.as_mut().enable();
-        let since = TELLINGS.load(Ordering::SeqCst);
+        {
+            let stopping = being_stopped();
+            watching
+                .retain(|(watched, _)| stopping.iter().any(|other| Arc::ptr_eq(other, watched)));
+            for watched in stopping.iter() {
+                if !watching.iter().any(|(seen, _)| Arc::ptr_eq(seen, watched)) {
+                    watching.push((Arc::clone(watched), timer.sleep(GRACE)));
+                }
+            }
+        }
         if !must_wait(hash) {
             return;
         }
-        let mut grace = timer.sleep(GRACE);
-        let graced = poll_fn(|cx| {
+        let graced: Vec<Arc<Watched>> = poll_fn(|cx| {
             if settled.as_mut().poll(cx).is_ready() {
-                return Poll::Ready(false);
+                return Poll::Ready(Vec::new());
             }
-            if grace.as_mut().poll(cx).is_ready() {
-                return Poll::Ready(true);
+            let up: Vec<Arc<Watched>> = watching
+                .iter_mut()
+                .filter_map(|(watched, grace)| {
+                    grace
+                        .as_mut()
+                        .poll(cx)
+                        .is_ready()
+                        .then(|| Arc::clone(watched))
+                })
+                .collect();
+            if up.is_empty() {
+                Poll::Pending
+            } else {
+                Poll::Ready(up)
             }
-            Poll::Pending
         })
         .await;
-        if graced {
-            let older: Vec<Arc<Watched>> = being_stopped()
-                .iter()
-                .filter(|watched| watched.told.load(Ordering::SeqCst) < since)
-                .cloned()
-                .collect();
-            for watched in older {
-                watched.leave();
-            }
+        for watched in graced {
+            watched.leave();
+            watching.retain(|(seen, _)| !Arc::ptr_eq(seen, &watched));
         }
     }
 }
@@ -450,6 +467,12 @@ impl Drop for Starting<'_> {
         self.watch.ended();
     }
 }
+
+/// A point of a runtime's thread once its main module's first evaluation
+/// is over, before its start is told how it went: a test holds it to have
+/// the start's time run out just as the evaluation succeeds.
+pub const A_MAIN_MODULE_IS_EVALUATED: &str =
+    "cineris-ext: a main module is evaluated, and its start not yet told";
 
 /// A point of a runtime's thread as it ends, however it ends (a point a
 /// test can stop at: [`cineris_base::hook`]).
@@ -790,6 +813,12 @@ impl ScriptRuntime {
         .await;
         starting.ended();
         match loaded {
+            // Evaluated in its grace, its time up: its time ran out, and the
+            // runtime, stopped, is no runtime. Its inbox is dropped here, so
+            // its thread, idle and told to stop, ends, and is not left
+            // running for want of a shutdown (the review of the step 28
+            // fixes' third pull request).
+            Some(Ok(_)) if grace.is_some() => Err(LoadError::Limit(Limit::Time)),
             Some(Ok(loaded)) => Ok(Self {
                 inbox,
                 stop,
