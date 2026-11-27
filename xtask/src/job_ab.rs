@@ -832,6 +832,19 @@ fn archive_file(tree: &Path) -> PathBuf {
         .join("tests.tar.zst")
 }
 
+/// The place for an archive side's archive made ready: its folder made
+/// (nextest writes the archive beside where it goes, and does not make the
+/// folder), and an archive an earlier round left taken away. Its path.
+fn ready_for_archive(tree: &Path) -> Result<PathBuf> {
+    let file = archive_file(tree);
+    if let Some(folder) = file.parent() {
+        std::fs::create_dir_all(folder)
+            .map_err(|error| format!("could not make {}: {error}", folder.display()))?;
+    }
+    workspace::forget_report(&file)?;
+    Ok(file)
+}
+
 /// The Windows test jobs' runs from an archive extracted at `tree`: tiers 1
 /// and 2, then the system tests, each with the filter its job gives it.
 pub(crate) fn archive_runs(tree: &Path) -> Vec<Vec<String>> {
@@ -1105,8 +1118,7 @@ impl SidePhases for RealSide<'_> {
     fn build(&mut self) -> Result<()> {
         if self.from_archive {
             put_back(self.tree)?;
-            let file = archive_file(self.tree);
-            workspace::forget_report(&file)?;
+            let file = ready_for_archive(self.tree)?;
             let archive = crate::checks::archive_command(&file);
             timed(self.command(&archive), "the build and its archive").1?;
             return crate::checks::forget_reports(self.tree);
@@ -1998,6 +2010,22 @@ mod tests {
                 "nothing is built: {run:?}"
             );
         }
+    }
+
+    #[test]
+    fn an_archive_sides_archive_has_its_folder_and_no_earlier_archive() {
+        let scratch = cineris_testkit::Scratch::outside("xtask-job-ab", "archive");
+        let tree = scratch.path();
+        let file = super::ready_for_archive(tree).unwrap();
+        assert_eq!(file, super::archive_file(tree));
+        assert!(file.parent().unwrap().is_dir(), "the folder is made");
+        assert!(!file.exists());
+        std::fs::write(&file, "an earlier round's").unwrap();
+        let again = super::ready_for_archive(tree).unwrap();
+        assert!(
+            !again.exists(),
+            "an earlier round's archive is not this one's"
+        );
     }
 
     #[test]
