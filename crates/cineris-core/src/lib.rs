@@ -72,6 +72,7 @@ pub use crate::checkpoints::{
 pub use crate::clients::{ClientId, ClientInfo};
 pub use crate::core::{
     BEFORE_A_SESSION_ENDS, BEFORE_THE_PUT_BACK_IS_ASKED, Client, Core, CoreOptions, OpError,
+    RegistryProbe,
 };
 pub use crate::events::{EventQueue, Outgoing, QUEUE_CAPACITY};
 pub use crate::ext::manage::{

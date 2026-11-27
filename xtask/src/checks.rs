@@ -16,13 +16,14 @@ use crate::workspace;
 use crate::{compare, tiers};
 
 /// The tier 0 steps, in the order they run: cheapest first.
-const CHECK_STEPS: [&str; 7] = [
+const CHECK_STEPS: [&str; 8] = [
     "fmt",
     "rules",
     "breaks",
     "generated",
     "clippy",
     "no-scripts",
+    "no-mcp",
     "deny",
 ];
 
@@ -50,9 +51,10 @@ fn check_step(name: &str) -> Option<Step> {
             ],
         ),
         // A build of the binary without the script engine stays possible
-        // (decision 0005). The lints above see only the workspace's build,
-        // which has the engine.
-        "no-scripts" => Step::function("no-scripts", without_scripts),
+        // (decision 0005), and one without the MCP client (decision 0010).
+        // The lints above see only the workspace's build, which has both.
+        "no-scripts" => Step::function("no-scripts", || without(&NO_SCRIPTS)),
+        "no-mcp" => Step::function("no-mcp", || without(&NO_MCP)),
         // Advisories are not here: a new advisory against an unchanged
         // lockfile must not block unrelated pull requests. They run nightly.
         "deny" => Step::cargo("deny", &["deny", "check", "licenses", "bans", "sources"]),
@@ -63,24 +65,50 @@ fn check_step(name: &str) -> Option<Step> {
 /// The binary's package.
 const CLI: &str = "cineris-cli";
 
-/// The binary's feature that links the script engine, through the core.
-const SCRIPTS: &str = "scripts";
+/// A default feature of the binary that a build without it must be
+/// possible for: what the feature links through the core, and the crate
+/// that build must not reach.
+struct Without {
+    /// The binary's feature, which turns on the core's of the same name.
+    feature: &'static str,
+    /// What it links, in words.
+    what: &'static str,
+    /// The crate that only a build with it reaches.
+    linked: &'static str,
+    /// The record that says the build without it stays possible.
+    decision: &'static str,
+}
 
-/// The script engine's crate (decision 0005), which a build without
-/// [`SCRIPTS`] must not reach.
-const ENGINE: &str = "rquickjs";
+/// The script engine (decision 0005): `rquickjs`, through `cineris-ext`'s
+/// `scripts`.
+const NO_SCRIPTS: Without = Without {
+    feature: "scripts",
+    what: "the script engine",
+    linked: "rquickjs",
+    decision: "decision 0005",
+};
 
-/// `cargo xtask check no-scripts`: the binary with [`SCRIPTS`] off and the
-/// rest of its default features on, linted as the `clippy` step lints the
-/// workspace, warnings denied, and not built. First its dependency graph is
-/// asked whether the engine is in it all the same, for every target: a
-/// crate between the binary and the core that turned the core's `scripts`
-/// on, on one system or on all, would turn it on for the binary too, and
-/// the check would then pass on a build with the engine.
-fn without_scripts() -> Result<()> {
+/// The MCP client (decision 0010): `cineris-mcp`, an optional dependency of
+/// the core.
+const NO_MCP: Without = Without {
+    feature: "mcp",
+    what: "the MCP client",
+    linked: "cineris-mcp",
+    decision: "decision 0010",
+};
+
+/// `cargo xtask check no-scripts` and `no-mcp`: the binary with one feature
+/// off and the rest of its default features on, linted as the `clippy` step
+/// lints the workspace, warnings denied, and not built. First its
+/// dependency graph is asked whether what the feature links is in it all
+/// the same, for every target: a crate between the binary and the core
+/// that turned the core's feature on, on one system or on all, would turn
+/// it on for the binary too, and the check would then pass on a build with
+/// it.
+fn without(off: &Without) -> Result<()> {
     let root = workspace::root();
-    let selected = without_scripts_selection(&workspace::metadata(&root)?.packages)?;
-    let tree = without_scripts_tree(&selected);
+    let selected = without_selection(&workspace::metadata(&root)?.packages, off)?;
+    let tree = without_tree(&selected);
     let output = Command::new(workspace::cargo())
         .args(&tree)
         .current_dir(&root)
@@ -90,21 +118,27 @@ fn without_scripts() -> Result<()> {
     if !output.status.success() {
         return Err(format!("`cargo {}` failed", tree.join(" ")));
     }
-    if reaches_engine(&String::from_utf8_lossy(&output.stdout)) {
+    if reaches(&String::from_utf8_lossy(&output.stdout), off.linked) {
+        let Without {
+            feature,
+            what,
+            linked,
+            decision,
+        } = off;
         return Err(format!(
-            "{CLI} without `{SCRIPTS}` still reaches the script engine, `{ENGINE}`: a crate \
-             between it and the core turns the core's `{SCRIPTS}` on, where only {CLI}'s own \
-             `{SCRIPTS}` feature may (decision 0005). `cargo tree -i {ENGINE} --target all -e \
-             normal,build {}` shows which",
+            "{CLI} without `{feature}` still reaches {what}, `{linked}`: a crate between it and \
+             the core turns the core's `{feature}` on, where only {CLI}'s own `{feature}` feature \
+             may ({decision}). `cargo tree -i {linked} --target all -e normal,build {}` shows \
+             which",
             selected.join(" ")
         ));
     }
-    steps::cargo(&without_scripts_lint(&selected))
+    steps::cargo(&without_lint(&selected))
 }
 
 /// The arguments of `cargo tree` that list the packages the build
 /// `selected` names reaches, on every target, a package a line.
-fn without_scripts_tree(selected: &[String]) -> Vec<String> {
+fn without_tree(selected: &[String]) -> Vec<String> {
     let mut tree: Vec<String> = [
         "tree",
         "--locked",
@@ -126,7 +160,7 @@ fn without_scripts_tree(selected: &[String]) -> Vec<String> {
 /// The arguments of `cargo` that lint the build `selected` names, warnings
 /// denied, as the `clippy` step lints the workspace's: a code path only
 /// that build compiles may not leave a warning.
-fn without_scripts_lint(selected: &[String]) -> Vec<String> {
+fn without_lint(selected: &[String]) -> Vec<String> {
     let mut lint: Vec<String> = ["clippy", "--locked"].map(str::to_owned).into();
     lint.extend(selected.iter().cloned());
     lint.extend(["--", "-D", "warnings"].map(str::to_owned));
@@ -135,31 +169,32 @@ fn without_scripts_lint(selected: &[String]) -> Vec<String> {
 
 /// Whether a listing of `cargo tree --prefix none --format {p}`, a package
 /// a line (`rquickjs v0.14.0`, with ` (*)` after one met before), holds the
-/// script engine.
-fn reaches_engine(tree: &str) -> bool {
+/// package `linked`.
+fn reaches(tree: &str, linked: &str) -> bool {
     tree.lines()
-        .any(|line| line.split_whitespace().next() == Some(ENGINE))
+        .any(|line| line.split_whitespace().next() == Some(linked))
 }
 
 /// The arguments of `cargo` that select the binary's package with
-/// [`SCRIPTS`] off and its other default features on, read from its
+/// `off`'s feature off and its other default features on, read from its
 /// manifest.
-fn without_scripts_selection(packages: &[workspace::Package]) -> Result<Vec<String>> {
+fn without_selection(packages: &[workspace::Package], off: &Without) -> Result<Vec<String>> {
     let defaults: &[String] = packages
         .iter()
         .find(|package| package.name == CLI)
         .and_then(|package| package.features.iter().find(|(name, _)| name == "default"))
         .map_or(&[], |(_, on)| on.as_slice());
-    if !defaults.iter().any(|feature| feature == SCRIPTS) {
+    if !defaults.iter().any(|feature| feature == off.feature) {
         return Err(format!(
-            "{CLI}'s default features do not name `{SCRIPTS}`, which links the script engine \
-             through the core and is how a build without it is made (decision 0005)"
+            "{CLI}'s default features do not name `{}`, which links {} through the core and is \
+             how a build without it is made ({})",
+            off.feature, off.what, off.decision
         ));
     }
     let rest: Vec<&str> = defaults
         .iter()
         .map(String::as_str)
-        .filter(|feature| *feature != SCRIPTS)
+        .filter(|feature| *feature != off.feature)
         .collect();
     let mut selected: Vec<String> = ["-p", CLI, "--no-default-features"]
         .map(str::to_owned)
@@ -1325,9 +1360,9 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        CHECK_STEPS, TiersRequest, check, check_step, ci, ci_run, join_comparisons, reaches_engine,
-        selects_packages, test_command, without_scripts_lint, without_scripts_selection,
-        without_scripts_tree,
+        CHECK_STEPS, NO_MCP, NO_SCRIPTS, TiersRequest, check, check_step, ci, ci_run,
+        join_comparisons, reaches, selects_packages, test_command, without_lint, without_selection,
+        without_tree,
     };
     use crate::runs::Source;
     use crate::tiers::Os;
@@ -1357,6 +1392,7 @@ mod tests {
             targets: Vec::new(),
             features: vec![
                 ("default".to_owned(), strings(defaults)),
+                ("mcp".to_owned(), strings(&["cineris-core/mcp"])),
                 ("scripts".to_owned(), strings(&["cineris-core/scripts"])),
             ],
         }
@@ -1371,11 +1407,11 @@ mod tests {
     fn check_holds_a_build_of_the_binary_without_the_script_engine() {
         assert!(CHECK_STEPS.contains(&"no-scripts"));
         assert_eq!(
-            without_scripts_selection(&[cli(&["scripts"])]).unwrap(),
+            without_selection(&[cli(&["scripts"])], &NO_SCRIPTS).unwrap(),
             strings(&["-p", "cineris-cli", "--no-default-features"])
         );
         assert_eq!(
-            without_scripts_selection(&[cli(&["highlight", "scripts", "voice"])]).unwrap(),
+            without_selection(&[cli(&["highlight", "scripts", "voice"])], &NO_SCRIPTS).unwrap(),
             strings(&[
                 "-p",
                 "cineris-cli",
@@ -1384,9 +1420,44 @@ mod tests {
                 "highlight,voice"
             ])
         );
-        let refused = without_scripts_selection(&[cli(&["highlight"])]).unwrap_err();
+        let refused = without_selection(&[cli(&["highlight"])], &NO_SCRIPTS).unwrap_err();
         assert!(refused.contains("do not name `scripts`"), "{refused}");
-        assert!(without_scripts_selection(&[]).is_err());
+        assert!(without_selection(&[], &NO_SCRIPTS).is_err());
+    }
+
+    /// And one without the MCP client (decision 0010, since step 30): the
+    /// binary with `mcp` off and the script engine on, as it ships.
+    #[test]
+    fn check_holds_a_build_of_the_binary_without_the_mcp_client() {
+        assert!(CHECK_STEPS.contains(&"no-mcp"));
+        assert!(check_step("no-mcp").is_some());
+        assert_eq!(
+            without_selection(&[cli(&["mcp", "scripts"])], &NO_MCP).unwrap(),
+            strings(&[
+                "-p",
+                "cineris-cli",
+                "--no-default-features",
+                "--features",
+                "scripts"
+            ])
+        );
+        assert_eq!(
+            without_selection(&[cli(&["mcp", "scripts"])], &NO_SCRIPTS).unwrap(),
+            strings(&[
+                "-p",
+                "cineris-cli",
+                "--no-default-features",
+                "--features",
+                "mcp"
+            ])
+        );
+        let refused = without_selection(&[cli(&["scripts"])], &NO_MCP).unwrap_err();
+        assert!(refused.contains("do not name `mcp`"), "{refused}");
+        assert!(refused.contains("the MCP client"), "{refused}");
+        assert!(reaches(
+            "cineris-mcp v0.1.0 (/w/crates/cineris-mcp)\n",
+            NO_MCP.linked
+        ));
     }
 
     /// The build without the script engine is asked about the engine on
@@ -1398,13 +1469,13 @@ mod tests {
     #[test]
     fn the_build_without_the_engine_is_looked_at_on_every_target_and_linted() {
         let selected = strings(&["-p", "cineris-cli", "--no-default-features"]);
-        let tree = without_scripts_tree(&selected);
+        let tree = without_tree(&selected);
         assert!(
             tree.windows(2).any(|pair| pair == ["--target", "all"]),
             "{tree:?}"
         );
         assert!(tree.ends_with(&selected), "{tree:?}");
-        let lint = without_scripts_lint(&selected);
+        let lint = without_lint(&selected);
         assert_eq!(lint[0], "clippy");
         assert!(
             lint.ends_with(&strings(&["--", "-D", "warnings"])),
@@ -1422,10 +1493,11 @@ mod tests {
     fn the_engine_is_found_in_the_listing_by_its_name() {
         let without = "cineris-cli v0.0.0 (/w/crates/cineris-cli)\ncineris-ext v0.0.0 \
                        (/w/crates/cineris-ext)\nrquickjs-like v1.0.0\nserde v1.0.229 (*)\n";
-        assert!(!reaches_engine(without));
-        assert!(reaches_engine(&format!("{without}rquickjs v0.14.0\n")));
-        assert!(reaches_engine(&format!("{without}rquickjs v0.14.0 (*)\n")));
-        assert!(!reaches_engine(""));
+        let engine = NO_SCRIPTS.linked;
+        assert!(!reaches(without, engine));
+        assert!(reaches(&format!("{without}rquickjs v0.14.0\n"), engine));
+        assert!(reaches(&format!("{without}rquickjs v0.14.0 (*)\n"), engine));
+        assert!(!reaches("", engine));
     }
 
     #[test]

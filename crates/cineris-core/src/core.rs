@@ -330,7 +330,16 @@ pub struct CoreOptions {
     /// which reaches the edge without writing 16 MiB. It only ever
     /// tightens. `None`: 16 MiB.
     pub ext_session_budget: Option<usize>,
+    /// Given each session's registry of dynamic tools as the session is put
+    /// together, before anything is registered in it: a test's, which
+    /// registers and removes a source in it as an MCP server's lifecycle
+    /// does. `None`: nothing is told.
+    pub on_registry: Option<RegistryProbe>,
 }
+
+/// A test's look at a session's registry of dynamic tools
+/// ([`CoreOptions::on_registry`]).
+pub type RegistryProbe = Arc<dyn Fn(&Arc<cineris_tools::ToolRegistry>) + Send + Sync>;
 
 impl std::fmt::Debug for CoreOptions {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -398,6 +407,7 @@ impl CoreOptions {
             extensions: Vec::new(),
             fetcher: None,
             ext_session_budget: None,
+            on_registry: None,
         }
     }
 }

@@ -62,6 +62,7 @@ mod knowledge;
 mod lifecycle;
 #[cfg(feature = "mcp")]
 mod mcp_servers;
+mod mcp_sources;
 mod plan;
 mod provider;
 mod put_back;

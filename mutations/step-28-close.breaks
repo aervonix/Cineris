@@ -214,7 +214,7 @@ caught-by:
 [break] the-build-without-the-engine-keeps-the-default-features
 rule: The check of a build without the script engine turns the binary's default features off.
 file: xtask/src/checks.rs
-in: without_scripts_selection
+in: without_selection
 find: ["-p", CLI, "--no-default-features"]
 replace: ["-p", CLI]
 caught-by:
@@ -223,8 +223,8 @@ caught-by:
 [break] the-build-without-the-engine-loses-the-other-defaults
 rule: The check of a build without the script engine keeps the binary's other default features on.
 file: xtask/src/checks.rs
-in: without_scripts_selection
-find: .filter(|feature| *feature != SCRIPTS)
+in: without_selection
+find: .filter(|feature| *feature != off.feature)
 replace: .filter(|_| false)
 caught-by:
     checks::tests::check_holds_a_build_of_the_binary_without_the_script_engine
@@ -232,8 +232,8 @@ caught-by:
 [break] defaults-without-the-engines-feature-are-taken
 rule: The check refuses a binary whose default features do not name `scripts`, since its build without it would be the shipped one.
 file: xtask/src/checks.rs
-in: without_scripts_selection
-find: if !defaults.iter().any(|feature| feature == SCRIPTS) {
+in: without_selection
+find: if !defaults.iter().any(|feature| feature == off.feature) {
 replace: if false {
 caught-by:
     checks::tests::check_holds_a_build_of_the_binary_without_the_script_engine
@@ -241,9 +241,9 @@ caught-by:
 [break] the-engine-is-told-by-a-prefix
 rule: The script engine is told in the dependency graph by its package's whole name.
 file: xtask/src/checks.rs
-in: reaches_engine
-find: line.split_whitespace().next() == Some(ENGINE)
-replace: line.starts_with(ENGINE)
+in: reaches
+find: line.split_whitespace().next() == Some(linked)
+replace: line.starts_with(linked)
 caught-by:
     checks::tests::the_engine_is_found_in_the_listing_by_its_name
 
@@ -377,7 +377,7 @@ caught-by:
 [break] the-build-without-the-engine-is-looked-at-on-the-host-alone
 rule: The check of a build without the script engine asks the dependency graph of every target whether it reaches the engine, not the host's alone.
 file: xtask/src/checks.rs
-in: without_scripts_tree
+in: without_tree
 find: "--target", "all"
 replace: "--target", "x86_64-unknown-linux-gnu"
 caught-by:
@@ -386,7 +386,7 @@ caught-by:
 [break] the-build-without-the-engine-may-warn
 rule: The check of a build without the script engine lints it with warnings denied.
 file: xtask/src/checks.rs
-in: without_scripts_lint
+in: without_lint
 find: lint.extend(["--", "-D", "warnings"].map(str::to_owned));
 replace:
 caught-by:

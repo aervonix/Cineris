@@ -55,6 +55,9 @@ cineris-testkit.workspace = true
 # The seam that puts the loop's blocking work on the test's own thread, in
 # a seeded order (`docs/testing-and-ci.md`, "A seeded order of events").
 cineris-tools = { workspace = true, features = ["test-hooks"] }
+# A server's tools registered as its lifecycle registers them, from the MCP
+# client's fake server (`test-kit`), in every build of the tests.
+cineris-mcp = { workspace = true, features = ["test-kit"] }
 
 [lints]
 workspace = true

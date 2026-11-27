@@ -57,7 +57,6 @@ pub(crate) mod hooks;
 )]
 mod host;
 pub mod manage;
-#[cfg(feature = "scripts")]
 mod prompt;
 mod protected;
 #[cfg(feature = "scripts")]
@@ -103,7 +102,6 @@ pub use hook_command::{
 pub(crate) use hook_command::{HookCommands, SessionHooks};
 pub(crate) use hook_points::PointHooks;
 pub(crate) use host::HostParts;
-#[cfg(feature = "scripts")]
 pub(crate) use prompt::PromptParts;
 #[cfg(feature = "scripts")]
 pub use script_hooks::{A_SCRIPT_HOOK_ENDS, A_SCRIPT_HOOK_STARTS};

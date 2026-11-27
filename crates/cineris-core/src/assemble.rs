@@ -2930,6 +2930,9 @@ pub(crate) fn assemble(
     // ------------------------------------------------------------ the tools
     let files = Arc::new(FileTable::new());
     let registry = Arc::new(ToolRegistry::new());
+    if let Some(probe) = &options.on_registry {
+        probe(&registry);
+    }
     let editing = match &rounds {
         Some(rounds) => Editing::new(
             Arc::clone(rounds) as Arc<dyn cineris_tools::Checkpoints>,
@@ -3137,8 +3140,9 @@ pub(crate) fn assemble(
     };
     // Sections 6 and 7 of the system prompt: what the session's skills and
     // extensions give it, settled by the same finding, which the first
-    // turn waits for, and answered from memory when the loop asks.
-    #[cfg(feature = "scripts")]
+    // turn waits for, and answered from memory when the loop asks; and the
+    // MCP servers' sources of tools as the registry holds them then, in
+    // every build.
     let prompt_parts = Arc::new(crate::ext::PromptParts::new(Arc::clone(&registry)));
     #[cfg(feature = "scripts")]
     let extensions = Some(crate::ext::found::Finding {
@@ -3414,11 +3418,9 @@ pub(crate) fn assemble(
         profile: knowledge
             .as_ref()
             .map(|knowledge| Arc::clone(knowledge) as Arc<dyn cineris_agent::ProfileSource>),
-        #[cfg(feature = "scripts")]
+        // Without the script engine nothing is found: section 6 lists the
+        // MCP servers' sources alone, and section 7 is empty.
         extensions: Some(prompt_parts as Arc<dyn cineris_agent::ExtensionsSource>),
-        // Without the script engine nothing is found: no section.
-        #[cfg(not(feature = "scripts"))]
-        extensions: None,
     };
     let verifier = Arc::new(crate::verify::CoreVerifier::new(crate::verify::Parts {
         settings: crate::verify::Settings::of(&settings.verify, shell_limits(settings).1),
