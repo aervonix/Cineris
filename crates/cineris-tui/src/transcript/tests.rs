@@ -387,6 +387,29 @@ fn a_kept_reasoning_holds_its_words_once_to_their_bound() {
         rows.last().map(String::as_str),
         Some("  … cut here: enter on it in the viewer shows it whole")
     );
+    // Drawn as the reasoning's own first row is, in the theme's muted style:
+    // no colour of its own.
+    let lines = kept
+        .get(0)
+        .map(|block| block.rows(Placement::Committed, 99, &look))
+        .unwrap_or_default();
+    let styles = |line: &Line| -> Vec<cineris_term::Style> {
+        line.spans()
+            .iter()
+            .filter(|span| !span.text().trim().is_empty())
+            .map(|span| span.style())
+            .collect()
+    };
+    let muted = look.theme.style(crate::theme::Token::Muted);
+    assert_eq!(lines.last().map(styles), Some(vec![muted]));
+    assert!(
+        lines
+            .first()
+            .map(styles)
+            .unwrap_or_default()
+            .iter()
+            .all(|style| *style == muted)
+    );
     assert_eq!(
         kept.summary(0),
         Some(kept::Summary::ReadReasoning(origin.clone()))

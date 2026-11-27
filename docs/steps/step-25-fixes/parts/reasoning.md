@@ -24,6 +24,13 @@ The part of the fixes of the independent review of step 25 that settles its find
 
 **The inline presenter's output is not changed.** Every snapshot and reference-screen test of `cineris-tui` passes unchanged (`cargo xtask test -p cineris-tui`: 798 tests, the reference screens' `screens::` and the snapshots included); the only edit to them is `..Reasoning::default()` in the two places `tests/it/screens/scenario.rs` and the three in `transcript/tests.rs` that build a `Reasoning` with every field named, for the two fields added.
 
+## After the maintainers' answer: the bound kept, its row's look, and the search
+
+The maintainers kept the 8 KiB bound and the row under a cut reasoning (the question in "Left open" below is settled), and asked for two things.
+
+- **The row's look.** It is drawn in the theme's `muted` token, as the reasoning's own first row is (`∴ Reasoned for 6s`): no colour or token of its own. `a_kept_reasoning_holds_its_words_once_to_their_bound` now holds it, comparing the row's style with the first row's and with `Token::Muted`.
+- **A search says when a match may lie past a cut.** The full screen's search looks in what was kept, so a match past where a reasoning was cut is not found. While a query is typed, the search row says how many reasonings the kept transcript holds only the start of, after where the search is: `1 of 4 · 2 reasonings cut, searched as kept`, or `no match · 1 reasoning cut, searched as kept`. It is said beside the count rather than at a match, since the match that is missing has no row to be drawn at; and it is said only when some reasoning was cut. `Kept::cut_reasonings` counts them as they are kept. The test is `cineris-tui app::tests::screen::a_search_says_how_many_reasonings_it_looked_in_only_as_far_as_kept` (a short reasoning, where the row says nothing of a cut; then a long one, whose last line is not found and is said to be past a cut), and its break `a-search-is-silent-about-cut-reasonings`. 09's "Search" says so.
+
 ## Finding 18: a summary read from the session open now
 
 **What was wrong.** After `/new` or `/sessions`, `Enter` on an earlier session's compaction notice read its summary by its item id from the session open now, and showed that session's item of the same id: item ids are a session's own counters.
@@ -47,6 +54,7 @@ In [mutations/step-25-fixes-reasoning.breaks](../../../../mutations/step-25-fixe
 | `a-reset-response-keeps-its-reasoning-findable` | a response tried again leaves its reasoning unreadable | the same |
 | `a-cut-reasoning-shows-what-was-kept` | `Enter` on a cut reasoning reads it whole | `a_reasoning_kept_only_in_part_is_read_whole_from_its_item`, `a_kept_reasoning_holds_its_words_once_to_their_bound` |
 | `a-summary-read-from-a-session-left` | a read only of the block's session, while it is open | `a_summary_is_read_from_the_session_its_block_is_of` |
+| `a-search-is-silent-about-cut-reasonings` | a search says how many reasonings it looked in only as far as kept | `a_search_says_how_many_reasonings_it_looked_in_only_as_far_as_kept` |
 
 `cargo xtask mutate --check --tests` passes with every break applying and every `caught-by` naming a test that exists. **The verdicts are not in yet:** the run of the list waited behind another session's long run of breaks on the reference machine, and is left to the maintainers.
 
@@ -83,6 +91,6 @@ Budgets are not changed. A short run of the test's commit (3 turns, 200 files, n
 
 - **The measurement and the breaks' verdicts** (above): `cargo xtask mutate step-25-fixes-reasoning --jobs 2`, and the 200-turn test at `main`, at the test's commit and at the fix's, on an otherwise idle machine. The tests that start no process need no Windows run of their own beyond CI's; nothing here is Windows-only.
 
-- **The full screen draws a long reasoning cut,** where before it drew it whole, as the inline presenter does: the bound changes what the full screen and the viewer's transcript show of a reasoning past 8 KiB (the row says so, and `Enter` in the viewer shows it whole). Reading the rest when the window reaches such a block, so that the full screen draws every reasoning whole again, is not built; it would change a block's rows while it is in view. A question for the maintainers.
+- **Settled: the full screen draws a long reasoning cut,** where before it drew it whole, as the inline presenter does: the bound changes what the full screen and the viewer's transcript show of a reasoning past 8 KiB (the row says so, and `Enter` in the viewer shows it whole). Reading the rest when the window reaches such a block, so that the full screen draws every reasoning whole again, is not built; it would change a block's rows while it is in view. The maintainers kept the bound and the row (above), so this is settled, not open.
 - **A cut reasoning, or a compaction, of a session left** cannot be read: `session/read` serves only a session open on the connection. The viewer says it could not be read and shows nothing, where for a cut reasoning it could show the start it kept, as it does for one whose response was tried again: a small change, left for step 33 with the rest of finding 12's memory work.
 - **The counting allocator** counts every test of `cineris-tui`'s integration binary: an atomic add on each allocation, a few nanoseconds, in its `perf_` tests too.

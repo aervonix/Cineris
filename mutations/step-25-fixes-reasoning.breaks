@@ -68,3 +68,12 @@ find: if !self.is_open(&of.session) {
 replace: if self.session.is_none() {
 caught-by:
     cineris-tui app::tests::screen::a_summary_is_read_from_the_session_its_block_is_of
+
+[break] a-search-is-silent-about-cut-reasonings
+rule: A search's row says how many reasonings it looked in only as far as they are kept.
+file: crates/cineris-tui/src/transcript/kept.rs
+in: Kept::push
+find: self.cut_reasonings += 1;
+replace: self.cut_reasonings += 0;
+caught-by:
+    cineris-tui app::tests::screen::a_search_says_how_many_reasonings_it_looked_in_only_as_far_as_kept
