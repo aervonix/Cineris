@@ -4,8 +4,15 @@ Step 30 builds `cineris-mcp`, the MCP client of the first usable release: local 
 
 | Question | The answer | Recorded in |
 |---|---|---|
-| **The client** (point 1): `rmcp` behind our own interface, or a client of our own, decision 0039's first size reserve | Waiting for the owner | Point 1 below |
-| **The design and the threat note** (points 2 to 8) | Waiting for the maintainers | Below |
+| **The client** (point 1): `rmcp` behind our own interface, or a client of our own, decision 0039's first size reserve | **Our own client** (the owner, 2026-11-27): the first reserve is spent here. | Point 1 below |
+| **`rmcp`'s server as a check of our client** (point 1), third-party code run in our tests | **Yes** (the owner, 2026-11-27): a dependency of the check alone, run in process in the nightly tier against both eras; pinned in its lock file, covered by the nightly audit of dependencies, kept out of the shipped binary and the blocking checks, and recorded in [dependencies.md](../../dependencies.md). | Point 1 below |
+| **A server the user wrote into their configuration by hand** (point 4) | **Not started until `cineris mcp approve NAME`** (the owner, 2026-11-27): it is listed as needing approval, and `cineris mcp add` approves as it writes. | Point 4 below |
+| **Legacy Streamable HTTP without `2025-11-25`'s polling and resumption** (point 1) | **Yes** (the maintainers, 2026-11-27): a stream that drops fails its request, and the GET stream is opened again from fresh. An item is opened for resumption. | Point 1 below |
+| **A `tools/call` not sent again after its HTTP stream broke** (point 3.7) | **Yes** (the maintainers, 2026-11-27): it returns that the call may have run. [13-mcp.md](../../architecture/13-mcp.md) says so, as a deliberate difference from the specification's MUST, with the reason. | Point 3.7 below |
+| **No pin without a person** (point 3.6) | **Yes** (the maintainers, 2026-11-27): no trust on first use; a held tool asks a person at every level, `unrestricted` included; no rule or grant answers it; a headless run refuses it. | Point 3.6 below |
+| **The URL rules** (point 3.8) | **As written** (the maintainers, 2026-11-27), with no proxy in this step and an item opened for a proxy that keeps the address checks. | Point 3.8 below |
+| **`a-kept-run-adopted-after-its-call-moved`** (point 6) | **Fixed in this step,** and the item deleted (the maintainers, 2026-11-27). `a-tool-that-makes-links-beside-other-calls` is settled by MCP tools being exclusive. | Point 6 below |
+| **The changes outside `cineris-mcp`** (point 5): the launcher's live input, the registry's kinds of source, section 6 without the script engine, guard A's `mcp` topic and guard B's list, `TrustResourceKind::McpTool` and the held tool's detail | **Accepted** (the maintainers, 2026-11-27); the launcher's live input has an early review of its own, as a change to the OS layer: neither a server's input nor a crafted command line may change the policy it reads. | Point 5 below |
 
 ## The design, before building
 
