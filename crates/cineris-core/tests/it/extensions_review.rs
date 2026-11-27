@@ -261,7 +261,20 @@ fn a_projects_folder_of_extensions_made_in_a_session_is_looked_in_at_the_next_tu
     let core = world.core();
     world.run(async {
         let (front, asked) = open_answering(&world, &core, not_now()).await;
-        assert!(asked.is_empty(), "{asked:?}");
+        // Pinned and not there yet, it is listed as removed, a yes to take
+        // its approval away (since the review of step 28, finding 4);
+        // answered not now, its pin stays.
+        let listed: Vec<(&str, bool)> = asked
+            .iter()
+            .flat_map(|question| &question.resources)
+            .map(|resource| {
+                (
+                    resource.name.as_str(),
+                    resource.detail.starts_with("Removed:"),
+                )
+            })
+            .collect();
+        assert_eq!(listed, [("probe", true)], "{asked:?}");
         front.turn("look for the probe").await;
         assert!(!found_probe(&front), "{:?}", front.results());
         let folder = projects(&world);

@@ -429,7 +429,7 @@ fn sys_a_users_hook_is_handed_a_secret_file_only_after_the_yes() {
     let program = std::env::current_exe().expect("the test binary has a path");
     let report = world.dir.join("report.json");
     let scanner =
-        crate::hook_commands::script(&world.dir.join("hooks"), "scanner", Some(&report), "");
+        crate::hook_commands::script(&world.dir.join("hooks"), "scanner", Some(&report), "{}");
     let hook = |mode: &str| {
         let command = if mode == "report" {
             vec![scanner.display().to_string(), "{path}".to_owned()]
