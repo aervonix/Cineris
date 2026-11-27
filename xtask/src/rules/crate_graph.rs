@@ -95,11 +95,14 @@ const CONFINED: &[(&[&str], &[&str], &str)] = &[
             "hyper-rustls",
             "rustls",
             "tokio-rustls",
-            "ring",
         ],
         &[LLM],
         "the HTTP and TLS stack",
     ),
+    // The TLS stack's crypto, which also signs the person's approvals (the
+    // signed approvals step).
+    (&["ring"], &[LLM, POLICY], "the crypto library"),
+    (&["argon2"], &[POLICY], "the approvals key's derivation"),
     (&["rmcp"], &[MCP], "the MCP SDK"),
     (
         &["grep-searcher", "grep-regex", "grep-matcher", "globset"],
