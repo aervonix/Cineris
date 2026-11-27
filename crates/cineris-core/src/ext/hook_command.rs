@@ -20,7 +20,14 @@
 //!   hook commands: a user's hook is not handed a file the model chose
 //!   outside the workspace before the call's own question is answered).
 //!   An entry that uses `{path}` does not run for a call that names no
-//!   file within it.
+//!   file within it. **On `tool.before`, a file the engine asks about, or
+//!   refuses, for what it is waits for the person's yes**
+//!   (`Engine::holds_back_from_hooks`; the review of step 28, finding 14,
+//!   the owner's choice): an entry that would take one does not run, and
+//!   says so ([`HookOutcome::AfterAnswer`]); the loop runs it again after
+//!   the yes to the call's question, before the call runs, its `{path}`
+//!   filled, where it may still refuse it. An observer does not run for
+//!   such a call.
 //! - **Its decision**: every start is decided by the permission engine as
 //!   an `exec` of the expanded line in the workspace (and `network` beside
 //!   it with `network = true`), and never asks: [`hook_may_run`].
@@ -178,6 +185,11 @@ pub(crate) struct HookEvent<'a> {
     /// For a tool event, the call's plan's effects: each `read` and
     /// `write` effect's file fills `{path}`.
     pub(crate) effects: &'a [Effect],
+    /// For `tool.before`: whether the person has answered yes to the call's
+    /// question already. Until then a file the engine asks about, or
+    /// refuses, for what it is fills no `{path}`, and a hook that takes one
+    /// waits for the yes ([`HookOutcome::AfterAnswer`]).
+    pub(crate) answered: bool,
 }
 
 /// Where in the session a hook runs.
@@ -214,6 +226,13 @@ pub enum HookOutcome {
     /// The look at the protected paths around it stopped the turn, with
     /// what the user is told.
     Stopped(String),
+    /// A `tool.before` hook that is waited for, whose `{path}` would take a
+    /// file the engine asks about, or refuses, for what it is (it looks
+    /// like it holds secrets, it is a protected path the call writes, or a
+    /// path rule asks or denies), before the person has answered yes to the
+    /// call's question: it did not run, and runs after the yes, before the
+    /// call does (the review of step 28, finding 14; the owner's choice).
+    AfterAnswer,
 }
 
 /// A session's hook commands: those it runs, the entries it refused, and
@@ -223,10 +242,12 @@ pub enum HookOutcome {
 pub(crate) struct SessionHooks {
     /// The user's own, then the project's approved ones.
     pub(crate) hooks: Vec<CommandHook>,
-    /// The user's entries that do not run because they were refused, and
-    /// a trusted project's hooks changed since they were approved: each is
-    /// on its event all the same, as a hook that fails
-    /// ([`super::hooks::InSession::refused`]).
+    /// The user's entries that do not run because they were refused, on
+    /// their events all the same, as hooks that fail; and the gates of a
+    /// trusted project's approved hooks with no entry that runs as
+    /// approved, on `tool.before` for every call and on `prompt.submit`
+    /// ([`super::hooks::InSession::refused`]). A project's leave their
+    /// events once its trust is taken away ([`HookCommands::in_force`]).
     pub(crate) refused: Vec<super::hooks::Refused>,
     /// What runs them.
     pub(crate) commands: Arc<HookCommands>,
@@ -280,6 +301,24 @@ pub(crate) fn session_notice(hook: &str, context: &str) -> String {
 }
 
 impl SessionHooks {
+    /// The project's trust was taken away during the session
+    /// ([`HookCommands::withdraw_project`]): its hook commands, and the
+    /// gates its changed or removed ones held, leave their events for the
+    /// rest of the session. What the user is told, once, when anything of
+    /// the project's was on an event.
+    pub(crate) fn withdraw_project(&self) -> Option<String> {
+        let had = self
+            .hooks
+            .iter()
+            .map(|hook| hook.source)
+            .chain(self.refused.iter().map(|refused| refused.source))
+            .any(|source| source == Source::Project);
+        (self.commands.withdraw_project() && had).then(|| {
+            "This project is no longer trusted, so its hooks no longer run in this session, and              the gates its changed hooks held are lifted."
+                .to_owned()
+        })
+    }
+
     /// Why a prompt would be refused by a gate that cannot run, if one is
     /// held on `prompt.submit`: a refused entry of the user's, a trusted
     /// project's changed since it was approved, or an extension's held gate.
@@ -290,7 +329,11 @@ impl SessionHooks {
         if let Some(refused) = self
             .refused
             .iter()
-            .find(|refused| refused.event == Some(Event::PromptSubmit) && !refused.observe)
+            .find(|refused| {
+                refused.event == Some(Event::PromptSubmit)
+                    && !refused.observe
+                    && self.commands.in_force(refused.source)
+            })
         {
             return Some(format!(
                 "the hook `{}` on `prompt.submit` cannot run",
@@ -329,7 +372,7 @@ impl SessionHooks {
         let input = session_input(event, session, &self.paths);
         self.hooks
             .iter()
-            .filter(|hook| hook.event == event)
+            .filter(|hook| hook.event == event && self.commands.in_force(hook.source))
             .map(|hook| {
                 // A `session.start` run is under the session's token, which
                 // the close fires; a `session.end` one, run after it, has
@@ -356,6 +399,7 @@ impl SessionHooks {
                         input: input.clone(),
                         tool: None,
                         effects: Vec::new(),
+                        answered: false,
                     },
                     cx,
                     Box::new(()),
@@ -415,7 +459,7 @@ impl SessionHooks {
                             },
                         )
                     }
-                    Ok(HookOutcome::Nothing | HookOutcome::Observed) => {
+                    Ok(HookOutcome::Nothing | HookOutcome::Observed | HookOutcome::AfterAnswer) => {
                         Ok(cineris_ext::hook::Answer::default())
                     }
                     Ok(HookOutcome::Failed(why) | HookOutcome::Stopped(why)) => Err(why),
@@ -607,6 +651,9 @@ pub(crate) struct Owned {
     pub(crate) input: Json,
     pub(crate) tool: Option<String>,
     pub(crate) effects: Vec<Effect>,
+    /// Whether the person has answered yes to the call's question already
+    /// ([`HookEvent::answered`]).
+    pub(crate) answered: bool,
 }
 
 /// What a session runs its hook commands with: its extensions' host parts,
@@ -634,6 +681,13 @@ pub(crate) struct HookCommands {
     observing_at_once: Arc<tokio::sync::Semaphore>,
     /// The turn running now, if any: a hook's stop stops it as well.
     running: Arc<dyn Fn() -> Option<TurnId> + Send + Sync>,
+    /// The project's trust, as the session's hooks hold it: fired when a
+    /// reload finds the project no longer trusted
+    /// ([`withdraw_project`](Self::withdraw_project)), and never set again
+    /// in the session. A project's hooks, and the gates its changed or
+    /// removed ones hold, are off their events from then on, and each run
+    /// of a project's hook still going is under it, and stopped.
+    project: CancelToken,
 }
 
 impl std::fmt::Debug for HookCommands {
@@ -661,6 +715,34 @@ impl HookCommands {
             waited_at_once: Arc::new(tokio::sync::Semaphore::new(RUNS_AT_ONCE)),
             observing_at_once: Arc::new(tokio::sync::Semaphore::new(RUNS_AT_ONCE)),
             running,
+            project: CancelToken::new(),
+        }
+    }
+
+    /// The project's trust was taken away (`reload::apply` judged it so):
+    /// from now on no hook of the project's is on its event, its held
+    /// gates included, and each of its runs still going is stopped. For
+    /// the rest of the session: trust given again takes effect at the
+    /// next, as any change of the session's hooks does. Says whether it
+    /// was in force until now.
+    pub(crate) fn withdraw_project(&self) -> bool {
+        let was = !self.project.is_cancelled();
+        self.project.cancel();
+        was
+    }
+
+    /// Whether a hook or held gate of `source`'s is the session's now: the
+    /// user's always, a project's until its trust is taken away.
+    pub(crate) fn in_force(&self, source: Source) -> bool {
+        source == Source::User || !self.project.is_cancelled()
+    }
+
+    /// The token a run of a hook of `source`'s is under, beside its own:
+    /// a project's is stopped when the project's trust is taken away.
+    pub(crate) fn run_cancel(&self, source: Source) -> CancelToken {
+        match source {
+            Source::User => CancelToken::new(),
+            Source::Project => self.project.child(),
         }
     }
 
@@ -683,6 +765,7 @@ impl HookCommands {
                 input: &event.input,
                 tool: event.tool.as_deref(),
                 effects: &event.effects,
+                answered: event.answered,
             };
             let outcome = commands.run(&hook, &event_of, &cx).await;
             let _ = sender.send(outcome);
@@ -896,6 +979,21 @@ impl HookCommands {
             }
             Waited::LetGo => return let_go(),
         };
+        // A file the engine asks about for what it is is no hook's before
+        // the person's yes to the call's question (the review of step 28,
+        // finding 14): a hook that would take one waits for the yes, and an
+        // observer, which decides nothing, does not run for the call.
+        if hook.event == Event::ToolBefore
+            && !event.answered
+            && hook.uses_path()
+            && held_back(&self.parts.policy, event.effects)
+        {
+            return if hook.observe {
+                HookOutcome::Nothing
+            } else {
+                HookOutcome::AfterAnswer
+            };
+        }
         // `{path}`: each file the call reads or writes, once, by place, in
         // the system's plain form (never `\\?\C:\…`).
         let mut keys = Vec::new();
@@ -1089,7 +1187,7 @@ impl crate::Core {
         let hook = hooks
             .hooks
             .iter()
-            .find(|hook| hook.name == name)
+            .find(|hook| hook.name == name && hooks.commands.in_force(hook.source))
             .ok_or_else(|| usage(format!("The session runs no hook `{name}`.")))?;
         let effects = run
             .paths
@@ -1113,6 +1211,7 @@ impl crate::Core {
             input: &run.input,
             tool: run.tool.as_deref(),
             effects: &effects,
+            answered: false,
         };
         Ok(hooks.commands.run(hook, &event, &cx).await)
     }
@@ -1140,6 +1239,23 @@ pub(crate) fn turn_number(turn: &TurnId) -> u32 {
         .number_of(turn.as_str())
         .and_then(|number| u32::try_from(number).ok())
         .unwrap_or(0)
+}
+
+/// Whether any file of `effects` within the workspace, that would fill a
+/// `{path}`, is one the engine asks about, or refuses, for what it is
+/// before the call's question is answered
+/// (`cineris_policy::Engine::holds_back_from_hooks`).
+fn held_back(policy: &EnginePolicy, effects: &[Effect]) -> bool {
+    let engine = policy.engine();
+    effects.iter().any(|effect| match effect {
+        Effect::Read(path) if path.is_inside_workspace() => {
+            engine.holds_back_from_hooks(&cineris_protocol::lease::Effect::Read, path.abs())
+        }
+        Effect::Write(path) if path.is_inside_workspace() => {
+            engine.holds_back_from_hooks(&cineris_protocol::lease::Effect::Write, path.abs())
+        }
+        _ => false,
+    })
 }
 
 /// The engine's decision of a hook command's start, as an `exec` of its

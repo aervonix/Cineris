@@ -915,6 +915,7 @@ impl Session {
                 parts: parts.to_vec(),
                 delivery,
             },
+            answered: false,
         };
         let heard = turn
             .cancel
@@ -977,6 +978,7 @@ impl Session {
                 outcome: outcome.clone(),
                 error,
             },
+            answered: false,
         };
         let shared = Arc::clone(&self.shared);
         tokio::spawn(async move {

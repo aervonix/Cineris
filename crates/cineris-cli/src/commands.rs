@@ -857,8 +857,40 @@ pub(crate) fn permissions(command: PermissionsCommand, name: &'static str) -> Do
                         ));
                     }
                 }
-                let trusted = core
-                    .trust_project_with(&project, &approved.0, &approved.1)
+                // What was approved and is no longer in the project as
+                // approved: shown as removed, and its approval taken away
+                // only on a yes at a terminal (the review of step 28,
+                // finding 4). Without a terminal it is said, and left.
+                let removed = core.project_removed(&project).map_err(fail)?;
+                let mut dropping = Vec::new();
+                if !removed.is_empty() {
+                    let mut listing = String::from(
+                        "Approved before, and no longer in the project as approved:\n",
+                    );
+                    for one in &removed {
+                        listing.push_str(&format!("  {}\n", one.detail.replace('\n', "\n    ")));
+                    }
+                    out!("{listing}");
+                    if io::stdin().is_terminal() && io::stdout().is_terminal() {
+                        out!("Take these approvals away? [y/N] ");
+                        let mut line = String::new();
+                        if io::stdin().read_line(&mut line).is_ok()
+                            && matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+                        {
+                            dropping = removed;
+                        }
+                    } else {
+                        context.say(&format!(
+                            "{} approvals of what was removed from the project were left, and \
+                             hold their gates: `{} permissions trust` at a terminal takes them \
+                             away, or the project's trust question when a session opens",
+                            removed.len(),
+                            context.name
+                        ));
+                    }
+                }
+                let (trusted, dropped) = core
+                    .trust_project_dropping(&project, &approved.0, &approved.1, &dropping)
                     .map_err(fail)?;
                 let mut out = format!(
                     "{} {}{}.\n",
@@ -915,6 +947,16 @@ pub(crate) fn permissions(command: PermissionsCommand, name: &'static str) -> Do
                             .hooks
                             .iter()
                             .map(|name| format!("`{name}`"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
+                }
+                if dropped > 0 {
+                    out.push_str(&format!(
+                        "Took away the approvals of what was removed: {}.\n",
+                        dropping
+                            .iter()
+                            .map(|one| format!("`{}`", one.name))
                             .collect::<Vec<_>>()
                             .join(", ")
                     ));

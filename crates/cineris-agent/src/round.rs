@@ -130,7 +130,8 @@ use crate::config::Workspace;
 use crate::events::Emitter;
 use crate::guarded::Guarded;
 use crate::hooks::{
-    self, Before, HookEvent, HookInput, HookQuestion, HookSubject, LoopHooks, Observers, ToolTarget,
+    self, Before, Hook, HookEvent, HookInput, HookQuestion, HookSubject, LoopHooks, Observers,
+    ToolTarget,
 };
 use crate::policy::{Decision, PlannedCall, Policy, Verdict};
 use crate::stats::ToolStatOutcome;
@@ -162,12 +163,18 @@ pub(crate) enum Report {
         /// decision, the call is asked about. With a replacement, `plan`
         /// and `decision` are the replacement's.
         hooked: Option<Box<HookQuestion>>,
+        /// Its `tool.before` hooks that wait for the person's yes to its
+        /// question (`HookOutcome::AfterAnswer`): run after the yes, before
+        /// it runs.
+        deferred: Vec<Arc<dyn Hook>>,
     },
     /// A question was answered.
     Answered {
         token: u64,
         plan: Plan,
         verdict: Verdict,
+        /// Why the hooks run after the person's yes refused the call.
+        refused: Option<String>,
     },
     /// A call has its result.
     Finished {
@@ -353,6 +360,10 @@ struct Call {
     /// Whether the question of its last decision was answered: only then
     /// does its result say the user was asked about a hook's arguments.
     answered: bool,
+    /// Its `tool.before` hooks that wait for the person's yes to its
+    /// question, from its last decision: run after the yes, before it runs
+    /// (the review of step 28, finding 14).
+    deferred: Vec<Arc<dyn Hook>>,
 }
 
 impl Call {
@@ -741,6 +752,7 @@ impl Round {
             moved: false,
             hooked: None,
             answered: false,
+            deferred: Vec::new(),
         }
     }
 
@@ -873,12 +885,14 @@ impl Round {
                 plan,
                 decision,
                 hooked,
-            } => self.planned(token, plan, decision, hooked),
+                deferred,
+            } => self.planned(token, plan, decision, hooked, deferred),
             Report::Answered {
                 token,
                 plan,
                 verdict,
-            } => self.answered(token, plan, verdict),
+                refused,
+            } => self.answered(token, plan, verdict, refused),
             Report::Finished {
                 token,
                 result,
@@ -899,6 +913,7 @@ impl Round {
         mut plan: Plan,
         decision: Decision,
         hooked: Option<Box<HookQuestion>>,
+        deferred: Vec<Arc<dyn Hook>>,
     ) {
         // A call of a response that was thrown away meanwhile: nothing to do.
         let Some(position) = self.position(token) else {
@@ -931,6 +946,7 @@ impl Round {
             );
         }
         call.hooked = hooked;
+        call.deferred = deferred;
         let call = &self.calls[position];
         // A kept run of another call that touched the same files is not what
         // the model was shown: it goes before this call can meet what it
@@ -1055,7 +1071,7 @@ impl Round {
         }
     }
 
-    fn answered(&mut self, token: u64, plan: Plan, verdict: Verdict) {
+    fn answered(&mut self, token: u64, plan: Plan, verdict: Verdict, refused: Option<String>) {
         if self
             .asking
             .as_ref()
@@ -1083,11 +1099,18 @@ impl Round {
         // Somebody answered it: its result may say so.
         self.calls[position].answered = true;
         match verdict {
-            Verdict::Allow => {
-                let call = &mut self.calls[position];
-                call.state = CallState::Ready(plan);
-                call.times.ready = Some(now);
-            }
+            Verdict::Allow => match refused {
+                // Allowed, and refused by a hook that waited for the yes.
+                Some(why) => self.deny(
+                    position,
+                    format!("This call was not allowed to run. Reason: {why}"),
+                ),
+                None => {
+                    let call = &mut self.calls[position];
+                    call.state = CallState::Ready(plan);
+                    call.times.ready = Some(now);
+                }
+            },
             Verdict::Deny { note } => {
                 let mut text = "The user did not allow this call.".to_owned();
                 if let Some(note) = note {
@@ -1450,6 +1473,29 @@ impl Round {
         let hooked = call.hooked.clone();
         let name = call.name.clone();
         let cancel = call.cancel.clone();
+        // The hooks that wait for the yes, and what they are shown then:
+        // the call as it would run.
+        let deferred = match (&self.env.hooks, call.deferred.is_empty()) {
+            (Some(set), false) => Some((
+                set.clone(),
+                call.deferred.clone(),
+                HookInput::new(
+                    HookEvent::ToolBefore,
+                    self.env.session.clone(),
+                    self.turn.clone(),
+                    self.env.workspace.paths.root().clone(),
+                    HookSubject::Call {
+                        tool: call.name.clone(),
+                        call_id: call.call_id.clone(),
+                        arguments: arguments.clone(),
+                        summary: plan.summary.clone(),
+                        effects: plan.effects.clone(),
+                    },
+                )
+                .answered(),
+            )),
+            _ => None,
+        };
         let cx = self.run_cx(cancel);
         // What the call would change in a file, for the question: worked
         // out by its tool as it would make the change.
@@ -1473,10 +1519,24 @@ impl Round {
                     hooks: hooked.as_deref(),
                 })
                 .await;
+            // After the yes, and before the call runs, the hooks that
+            // waited for it (the review of step 28, finding 14): a refusal
+            // there refuses the call. A no, or a stop, runs none of them.
+            let refused = match (&verdict, deferred) {
+                (Verdict::Allow, Some((set, hooks, input))) => {
+                    let heard = hooks::ask_all(&set, hooks, input, Observers::Skip);
+                    match cx.cancel.race(heard).await {
+                        Some(heard) => hooks::after_the_answer(heard).err(),
+                        None => Some(NOT_RUN.to_owned()),
+                    }
+                }
+                _ => None,
+            };
             Report::Answered {
                 token,
                 plan,
                 verdict,
+                refused,
             }
         });
         self.asking = Some((token, handle));
@@ -1863,6 +1923,7 @@ impl After {
                 outcome: result.outcome().clone(),
                 result: result.text(),
             },
+            answered: false,
         };
         let asked = hooks::ask_all(&self.set, matched, input, Observers::Run);
         let Some(heard) = cancel.race(asked).await else {
@@ -1953,6 +2014,7 @@ impl Planning {
             plan,
             decision,
             hooked: None,
+            deferred: Vec::new(),
         }
     }
 
@@ -1989,22 +2051,46 @@ impl Planning {
                 summary: plan.summary.clone(),
                 effects: plan.effects.clone(),
             },
+            answered: false,
         };
         let Some(heard) = self
             .cx
             .cancel
-            .race(hooks::ask_all(set, matched, input, self.observers))
+            .race(hooks::ask_all(set, matched.clone(), input.clone(), self.observers))
             .await
         else {
-            return self
-                .finished(
-                    ToolResult::interrupted(NOT_RUN),
-                    ToolStatOutcome::Interrupted,
-                )
-                .await;
+            return self.interrupted().await;
         };
+        // The hooks that wait for the person's yes to the call's question
+        // (the review of step 28, finding 14): no opinion now.
+        let later = hooks::later(&heard);
+        let deferred: Vec<Arc<dyn Hook>> = matched
+            .into_iter()
+            .filter(|hook| later.iter().any(|name| name == hook.name()))
+            .collect();
         match hooks::before(heard) {
-            Before::Pass => self.planned(plan, decision),
+            // No question is put: what waits for a yes runs now, before the
+            // call, as it would after one.
+            Before::Pass
+                if !deferred.is_empty()
+                    && matches!(decision, Decision::Allow | Decision::AllowReadOnly) =>
+            {
+                let heard = hooks::ask_all(set, deferred, input.answered(), Observers::Skip);
+                match self.cx.cancel.race(heard).await {
+                    None => self.interrupted().await,
+                    Some(heard) => match hooks::after_the_answer(heard) {
+                        Ok(()) => self.planned(plan, decision),
+                        Err(why) => self.refused(plan, why),
+                    },
+                }
+            }
+            Before::Pass => Report::Planned {
+                token: self.token,
+                plan,
+                decision,
+                hooked: None,
+                deferred,
+            },
             Before::Ask(asked) => Report::Planned {
                 token: self.token,
                 plan,
@@ -2013,6 +2099,7 @@ impl Planning {
                     asked,
                     replaced: None,
                 })),
+                deferred,
             },
             Before::Deny(why) => self.refused(plan, why),
             Before::Replace {
@@ -2020,8 +2107,37 @@ impl Planning {
                 arguments,
                 reason,
                 asked,
-            } => self.replace(plan, hook, arguments, reason, asked).await,
+            } => {
+                let replaced = self.replace(plan, hook, arguments, reason, asked).await;
+                match replaced {
+                    // The hooks that wait for the yes run after it, shown
+                    // the call as it would run: the replacement.
+                    Report::Planned {
+                        token,
+                        plan,
+                        decision,
+                        hooked: hooked @ Some(_),
+                        ..
+                    } => Report::Planned {
+                        token,
+                        plan,
+                        decision,
+                        hooked,
+                        deferred,
+                    },
+                    other => other,
+                }
+            }
         }
+    }
+
+    /// The report of a call interrupted while its hooks were asked.
+    async fn interrupted(&self) -> Report {
+        self.finished(
+            ToolResult::interrupted(NOT_RUN),
+            ToolStatOutcome::Interrupted,
+        )
+        .await
     }
 
     /// One hook replaced the call's arguments. The replacement is held to
@@ -2138,6 +2254,7 @@ impl Planning {
                             reason,
                         }),
                     })),
+                    deferred: Vec::new(),
                 },
             },
         }

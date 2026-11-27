@@ -61,6 +61,8 @@ mod harness_git;
 #[cfg(feature = "scripts")]
 mod hook_commands;
 #[cfg(feature = "scripts")]
+mod hook_trust;
+#[cfg(feature = "scripts")]
 mod hook_wiring;
 mod index;
 mod knowledge;

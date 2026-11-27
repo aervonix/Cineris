@@ -563,6 +563,10 @@ pub(crate) struct TrustQuestion {
     /// The project's hooks that were listed, as they were read: a yes pins
     /// each, kind `hook`, by the hash of what was shown (step 28).
     pub(crate) hooks: Vec<Definition>,
+    /// The approved extensions and hooks of a trusted project that were
+    /// listed as removed, as they were pinned: a yes takes each approval
+    /// away (the review of step 28, finding 4).
+    pub(crate) removed: Vec<Definition>,
 }
 
 /// A person's answer to the trust question.
@@ -730,20 +734,42 @@ pub(crate) fn look(
         peeked = Some(load);
         confined
     };
-    let extensions = if found.found.is_empty() {
-        crate::ext::found::Asked::default()
-    } else {
-        let users = crate::ext::found::UserNames::listed(
-            &place.resolver,
-            place.load.dirs.config.as_deref(),
-        );
-        crate::ext::found::asked(&found, &users, &stored, confined)
+    let pinned_extensions = !stored
+        .pinned_of(&TrustResourceKind::Extension)
+        .is_empty();
+    let users = (!found.found.is_empty() || pinned_extensions).then(|| {
+        crate::ext::found::UserNames::listed(&place.resolver, place.load.dirs.config.as_deref())
+    });
+    let extensions = match &users {
+        Some(users) if !found.found.is_empty() => {
+            crate::ext::found::asked(&found, users, &stored, confined)
+        }
+        _ => crate::ext::found::Asked::default(),
+    };
+    // A trusted project's extensions approved and gone are listed as
+    // removed, with what they gated where the registration cache keeps it.
+    let removed_extensions = match &users {
+        Some(users) if pinned_extensions => {
+            let cache = place.state.as_ref().map(|state| {
+                cineris_ext::cache::RegistrationCache::new(state.registration_cache_file())
+                    .with_clock(Arc::clone(&inner.options.clock))
+                    .load()
+                    .cache
+            });
+            crate::ext::found::removed(&found, users, &stored, cache.as_ref())
+        }
+        _ => crate::ext::found::Asked::default(),
     };
     let hooks = crate::ext::hooks::asked(&configured_hooks, &stored, confined);
     // Handed to the session without the extensions' bytes, its places
     // stamped as they were before they were read.
     trust.found = Some(crate::ext::found::looked(&found, watched));
-    if quiet && extensions.pins.is_empty() && hooks.pins.is_empty() {
+    if quiet
+        && extensions.pins.is_empty()
+        && hooks.pins.is_empty()
+        && hooks.removed.is_empty()
+        && removed_extensions.removed.is_empty()
+    {
         return Ok((trust, None));
     }
     let trusted = stored.is_trusted();
@@ -819,6 +845,7 @@ pub(crate) fn look(
         });
     }
     resources.extend(extensions.resources);
+    resources.extend(removed_extensions.resources);
     resources.extend(hooks.resources);
     // A held-back write root that would turn the sandbox off is said before
     // anything else it lists (the maintainers, after the fresh review of
@@ -854,6 +881,11 @@ pub(crate) fn look(
         git_shown,
         extensions: extensions.pins,
         hooks: hooks.pins,
+        removed: removed_extensions
+            .removed
+            .into_iter()
+            .chain(hooks.removed)
+            .collect(),
     };
     Ok((trust, Some(question)))
 }
@@ -940,7 +972,16 @@ fn kept_answer(
             pin.extend(question.extensions.iter().cloned());
             pin.extend(question.hooks.iter().cloned());
             let kept = if question.trusted {
-                store.approve(&question.key, &pin, question.git_shown)
+                store
+                    .approve(&question.key, &pin, question.git_shown)
+                    .and_then(|kept| {
+                        // Each approval listed as removed is taken away,
+                        // as it was pinned when it was listed.
+                        if !question.removed.is_empty() {
+                            store.drop_pins(&question.key, &question.removed)?;
+                        }
+                        Ok(kept)
+                    })
             } else {
                 store.trust_unless_refused(&question.key, &question.root, &pin, question.git_shown)
             };
@@ -963,7 +1004,10 @@ fn kept_answer(
                     // The extensions and hooks listed stay unapproved, and
                     // the store keeps no record of a keep of them: they are
                     // not asked about again in this core, as after not now.
-                    if !question.extensions.is_empty() || !question.hooks.is_empty() {
+                    if !question.extensions.is_empty()
+                        || !question.hooks.is_empty()
+                        || !question.removed.is_empty()
+                    {
                         not_now();
                     }
                     self::trust(inner, place.state.as_ref(), &place.root, &place.load)

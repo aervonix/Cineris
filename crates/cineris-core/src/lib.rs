@@ -75,7 +75,8 @@ pub use crate::ext::manage::{
 };
 pub use crate::knowledge::AFTER_THE_RULES;
 pub use crate::manage::{
-    Project, ProjectExtension, ProjectFiles, ProjectHookCommand, ProviderCredential, TrustState,
+    Project, ProjectExtension, ProjectFiles, ProjectHookCommand, ProjectRemoved, ProviderCredential,
+    TrustState,
     Trusted,
 };
 pub use crate::policy::{

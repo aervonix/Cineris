@@ -14,6 +14,12 @@
 //!   it is now, in words ([`asked`]), a yes pins it as shown, and a session
 //!   runs it only while the project is trusted and its pin is its hash
 //!   ([`in_session`]).
+//! - **An approved one's gate does not lapse** (the review of step 28,
+//!   finding 4): one approved with no entry that runs as approved (changed,
+//!   taken out, turned off, broken) holds a failing gate on every call and
+//!   every prompt ([`held_gates`]), until the person approves it as it is,
+//!   takes its approval away (the trust question lists it as removed:
+//!   [`removed`]), or takes the project's trust away.
 
 use std::collections::HashMap;
 
@@ -45,6 +51,11 @@ pub(crate) struct Refused {
     pub(crate) filter: Option<Filter>,
     /// Why, in a sentence that follows its name.
     pub(crate) reason: String,
+    /// Whether it is a gate a trusted project's approved hook holds, which
+    /// is no longer on its event as it was approved ([`held_gates`]): its
+    /// failure says its way out in `reason`, and editing or turning off
+    /// the project's entry is none.
+    pub(crate) held: bool,
 }
 
 impl Refused {
@@ -79,6 +90,15 @@ pub(crate) struct Configured {
     /// with whose it is: a gating hook that relies on `{path}` for every
     /// tool (`CommandHook::warning`).
     pub(crate) warnings: Vec<(Source, String)>,
+    /// The names of a project's entries turned off by its file (`enabled =
+    /// false`): one that was approved holds its gates all the same
+    /// ([`in_session`]).
+    pub(crate) project_off: Vec<String>,
+    /// The names of a project's entries left out because one of the user's
+    /// own hooks has the name: the user's word, so one that was approved
+    /// holds nothing, as a project's extension whose name a folder of the
+    /// user's takes does not.
+    pub(crate) project_yielded: Vec<String>,
 }
 
 /// A hook's entry as `cineris-ext` compiles it.
@@ -105,6 +125,7 @@ fn compiled(name: &str, source: Source, settings: &HookSettings) -> Result<Comma
         observe: entry.observe,
         filter: Filter::new(entry.tools.clone()).ok(),
         reason,
+        held: false,
     })
 }
 
@@ -129,6 +150,7 @@ impl Configured {
         }
         for hook in &loaded.project_hooks {
             if !hook.settings.enabled {
+                configured.project_off.push(hook.name.clone());
                 continue;
             }
             // The name is the user's, whether their hook is on or off.
@@ -150,7 +172,9 @@ impl Configured {
                     reason: "one of your own hooks has its name, and the name is yours: no \
                              project's file can name, change or turn off a hook of yours"
                         .to_owned(),
+                    held: false,
                 });
+                configured.project_yielded.push(hook.name.clone());
                 continue;
             }
             match compiled(&hook.name, Source::Project, &hook.settings) {
@@ -175,6 +199,9 @@ pub(crate) struct Asked {
     pub(crate) resources: Vec<TrustResource>,
     /// The definitions listed, as they were read: a yes pins these.
     pub(crate) pins: Vec<Definition>,
+    /// The approved hooks listed as removed, each as it was pinned: a yes
+    /// drops these ([`cineris_policy::TrustStore::drop_pins`]).
+    pub(crate) removed: Vec<Definition>,
 }
 
 /// What the trust question lists of `configured`'s project hooks, for a
@@ -198,7 +225,41 @@ pub(crate) fn asked(configured: &Configured, stored: &ProjectTrust, confined: bo
         });
         asked.pins.push(definition);
     }
+    // Each one approved with no entry that runs as approved: listed as
+    // removed, never dropped unseen, since its gates hold until it is.
+    let pinned = stored.pinned_of(&TrustResourceKind::Hook);
+    let names: Vec<String> = pinned.iter().map(|(name, _)| name.clone()).collect();
+    for (name, how) in removed(configured, &names) {
+        let Some((_, hash)) = pinned.iter().find(|(pinned, _)| *pinned == name) else {
+            continue;
+        };
+        asked.resources.push(TrustResource {
+            kind: TrustResourceKind::Hook,
+            name: visible(&name).into_owned(),
+            detail: removed_detail(&name, how),
+            changed: true,
+        });
+        asked.removed.push(Definition {
+            kind: TrustResourceKind::Hook,
+            name,
+            hash: *hash,
+        });
+    }
     asked
+}
+
+/// What the trust question, and `cineris permissions trust`, show of one
+/// of a project's hooks that was approved and is removed (`how`): that it
+/// is a hook, its name, that what it gated is not known, and that a yes
+/// takes its approval away.
+pub(crate) fn removed_detail(name: &str, how: Lapsed) -> String {
+    format!(
+        "Removed: the project's hook `{}`, which you approved, {}. What it gated is not known \
+         (only its hash was kept), so it holds every tool call and every prompt until its \
+         approval is taken away. A yes takes its approval away.",
+        in_code(name),
+        how.said()
+    )
 }
 
 /// What the trust question, and `cineris permissions trust`, show of one
@@ -223,12 +284,17 @@ pub(crate) struct InSession {
     /// The user's own, then the project's approved ones.
     pub(crate) hooks: Vec<CommandHook>,
     /// Each of the user's entries that does not run because it was
-    /// refused, and each hook of a trusted project approved before that
-    /// has changed since: each is on its event as a hook that fails, so
-    /// that a gate it held does not lapse. A project's entry that nobody
-    /// approved holds no gate, trusted or not (the review of step 28's
-    /// second pull request, H1: an untrusted repository's refused entry
-    /// gated every call).
+    /// refused, on its event as a hook that fails, so that a gate it held
+    /// does not lapse; and, for each hook of a trusted project that was
+    /// approved and is not on its event as it was approved now (changed,
+    /// taken out of the project's file, turned off there, or no longer
+    /// compiling), a failing gate on `tool.before` for every call and one
+    /// on `prompt.submit` ([`held_gates`]): what it was approved as is not
+    /// known, so neither is the gate it held, and the project's file, which
+    /// the model may have written, lifts none of it (the review of step 28,
+    /// finding 4). A project's entry that nobody approved holds no gate,
+    /// trusted or not (the review of step 28's second pull request, H1: an
+    /// untrusted repository's refused entry gated every call).
     pub(crate) refused: Vec<Refused>,
     /// What the session is told, once: each of the user's refused entries
     /// and warnings; and, of a trusted project alone, each refused entry,
@@ -236,11 +302,120 @@ pub(crate) struct InSession {
     pub(crate) told: Vec<String>,
 }
 
+/// How a trusted project's hook that was approved stands now, when it is
+/// not on its event as it was approved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Lapsed {
+    /// Its entry is there, and has changed since.
+    Changed,
+    /// Its entry is there, and does not compile.
+    Refused,
+    /// Its entry is there, turned off (`enabled = false`).
+    Off,
+    /// No entry has its name.
+    Gone,
+}
+
+impl Lapsed {
+    /// What is said of it, after "the project's hook `name`".
+    pub(crate) fn said(self) -> &'static str {
+        match self {
+            Self::Changed => "has changed since you approved it",
+            Self::Refused => "no longer compiles as you approved it",
+            Self::Off => "is turned off by the project's file (`enabled = false`)",
+            Self::Gone => "is no longer in the project's file",
+        }
+    }
+}
+
+/// The way out of the gates a project's approved hook holds once it is no
+/// longer on its event as approved: kept apart from the gates, so that what
+/// lifts them can change on its own. A changed one is approved as it is
+/// now; one with no entry that runs has its pin dropped by a yes to the
+/// trust question, which lists it as removed (or `cineris permissions
+/// trust`, which does too).
+pub(crate) fn held_way_out(lapsed: Lapsed) -> &'static str {
+    if lapsed == Lapsed::Changed {
+        "approve it as it is now (the project's trust question lists it when a session opens, \
+         and `cineris permissions trust` shows it), or take the project's trust away (`cineris \
+         permissions untrust`), which lifts them at once"
+    } else {
+        "take its approval away (the project's trust question lists it as removed when a \
+         session opens, and `cineris permissions trust` does too: a yes drops it), put it back \
+         as you approved it, or take the project's trust away (`cineris permissions untrust`), \
+         which lifts them at once"
+    }
+}
+
+/// The failing gates a trusted project's hook `name`, approved and now
+/// `lapsed`, holds: one on `tool.before` for every call and one on
+/// `prompt.submit`, as an extension whose approved registration is known
+/// nowhere holds both. What it gated when it was approved is not known
+/// (the pin keeps its hash alone), so the gates are held whatever its entry
+/// says now: its event, its tools and `observe` may be what changed.
+fn held_gates(name: &str, lapsed: Lapsed) -> [Refused; 2] {
+    let reason = format!(
+        "it {}, so it holds every call and every prompt until you {}",
+        lapsed.said(),
+        held_way_out(lapsed)
+    );
+    [Event::ToolBefore, Event::PromptSubmit].map(|event| Refused {
+        name: name.to_owned(),
+        source: Source::Project,
+        event: Some(event),
+        observe: false,
+        filter: None,
+        reason: reason.clone(),
+        held: true,
+    })
+}
+
+/// Each of a trusted project's hooks whose name is in `approved_once` (by
+/// the store's pin, or for the run) with no entry of `configured` that
+/// could run as approved: one that does not compile, one turned off, one
+/// gone. One whose name one of the user's own hooks takes is the user's
+/// word, and is not among them, as a project's extension whose name a
+/// folder of the user's takes holds nothing.
+pub(crate) fn removed(configured: &Configured, approved_once: &[String]) -> Vec<(String, Lapsed)> {
+    let mut removed = Vec::new();
+    for name in approved_once {
+        if configured.project.iter().any(|hook| hook.name == *name)
+            || configured.project_yielded.contains(name)
+        {
+            continue;
+        }
+        let how = if configured
+            .refused
+            .iter()
+            .any(|refused| refused.source == Source::Project && refused.name == *name)
+        {
+            Lapsed::Refused
+        } else if configured.project_off.contains(name) {
+            Lapsed::Off
+        } else {
+            Lapsed::Gone
+        };
+        removed.push((name.clone(), how));
+    }
+    removed
+}
+
+/// The names of a project's hooks the store has pinned.
+pub(crate) fn pinned_names(stored: &ProjectTrust) -> Vec<String> {
+    stored
+        .pinned_of(&TrustResourceKind::Hook)
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect()
+}
+
 /// The hooks of `configured` that a session runs: the user's own, always;
 /// a project's only while the project is trusted (`trusted`) and the hook
 /// is approved as it is now, by the store's pin (`stored`) or by a yes the
 /// store could not keep (`for_the_run`, by the hashes shown). Without the
-/// store's reading nothing of a project's is approved.
+/// store's reading nothing of a project's is approved. Each of a trusted
+/// project's hooks approved before (by the store's pin or for the run) that
+/// is not approved as it is now holds its gates ([`held_gates`]).
 pub(crate) fn in_session(
     configured: Configured,
     trusted: bool,
@@ -253,7 +428,8 @@ pub(crate) fn in_session(
     // entry gated every call). The user's refused entries hold their events.
     let (mut refused, projects): (Vec<Refused>, Vec<Refused>) = configured
         .refused
-        .into_iter()
+        .iter()
+        .cloned()
         .partition(|refused| refused.source == Source::User);
     let mut told: Vec<String> = refused.iter().map(Refused::told).collect();
     told.extend(
@@ -263,51 +439,45 @@ pub(crate) fn in_session(
             .filter(|(source, _)| *source == Source::User || trusted)
             .map(|(_, said)| said.clone()),
     );
-    let mut hooks = configured.user;
+    let mut hooks = configured.user.clone();
     if trusted {
-        // Told once, and on no event: an entry nobody approved holds no
-        // gate. Only one approved as it was and changed since does (below).
+        // Told once. An entry nobody approved holds no gate; one approved
+        // before holds its gates below.
         told.extend(projects.iter().map(Refused::told));
-        for hook in configured.project {
-            let definition = hook.definition();
-            let standing = if for_the_run.contains(&definition) {
-                Standing::Approved
-            } else {
-                match stored.map(|stored| stored.standing(&definition)) {
-                    Some(Standing::Approved) => Standing::Approved,
-                    _ if for_the_run.iter().any(|run| run.name == definition.name) => {
-                        Standing::Changed
-                    }
-                    Some(other) => other,
-                    None => Standing::New,
-                }
-            };
-            let name = in_code(&hook.name);
-            match standing {
-                Standing::Approved => hooks.push(hook),
-                Standing::Changed => {
-                    told.push(format!(
-                        "This project's hook `{name}` has changed since you approved it, so it \
-                         does not run. `cineris permissions trust` shows it, to approve it."
-                    ));
-                    // Approved once, it held its event: it fails there now,
-                    // as a changed extension's gating hook does.
-                    refused.push(Refused {
-                        name: hook.name.clone(),
-                        source: Source::Project,
-                        event: Some(hook.event),
-                        observe: hook.observe,
-                        filter: Some(hook.filter.clone()),
-                        reason: "it has changed since you approved it: `cineris permissions \
-                                 trust` shows it, to approve it"
-                            .to_owned(),
-                    });
-                }
-                _ => told.push(format!(
-                    "This project's hook `{name}` does not run: you have not approved it. \
-                     `cineris permissions trust` shows it, to approve it."
-                )),
+        // Each name approved before: by the store's pin, or for the run.
+        let mut approved_once = stored.map(pinned_names).unwrap_or_default();
+        for run in for_the_run {
+            if run.kind == TrustResourceKind::Hook && !approved_once.contains(&run.name) {
+                approved_once.push(run.name.clone());
             }
+        }
+        let mut lapsed: Vec<(String, Lapsed)> = Vec::new();
+        for hook in &configured.project {
+            let definition = hook.definition();
+            let approved = for_the_run.contains(&definition)
+                || stored.is_some_and(|stored| stored.standing(&definition).is_approved());
+            if approved {
+                hooks.push(hook.clone());
+            } else if approved_once.contains(&hook.name) {
+                lapsed.push((hook.name.clone(), Lapsed::Changed));
+            } else {
+                told.push(format!(
+                    "This project's hook `{}` does not run: you have not approved it. `cineris \
+                     permissions trust` shows it, to approve it.",
+                    in_code(&hook.name)
+                ));
+            }
+        }
+        lapsed.extend(removed(&configured, &approved_once));
+        for (name, how) in lapsed {
+            told.push(format!(
+                "This project's hook `{}` {}, so it does not run, and it holds every tool call \
+                 and every prompt of this session, failing, until you {}.",
+                in_code(&name),
+                how.said(),
+                held_way_out(how)
+            ));
+            refused.extend(held_gates(&name, how));
         }
     }
     InSession {
@@ -630,11 +800,177 @@ mod tests {
         let changed = in_session(configured, true, Some(&elsewhere), &[]);
         assert!(changed.hooks.is_empty());
         assert!(changed.told[0].contains("has changed since you approved it"));
-        // Approved once, it is on its event still, as a hook that fails.
-        let [held] = changed.refused.as_slice() else {
-            panic!("{:?}", changed.refused);
+        // Approved once, it holds both gates, failing: what it gated when
+        // approved is not known (the review of step 28, finding 4).
+        assert_eq!(
+            gates_held(&changed),
+            [
+                ("lint".to_owned(), Event::ToolBefore),
+                ("lint".to_owned(), Event::PromptSubmit)
+            ]
+        );
+        assert!(
+            changed.refused[0]
+                .reason
+                .contains("changed since you approved it")
+        );
+    }
+
+    /// Each gate `session` holds: its name and event, held on every call.
+    fn gates_held(session: &InSession) -> Vec<(String, Event)> {
+        session
+            .refused
+            .iter()
+            .filter(|refused| !refused.observe && refused.event.is_some_and(Event::gates))
+            .map(|refused| {
+                assert!(refused.filter.is_none(), "on every call: {refused:?}");
+                (refused.name.clone(), refused.event.unwrap())
+            })
+            .collect()
+    }
+
+    /// A trusted project's gate on `tool.before` for `read` alone, pinned
+    /// by the store as it is; then its entry changed in each way that would
+    /// move the gate if it were built from the changed entry (`observe`,
+    /// its event, its tools), and its time alone; taken out; turned off;
+    /// no longer compiling; and its name taken by one of the user's own.
+    /// Every one but the last two holds both gates on every call and every
+    /// prompt, whatever its entry says now, and says how to lift them; the
+    /// one approved as it is holds none; a project not trusted, none; the
+    /// one whose name the user's takes, none (the user's word). The review
+    /// of step 28, finding 4: the held gate was built from the changed entry,
+    /// and a removed or turned off one held nothing.
+    #[test]
+    fn an_approved_projects_hook_holds_both_gates_once_not_as_approved() {
+        let gate = |more: fn(&mut HookSettings)| {
+            let mut settings = HookSettings {
+                tools: vec!["read".to_owned()],
+                ..settings(HookEventName::ToolBefore, &["deny-all"])
+            };
+            more(&mut settings);
+            project_hook("gate", settings)
         };
-        assert_eq!(held.name, "lint");
-        assert!(held.reason.contains("changed since you approved it"));
+        let approved = Configured::of(&loaded(&[], vec![gate(|_| {})]));
+        let definition = approved.project[0].definition();
+        let scratch = cineris_testkit::Scratch::outside("cineris-core-unit", "hooks_held");
+        let clock: cineris_base::SharedClock = std::sync::Arc::new(
+            cineris_testkit::FakeClock::starting_at("2026-11-27T10:00:00Z").unwrap(),
+        );
+        let key =
+            cineris_base::PathResolver::new(&scratch.dir("work"), cineris_base::PathOptions::new())
+                .unwrap()
+                .root()
+                .project_key();
+        let store = cineris_policy::TrustStore::new(scratch.join("trust.toml"), clock);
+        store
+            .trust(&key, "~/work", std::slice::from_ref(&definition), false)
+            .unwrap();
+        let stored = store.project(&key).unwrap();
+        let session = |configured: Configured, trusted: bool| {
+            in_session(configured, trusted, Some(&stored), &[])
+        };
+        let both = [
+            ("gate".to_owned(), Event::ToolBefore),
+            ("gate".to_owned(), Event::PromptSubmit),
+        ];
+
+        let as_approved = session(approved.clone(), true);
+        assert_eq!(as_approved.hooks.len(), 1);
+        assert!(gates_held(&as_approved).is_empty());
+        assert!(gates_held(&session(approved, false)).is_empty(), "untrusted");
+
+        let cases: [(&str, Vec<ProjectHook>, &str); 7] = [
+            ("observe", vec![gate(|it| it.observe = true)], "has changed"),
+            (
+                "its event",
+                vec![gate(|it| it.event = Some(HookEventName::ToolAfter))],
+                "has changed",
+            ),
+            (
+                "its tools",
+                vec![gate(|it| it.tools = vec!["edit".to_owned()])],
+                "has changed",
+            ),
+            (
+                "its time",
+                vec![gate(|it| it.timeout = Some(std::time::Duration::from_secs(6)))],
+                "has changed",
+            ),
+            ("taken out", Vec::new(), "is no longer in the project's file"),
+            ("turned off", vec![gate(|it| it.enabled = false)], "turned off"),
+            (
+                "no longer compiling",
+                vec![gate(|it| it.command = vec!["check".to_owned(), "--file={path}".to_owned()])],
+                "no longer compiles",
+            ),
+        ];
+        for (case, project, said) in cases {
+            let held = session(Configured::of(&loaded(&[], project)), true);
+            assert!(held.hooks.is_empty(), "{case}");
+            assert_eq!(gates_held(&held), both, "{case}");
+            let told = held
+                .told
+                .iter()
+                .find(|told| told.contains("holds every tool call and every prompt"))
+                .unwrap_or_else(|| panic!("{case}: {:?}", held.told));
+            assert!(told.contains(said), "{case}: {told}");
+            assert!(
+                told.contains("`cineris permissions trust`")
+                    && told.contains("`cineris permissions untrust`"),
+                "{case}: {told}"
+            );
+            assert!(!told.contains("enabled = false`,"), "{case}: {told}");
+        }
+
+        // Its name taken by one of the user's own: the user's word.
+        let yielded = Configured::of(&loaded(
+            &[("gate", settings(HookEventName::TurnEnd, &["log"]))],
+            vec![gate(|_| {})],
+        ));
+        assert!(gates_held(&session(yielded, true)).is_empty());
+    }
+
+    /// The trust question lists each approved hook with no entry that runs
+    /// as approved as removed, saying so and that a yes takes its approval
+    /// away, with the pin to drop as it was read; one changed is listed as
+    /// changed, to approve as it is; one approved as it is, not at all.
+    #[test]
+    fn the_trust_question_lists_an_approved_hook_that_is_gone_as_removed() {
+        let pinned = |name: &str| Definition::of(TrustResourceKind::Hook, name, [name]);
+        let stored = {
+            let scratch = cineris_testkit::Scratch::outside("cineris-core-unit", "hooks_removed");
+            let clock: cineris_base::SharedClock = std::sync::Arc::new(
+                cineris_testkit::FakeClock::starting_at("2026-11-27T10:00:00Z").unwrap(),
+            );
+            let key = cineris_base::PathResolver::new(
+                &scratch.dir("work"),
+                cineris_base::PathOptions::new(),
+            )
+            .unwrap()
+            .root()
+            .project_key();
+            let store = cineris_policy::TrustStore::new(scratch.join("trust.toml"), clock);
+            store
+                .trust(&key, "~/work", &[pinned("gone"), pinned("lint")], false)
+                .unwrap();
+            store.project(&key).unwrap()
+        };
+        let configured = one_project_hook();
+        let asked = asked(&configured, &stored, true);
+        let listed: Vec<(&str, bool)> = asked
+            .resources
+            .iter()
+            .map(|resource| (resource.name.as_str(), resource.detail.starts_with("Removed:")))
+            .collect();
+        assert_eq!(listed, [("lint", false), ("gone", true)]);
+        assert!(asked.resources[0].changed);
+        assert!(
+            asked.resources[1]
+                .detail
+                .contains("A yes takes its approval away"),
+            "{}",
+            asked.resources[1].detail
+        );
+        assert_eq!(asked.removed, [pinned("gone")]);
     }
 }

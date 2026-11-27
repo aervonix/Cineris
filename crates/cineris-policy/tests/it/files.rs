@@ -352,6 +352,53 @@ fn a_base_state_keeps_only_what_could_be_read_unasked() {
     }
 }
 
+/// What a hook command is not handed before the call's question is
+/// answered (the review of step 28, finding 14): a file the engine asks
+/// about, or refuses, for what it is (a secret's look, a protected path
+/// for a write, a path rule that asks or denies), at the levels where it
+/// asks; never an ordinary edit asked about at `supervised`, a file a rule
+/// allows, or one `unrestricted` lets through unasked.
+#[test]
+fn a_hook_is_held_back_from_the_files_asked_about_for_what_they_are() {
+    let rules = || {
+        vec![
+            user(Effect::Read, "secrets/**", RuleAction::Deny),
+            user(Effect::Read, "private/**", RuleAction::Ask),
+            user(Effect::Read, "**/.env.shared", RuleAction::Allow),
+        ]
+    };
+    for (level, sensitive_held) in [
+        (Level::Supervised, true),
+        (Level::Autonomous, true),
+        (Level::Unrestricted, false),
+    ] {
+        let engine = engine_with(|parts| {
+            parts.level = level.clone();
+            parts.rules = rules();
+        });
+        for (effect, file, held) in [
+            (Effect::Read, "/work/app/src/main.rs", false),
+            (Effect::Write, "/work/app/src/main.rs", false),
+            (Effect::Read, "/work/app/.env.shared", false),
+            (Effect::Read, "/work/app/.env", sensitive_held),
+            (Effect::Write, "/work/app/.env", sensitive_held),
+            (Effect::Read, "/work/app/deploy/id_rsa", sensitive_held),
+            (Effect::Write, "/work/app/.git/hooks/pre-commit", sensitive_held),
+            // Reading a protected path is not held back: only writing it.
+            (Effect::Read, "/work/app/.git/config", false),
+            // A rule's word holds at every level.
+            (Effect::Read, "/work/app/secrets/key.txt", true),
+            (Effect::Read, "/work/app/private/notes.txt", true),
+        ] {
+            assert_eq!(
+                engine.holds_back_from_hooks(&effect, &path(file)),
+                held,
+                "{effect:?} {file} at {level:?}"
+            );
+        }
+    }
+}
+
 // ------------------------------------------------------------ on Windows
 
 fn windows(text: &str) -> AbsPath {

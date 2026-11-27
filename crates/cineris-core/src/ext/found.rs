@@ -572,6 +572,85 @@ pub(crate) struct Asked {
     /// The definitions listed, as they were read: a yes pins these, not
     /// the folders as they are when the answer comes.
     pub(crate) pins: Vec<Definition>,
+    /// The approved extensions listed as removed, each as it was pinned:
+    /// a yes drops these ([`cineris_policy::TrustStore::drop_pins`]).
+    pub(crate) removed: Vec<Definition>,
+}
+
+/// The project's extensions that a trusted project's store has pinned and
+/// that are not in its folder of extensions any more, each listed as
+/// removed, for a yes to take its approval away (since the review of step
+/// 28, finding 4: until then nothing could, short of taking the project's
+/// trust away, and it held its gates). One whose name the user's own
+/// folder takes is not listed: it holds nothing. Nothing is listed when
+/// anything of the folder was left out (unreadable, past a cap, a link):
+/// what is missing cannot then be told from what was not read. The gating
+/// events it registered are said where the registration cache (`cache`)
+/// keeps them for the pinned hash.
+pub(crate) fn removed(
+    project: &Discovered,
+    users: &UserNames,
+    stored: &ProjectTrust,
+    cache: Option<&cineris_ext::cache::Cache>,
+) -> Asked {
+    let mut asked = Asked::default();
+    if !project.left_out.is_empty() {
+        return asked;
+    }
+    for (name, hash) in stored.pinned_of(&TrustResourceKind::Extension) {
+        if users.takes(&name)
+            || project
+                .found
+                .iter()
+                .any(|found| found.manifest.name == name)
+        {
+            continue;
+        }
+        let gated: Vec<String> = cache
+            .and_then(|cache| cache.get(&hash))
+            .map(|entry| {
+                let mut events: Vec<String> = entry
+                    .registration
+                    .hooks
+                    .iter()
+                    .filter(|hook| {
+                        !hook.observe
+                            && cineris_ext::event::Event::parse(&hook.event)
+                                .is_some_and(cineris_ext::event::Event::gates)
+                    })
+                    .map(|hook| format!("`{}`", in_code(&hook.event)))
+                    .collect();
+                events.dedup();
+                events
+            })
+            .unwrap_or_default();
+        let what = match (cache.and_then(|cache| cache.get(&hash)), gated.is_empty()) {
+            (None, _) => "What it gated is not known, so it holds every tool call and every \
+                          prompt until its approval is taken away."
+                .to_owned(),
+            (Some(_), true) => "It gated nothing.".to_owned(),
+            (Some(_), false) => format!(
+                "It gated {}, which it holds until its approval is taken away.",
+                gated.join(" and ")
+            ),
+        };
+        asked.resources.push(TrustResource {
+            kind: TrustResourceKind::Extension,
+            name: visible(&name).into_owned(),
+            detail: format!(
+                "Removed: the project's extension `{}`, which you approved, is no longer in its \
+                 folder of extensions. {what} A yes takes its approval away.",
+                in_code(&name)
+            ),
+            changed: true,
+        });
+        asked.removed.push(Definition {
+            kind: TrustResourceKind::Extension,
+            name,
+            hash,
+        });
+    }
+    asked
 }
 
 /// What the trust question lists of `project`, the project's extensions
