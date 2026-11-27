@@ -135,14 +135,13 @@ caught-by:
 # B. A server's process (cineris-core, `mcp`): the explicit environment.
 
 [break] server-env-takes-a-withheld-source
-rule: A server's variable never takes its value from a provider's key, a variable of the harness's own or one `shell.env_remove` names.
+rule: A server's variable never takes its value from a provider's key, a variable of the harness's own or one `shell.env_remove` names, and the refusal names it so, before any lookup: a withheld name in another case is refused as withheld, not as missing. Since the full review the name found is judged too (`found-name-not-judged`), so a value is withheld under this break all the same; what changes is the reason given, which the unit test reads.
 file: crates/cineris-core/src/mcp/env.rs
 in: server_env
 find: if withheld(OsStr::new(source)) {
 replace: if withheld(OsStr::new(source)) && source.is_empty() {
 caught-by:
     cineris-core mcp::env::tests::a_source_that_is_absent_or_withheld_refuses_the_start
-    cineris-core::it mcp_servers::sys_a_server_is_given_exactly_its_list
 
 [break] server-env-is-the-whole-environment
 rule: A server is given the base list of the harness's environment and nothing else of it.
@@ -264,8 +263,8 @@ caught-by:
 rule: A server's standard error is shown through the session's secret filter.
 file: crates/cineris-core/src/mcp/process.rs
 in: Running::stderr_tail
-find: .redact(&text)
-replace: .redact("") + text.as_ref()
+find: .redact(&text).into_owned()
+replace: .redact("").into_owned() + &text
 caught-by:
     cineris-core::it mcp_servers::sys_a_servers_standard_error_is_kept_to_its_end_and_masked
 

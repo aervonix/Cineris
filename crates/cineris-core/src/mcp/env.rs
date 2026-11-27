@@ -502,24 +502,31 @@ mod tests {
     }
 
     /// `PATH` keeps its absolute folders, and none inside the workspace or
-    /// a write root, whether it came from the base or from an entry.
+    /// a write root, whether it came from the base or from an entry. The
+    /// folders are real ones, so `PATH` is the system's own: its separator,
+    /// and on Windows its rules (`C:\…` is absolute there, and `:` is no
+    /// separator).
     #[test]
     fn path_keeps_absolute_folders_outside_the_workspace() {
         let scratch = cineris_testkit::Scratch::outside("cineris-core-mcp-env", "path");
         let work = scratch.dir("work");
         let tools = scratch.dir("tools");
-        let path = format!(
-            "{}:{}:relative:{}",
-            work.join("node_modules/.bin").display(),
-            tools.display(),
-            work.display()
-        );
+        let path = std::env::join_paths([
+            work.join("node_modules").join(".bin"),
+            tools.clone(),
+            std::path::PathBuf::from("relative"),
+            work.clone(),
+        ])
+        .unwrap()
+        .into_string()
+        .unwrap();
         let inherited = env(&[("PATH", &path)]);
         let avoid = [work.clone()];
         let made = server_env(
             &[],
             &EnvParts {
                 avoid: &avoid,
+                windows: cfg!(windows),
                 ..parts(&inherited, &[])
             },
         )
@@ -529,6 +536,7 @@ mod tests {
             &[entry("PATH", literal(&path))],
             &EnvParts {
                 avoid: &avoid,
+                windows: cfg!(windows),
                 ..parts(&env(&[]), &[])
             },
         )
