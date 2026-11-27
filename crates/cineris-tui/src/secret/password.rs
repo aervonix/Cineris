@@ -830,12 +830,13 @@ pub fn confirm_on<D: Device>(
     question: &str,
 ) -> io::Result<Option<bool>> {
     use cineris_term::Sink as _;
-    let question = cineris_term::sanitize(question);
-    terminal.write_frame(format!("{question} [y/N] ").as_bytes())?;
-    // What was typed before the question was written does not answer it.
+    // What was typed before the question is written does not answer it:
+    // thrown away first, so that nothing typed once it is shown is.
     while let Some(event) = terminal.next(Some(Duration::ZERO))? {
         forget(event);
     }
+    let question = cineris_term::sanitize(question);
+    terminal.write_frame(format!("{question} [y/N] ").as_bytes())?;
     let mut line = String::new();
     let answer = loop {
         if terminal.ending().is_some() {

@@ -297,6 +297,10 @@ fn sys_a_password_typed_ahead_of_the_prompt_does_not_count() {
 fn typed_while_held(machine: &mut Machine, arguments: &[&str]) -> Session {
     let hold = machine.home.join("hold");
     std::fs::create_dir_all(&hold).unwrap();
+    // What an earlier hold left: held already, and let go.
+    for left in ["held", "go"] {
+        let _ = std::fs::remove_file(hold.join(left));
+    }
     machine.hold_the_core(&hold);
     let mut session = machine.tui(arguments);
     let deadline = std::time::Instant::now() + LIMIT;

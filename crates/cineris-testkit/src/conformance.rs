@@ -937,8 +937,18 @@ pub fn run(
                 Some((kind, None))
             }
             Inbound::Request(id, request) => {
-                kept.push(json!({"request": request.method(),
-                    "params": request.params().unwrap_or(Value::Null)}));
+                let mut params = request.params().unwrap_or(Value::Null);
+                // A project's key is a hash of where its workspace is, which
+                // differs between carriers as the folder does: what a yes
+                // would write names it (since the signed approvals step).
+                if let Some(key) = params
+                    .get_mut("proposal")
+                    .and_then(|proposal| proposal.get_mut("key"))
+                    .filter(|key| key.is_string())
+                {
+                    *key = Value::String("<project key>".to_owned());
+                }
+                kept.push(json!({"request": request.method(), "params": params}));
                 Some((String::new(), Some((id, request))))
             }
         }

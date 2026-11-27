@@ -761,8 +761,9 @@ fn sys_a_never_survives_a_restart_and_permissions_trust_clears_it() {
     // has approvals to use, and asks for it before it opens.
     let trusted = machine.signing(&["permissions", "trust"], &[], super::approvals::PASSWORD);
     trusted.expect_code(0);
+    // As written, the line unwrapped.
     assert!(
-        trusted.screen.contains("which you had said never to trust"),
+        trusted.raw.contains("which you had said never to trust"),
         "{}",
         trusted.screen
     );
