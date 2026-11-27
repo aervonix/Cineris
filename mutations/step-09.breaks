@@ -53,8 +53,8 @@ caught-by:
 rule: In a section whose keys are not declared yet, a value under a key that names a secret (env, headers, token, api_key) is redacted whole.
 file: crates/cineris-config/src/schema/redact.rs
 in: redact_reserved
-find: key.parts().iter().any(|part| names_a_secret(part))
-replace: false
+find: if guessed_secret(key) {
+replace: if false {
 caught-by:
     schema::redact::tests::in_a_reserved_section_a_secret_is_known_by_its_name
     printing::no_debug_or_display_form_holds_a_key

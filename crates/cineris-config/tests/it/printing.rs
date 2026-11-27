@@ -54,12 +54,15 @@ fn no_debug_or_display_form_holds_a_key() {
             LayerKind::User,
             &format!("{}{}", header("azure"), elsewhere()),
         )
+        .layer(LayerKind::Project, &header("gateway"))
+        // The person's own key in the project's local file, never
+        // committed. (The shared project file's values are shown whole to
+        // the trust question, but what the formats know, since the review of
+        // the step 25 fixes: `imports::the_trust_question_shows_a_projects_`
+        // `command_lines_whole`.)
         .layer(
-            LayerKind::Project,
-            &format!(
-                "{}[mcp.servers.theirs.env]\nTHEIR_TOKEN = \"{KEY}\"\n",
-                header("gateway")
-            ),
+            LayerKind::ProjectLocal,
+            &format!("[mcp.servers.theirs.env]\nTHEIR_TOKEN = \"{KEY}\"\n"),
         );
     let env = machine.env().clone();
     let loaded = machine.load();
