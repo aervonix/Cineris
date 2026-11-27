@@ -10267,7 +10267,7 @@ caught-by:
 [break] session-line-passes-a-harness
 rule: A line of parents that reaches a process of Cineris that runs sessions is under a session's command.
 file: crates/cineris-sandbox/src/session.rs
-in: line
+in: walk
 find: Seen::Of { harness: true, .. } => {
 replace: Seen::Of { harness: true, .. } if false => {
 packages: cineris-sandbox,cineris-cli
@@ -10278,7 +10278,7 @@ caught-by:
 [break] session-unread-line-is-nothing
 rule: A line of parents that cannot be read is taken as under a session's command.
 file: crates/cineris-sandbox/src/session.rs
-in: line
+in: walk
 find: return Under::Unknown(format!("process {at} of its line could not be read"));
 replace: return Under::Nothing;
 caught-by:

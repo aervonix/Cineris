@@ -235,7 +235,11 @@ fn through(test: &str, interpreters: usize) -> (Option<i32>, String) {
 /// (`cmd /c` nested 64 times between WMI's host and the subcommand, or a
 /// batch file that calls itself), more than the walk reads, it is not
 /// known, which refuses: before the review of step 28 (finding 2) the walk
-/// ended at its bound and said nothing.
+/// ended at its bound and said nothing. Both of the Windows check's walks
+/// meet their bound here (the line of parents, through any program, has the
+/// 64 interpreters and the host above them), so this holds the two fixes
+/// together; the service's walk alone is held by
+/// `session::tests::a_services_start_through_more_interpreters_than_the_bound_is_not_known`.
 #[test]
 fn sys_a_services_start_through_more_interpreters_than_the_bound_is_refused() {
     let test = "sys_a_services_start_through_more_interpreters_than_the_bound_is_refused";

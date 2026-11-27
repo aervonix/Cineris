@@ -27,8 +27,10 @@
 //!   through it. **It does not see** a command that detached itself from
 //!   the line (its parent exited, and it was handed to the system's first
 //!   process or a subreaper), **nor one in a namespace of processes of its
-//!   own** (`unshare -Urpf`, `bwrap --unshare-user --unshare-pid`, where
-//!   unprivileged user namespaces are open): its parent reads as 0 at the
+//!   own,** by any way it has to get one (`unshare -Urpf` where
+//!   unprivileged user namespaces are open, `bwrap --unshare-user
+//!   --unshare-pid`, a set-user-id `firejail`, the `docker` group, rootless
+//!   podman): its parent reads as 0 at the
 //!   namespace's edge, whoever reaps it, so a subreaper does not close this.
 //!   The maintainers settled that it is stated and not built against (the
 //!   review of step 28, finding 8): a rule on a namespace would refuse every
@@ -200,6 +202,50 @@ pub fn under_a_session_of(pid: u32) -> Under {
 #[must_use]
 pub fn moved_stores() -> Option<String> {
     sys::moved_stores()
+}
+
+/// The first of `names` that this process's environment holds more than
+/// once (with `fold_case`, as Windows reads a name, in any case), said as a
+/// variable that moves the stores: where a name is given twice, the
+/// system's lookup (`getenv`, `GetEnvironmentVariableW`) takes one entry and
+/// Cineris's configuration (`cineris_config::Env`, a map of every entry) may
+/// take another, so what is compared would not be what is read (the early
+/// review of step 28's fixes). A person's own environment does not hold a
+/// name twice.
+fn set_more_than_once(names: &[&str], fold_case: bool) -> Option<String> {
+    given_twice(
+        names,
+        fold_case,
+        std::env::vars_os().map(|(name, _)| name.to_string_lossy().into_owned()),
+    )
+}
+
+/// The first of `names` that `present`, the names of an environment's
+/// entries in its order, holds more than once ([`set_more_than_once`]).
+fn given_twice(
+    names: &[&str],
+    fold_case: bool,
+    present: impl IntoIterator<Item = String>,
+) -> Option<String> {
+    let fold = |name: &str| {
+        if fold_case {
+            name.to_ascii_uppercase()
+        } else {
+            name.to_owned()
+        }
+    };
+    let mut counts = vec![0_usize; names.len()];
+    for name in present {
+        let name = fold(&name);
+        if let Some(at) = names.iter().position(|wanted| fold(wanted) == name) {
+            counts[at] += 1;
+        }
+    }
+    names
+        .iter()
+        .zip(counts)
+        .find(|(_, count)| *count > 1)
+        .map(|(name, _)| format!("{name}, given more than once in its environment,"))
 }
 
 /// The first words of Cineris's subcommands that run no session: a
@@ -431,20 +477,37 @@ mod sys {
         }
     }
 
-    /// The process of the line that runs sessions, read as [`line`] reads
-    /// it: to process 0, process 1 included (the review of step 28, finding
-    /// 7: a harness that is a container's first process).
-    fn harness() -> Option<u32> {
+    /// Every process of the line that runs sessions, nearest first, read as
+    /// [`line`] reads it: to process 0, process 1 included (the review of
+    /// step 28, finding 7: a harness that is a container's first process).
+    /// **Every one, and not the nearest alone** (the early review of that
+    /// part's fixes): a process is a harness by its name and its file's, so
+    /// a copy of a shell named `cineris`, run with a moved `HOME`, would be
+    /// the nearest, and the stores compared with its own. `None` where the
+    /// line cannot be read to its end (a process of it that cannot be read,
+    /// or no end within the bound): what the session's stores are is then
+    /// not known. A parent `/proc` does not show ends it, as it ends the
+    /// line.
+    fn harnesses_on_the_line() -> Option<Vec<u32>> {
         let own = Own::read();
+        let mut found = Vec::new();
         let mut at = std::os::unix::process::parent_id();
         for _ in 0..4096 {
             if at == 0 {
-                return None;
+                return Some(found);
             }
             match seen(&own, at) {
-                Seen::Of { harness: true, .. } => return Some(at),
-                Seen::Of { parent, .. } if parent != at => at = parent,
-                _ => return None,
+                Seen::Of { parent, harness } => {
+                    if harness {
+                        found.push(at);
+                    }
+                    if parent == at {
+                        return Some(found);
+                    }
+                    at = parent;
+                }
+                Seen::Unseen => return Some(found),
+                Seen::Failed => return None,
             }
         }
         None
@@ -459,33 +522,42 @@ mod sys {
             "CINERIS_CONFIG",
             "CINERIS_DATA_DIR",
         ];
+        if let Some(twice) = super::set_more_than_once(&names, false) {
+            return Some(twice);
+        }
         // Asked only under a session's command, or where that could not be
         // told: with no harness found on the line (one of it could not be
         // read), what the session's stores are is not known either, and
         // nothing is compared with them (the review of step 28: this took
         // only the `CINERIS_` variables, so a line made unreadable on
         // purpose let a nested run read stores moved by `XDG_STATE_HOME`).
-        let Some(pid) = harness() else {
+        let found = harnesses_on_the_line().unwrap_or_default();
+        if found.is_empty() {
             return Some("the session's own environment, whose process was not found,".to_owned());
-        };
-        let Ok(environ) = std::fs::read(format!("/proc/{pid}/environ")) else {
-            return Some("the session's own environment, which could not be read,".to_owned());
-        };
-        let theirs = |wanted: &str| {
-            environ.split(|byte| *byte == 0).find_map(|entry| {
-                let text = String::from_utf8_lossy(entry);
-                text.split_once('=')
-                    .filter(|(name, _)| *name == wanted)
-                    .map(|(_, value)| value.to_owned())
-            })
-        };
-        names
-            .iter()
-            .find(|name| {
+        }
+        for pid in found {
+            let Ok(environ) = std::fs::read(format!("/proc/{pid}/environ")) else {
+                return Some("the session's own environment, which could not be read,".to_owned());
+            };
+            // The last entry of a name, as Cineris reads its own
+            // environment (`cineris_config::Env`, whose map keeps the last).
+            let theirs = |wanted: &str| {
+                environ.split(|byte| *byte == 0).rev().find_map(|entry| {
+                    let text = String::from_utf8_lossy(entry);
+                    text.split_once('=')
+                        .filter(|(name, _)| *name == wanted)
+                        .map(|(_, value)| value.to_owned())
+                })
+            };
+            let moved = names.iter().find(|name| {
                 let mine = std::env::var_os(name).map(|value| value.to_string_lossy().into_owned());
                 mine != theirs(name)
-            })
-            .map(|name| (*name).to_owned())
+            });
+            if let Some(name) = moved {
+                return Some((*name).to_owned());
+            }
+        }
+        None
     }
 
     /// The names a process of Cineris has in `/proc/<pid>/stat`: its own
@@ -1260,6 +1332,13 @@ fn started_by_a_service(
     // first of them is not known, and so not that it was no service (the
     // review of step 28, finding 2: a start through 64 `cmd /c` said
     // nothing, where Linux's walk refuses past its own bound).
+    // What a service started above is older still than `at`: made before
+    // every harness that runs, or with none running, it counts for nothing,
+    // as a start within the bound would not.
+    let older = began.is_none_or(|earliest| made <= earliest);
+    if older {
+        return Under::Nothing;
+    }
     let past = format!(
         "its line of parents goes on through more than {LINE_OF_PARENTS} command interpreters \
          and runtimes, past which what started it is not read"
@@ -1350,6 +1429,11 @@ mod sys {
     }
 
     pub(super) fn moved_stores() -> Option<String> {
+        let mut names = STORES.to_vec();
+        names.push(SAID);
+        if let Some(twice) = super::set_more_than_once(&names, true) {
+            return Some(twice);
+        }
         let Some(said) = std::env::var_os(SAID) else {
             return Some("its stores, which the session did not say,".to_owned());
         };
@@ -2727,6 +2811,36 @@ mod tests {
         assert_eq!(line(7, &read), Under::Nothing, "pid 1 hidden, further up");
     }
 
+    /// A variable that moves the stores, given twice in an environment, is
+    /// said, as Windows reads a name (in any case) or as Linux does (by its
+    /// bytes): the system's lookup and Cineris's configuration could take
+    /// different entries of it (the early review of step 28's fixes).
+    #[test]
+    fn a_store_variable_given_twice_is_said() {
+        let present = |names: &[&str]| -> Vec<String> {
+            names.iter().map(|name| (*name).to_owned()).collect()
+        };
+        let stores = ["HOME", "AppData"];
+        assert_eq!(
+            given_twice(&stores, false, present(&["HOME", "PATH"])),
+            None
+        );
+        assert!(
+            given_twice(&stores, false, present(&["HOME", "PATH", "HOME"]))
+                .is_some_and(|said| said.starts_with("HOME, given more than once")),
+        );
+        assert_eq!(
+            given_twice(&stores, false, present(&["AppData", "APPDATA"])),
+            None,
+            "two names to Linux"
+        );
+        assert!(
+            given_twice(&stores, true, present(&["AppData", "APPDATA"]))
+                .is_some_and(|said| said.starts_with("AppData, given more than once")),
+            "one name to Windows"
+        );
+    }
+
     /// Another process's line, as the RPC socket reads a peer's: the same
     /// rules, but a first parent `/proc` does not show ends it elsewhere (a
     /// client's launcher may exit as it connects), where this process's
@@ -3033,6 +3147,17 @@ mod tests {
             4 | 9000 => Opened::Closed,
             _ => Opened::Made(u64::from(10_000 - pid)),
         };
+        // Past the bound, a start older than every harness that runs, or
+        // with none running, counts for nothing, as one within it.
+        let processes = chain(70);
+        assert_eq!(
+            started_by_a_service(&processes, 1000, opened, || Some(0), None),
+            Under::Nothing
+        );
+        assert_eq!(
+            started_by_a_service(&processes, 1000, opened, || Some(0), Some(u64::MAX)),
+            Under::Nothing
+        );
         let bound = u32::try_from(LINE_OF_PARENTS).unwrap();
         for (count, seen) in [
             (3, true),

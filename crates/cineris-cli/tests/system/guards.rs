@@ -397,3 +397,41 @@ fn sys_a_nested_run_whose_line_cannot_be_read_is_refused_with_its_stores_moved()
         shown(&run)
     );
 }
+
+/// A nested headless run's stores are compared with every harness of its
+/// line, and not with the nearest alone: a copy of a shell named `cineris`
+/// (a harness by its name and its file's), run with a moved `HOME`, between
+/// the session and the nested run, does not make the moved `HOME` the
+/// session's (the early review of step 28's fixes: the run was compared
+/// with the copy, passed, and read the stores the moved `HOME` named).
+#[cfg(target_os = "linux")]
+#[test]
+fn sys_a_shell_named_cineris_on_the_line_does_not_pass_moved_stores() {
+    let machine = Machine::with_config(
+        "sys_a_shell_named_cineris_on_the_line_does_not_pass_moved_stores",
+        "[permissions]\nmode = \"unrestricted\"\n",
+    );
+    let binary = Path::new(crate::CINERIS).display().to_string();
+    let moved = machine.workspace.join("moved");
+    let script = format!(
+        "mkdir -p fake\ncp /bin/sh fake/cineris\nHOME='{moved}' ./fake/cineris -c \"HOME='{moved}' \
+         ANTHROPIC_API_KEY='{}' '{binary}' -p hi > fake.out 2> fake.err; true\"\n",
+        crate::KEY,
+        moved = moved.display()
+    );
+    std::fs::write(machine.workspace.join("fake.sh"), script).unwrap();
+    machine.reply_tool(
+        "toolu_1",
+        "shell",
+        &serde_json::json!({"command": "sh fake.sh", "timeout_ms": 60_000}),
+    );
+    // The outer run's: the nested run is refused before it asks.
+    machine.reply_text("Done.");
+    let run = machine.run(&["-p", "go", "--output", "json"]);
+    let said = std::fs::read_to_string(machine.workspace.join("fake.err")).unwrap_or_default();
+    assert!(
+        said.contains("HOME is set otherwise") && said.contains("was refused"),
+        "{said}\n{}",
+        shown(&run)
+    );
+}

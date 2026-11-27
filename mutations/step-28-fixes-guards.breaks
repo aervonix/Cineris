@@ -20,16 +20,16 @@ caught-by:
 [break] project-add-not-under-a-session
 rule: `cineris project add` refuses under a session's command before anything is read.
 file: crates/cineris-cli/src/commands.rs
-find: ProjectCommand::Add { .. } => crate::not_under_a_session(name, "project add")?,
-replace: ProjectCommand::Add { .. } => {}
+find: crate::not_under_a_session(name, "project add")?
+replace: {}
 caught-by:
     cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
 
 [break] auth-login-not-under-a-session
 rule: `cineris auth login` refuses under a session's command before anything is read.
 file: crates/cineris-cli/src/commands.rs
-find: AuthCommand::Login { .. } => crate::not_under_a_session(name, "auth login")?,
-replace: AuthCommand::Login { .. } => {}
+find: crate::not_under_a_session(name, "auth login")?
+replace: {}
 caught-by:
     cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
 
@@ -73,8 +73,9 @@ caught-by:
 [break] stores-harness-stops-before-process-1
 rule: On Linux the session's process whose environment a nested run's stores are compared with is found when it is process 1.
 file: crates/cineris-sandbox/src/session.rs
-find: Seen::Of { parent, .. } if parent != at => at = parent,
-replace: Seen::Of { parent, .. } if parent > 1 && parent != at => at = parent,
+in: harnesses_on_the_line
+find: if at == 0 {
+replace: if at <= 1 {
 packages: cineris-cli
 caught-by:
     cineris-cli::system guards::sys_a_harness_that_is_process_1_is_seen
@@ -140,8 +141,8 @@ caught-by:
 [break] b-stores-no-programdata
 rule: On Windows a nested run with `ProgramData` set otherwise than for its session is refused.
 file: crates/cineris-sandbox/src/session.rs
-find: "ProgramData",
-replace:
+in-string: ProgramData
+replace: NOT_A_STORE
 os: windows
 packages: cineris-cli
 caught-by:
@@ -150,8 +151,8 @@ caught-by:
 [break] b-stores-no-xdg-state-home
 rule: On Linux a nested run with `XDG_STATE_HOME` (the folder of `pins.toml` and `trust.toml`) set otherwise than for its session is refused.
 file: crates/cineris-sandbox/src/session.rs
-find: "XDG_STATE_HOME",
-replace:
+in-string: XDG_STATE_HOME
+replace: NOT_A_STORE
 packages: cineris-cli
 caught-by:
     cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
@@ -159,9 +160,38 @@ caught-by:
 [break] b-stores-no-localappdata
 rule: On Windows a nested run with `LOCALAPPDATA` set otherwise than for its session is refused.
 file: crates/cineris-sandbox/src/session.rs
-find: "LOCALAPPDATA",
-replace:
+in-string: LOCALAPPDATA
+replace: NOT_A_STORE
 os: windows
 packages: cineris-cli
 caught-by:
     cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
+
+[break] stores-compared-with-the-nearest-harness-alone
+rule: On Linux a nested run's stores are compared with every harness of its line, so a shell named as Cineris between the session and the run cannot pass its moved stores.
+file: crates/cineris-sandbox/src/session.rs
+find: for pid in found {
+replace: for pid in found.into_iter().take(1) {
+packages: cineris-cli
+caught-by:
+    cineris-cli::system guards::sys_a_shell_named_cineris_on_the_line_does_not_pass_moved_stores
+
+[break] a-store-variable-given-twice-passes
+rule: A variable that moves the stores, given more than once in a nested run's environment (in any case, on Windows), refuses it.
+file: crates/cineris-sandbox/src/session.rs
+in: given_twice
+find: .find(|(_, count)| *count > 1)
+replace: .find(|(_, count)| *count > 9)
+packages: cineris-sandbox
+caught-by:
+    cineris-sandbox session::tests::a_store_variable_given_twice_is_said
+
+[break] service-walk-past-its-bound-ignores-when-harnesses-began
+rule: On Windows a start past the service walk's bound counts for nothing when it is older than every running harness, or when none runs, as a start within the bound.
+file: crates/cineris-sandbox/src/session.rs
+in: started_by_a_service
+find: let older = began.is_none_or(|earliest| made <= earliest);
+replace: let older = false;
+packages: cineris-sandbox
+caught-by:
+    cineris-sandbox session::tests::a_services_start_through_more_interpreters_than_the_bound_is_not_known
