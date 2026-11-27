@@ -1,0 +1,32 @@
+# The fixes to step 28, from its independent review: variation selectors
+# kept out of the system prompt.
+
+[break] one-line-keeps-selectors
+rule: `one_line` keeps no variation selector, neither a run after a character, which can carry any bytes unseen into section 6 (a skill's name and description, a source's description), nor one after each character, a byte each.
+file: crates/cineris-base/src/visible.rs
+in: one_line
+find: !acts_unseen(character) && !is_selector(character)
+replace: !acts_unseen(character)
+packages: cineris-base, cineris-ext
+caught-by:
+    cineris-base visible::tests::one_line_keeps_no_variation_selector
+    cineris-ext skills::tests::no_variation_selector_of_a_skill_reaches_the_index
+
+[break] plain-keeps-selectors
+rule: Section 6's skills part and every section 7 text keep no variation selector.
+file: crates/cineris-agent/src/context/prompt.rs
+in: plain
+find: acts_unseen(unseen) || is_selector(unseen)
+replace: acts_unseen(unseen)
+packages: cineris-agent
+caught-by:
+    cineris-agent context::prompt::tests::no_variation_selector_reaches_the_index_or_a_text
+    cineris-agent::it extensions::no_variation_selector_reaches_the_prompt
+
+[break] a-skills-path-keeps-its-selector
+rule: A skill's path is written for the model with every variation selector as an escape, so that the system prompt, which keeps none, still names the file.
+file: crates/cineris-ext/src/skills.rs
+find: visible_to_the_model(&name.to_string_lossy())
+replace: visible(&name.to_string_lossy())
+caught-by:
+    cineris-ext skills::tests::a_skills_path_holds_its_selector_as_an_escape

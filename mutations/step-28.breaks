@@ -4990,7 +4990,7 @@ caught-by:
 rule: An extension's text keeps its line breaks and tabs, and nothing else that acts unseen.
 file: crates/cineris-agent/src/context/prompt.rs
 in: plain
-find: unseen if acts_unseen(unseen) => {}
+find: unseen if acts_unseen(unseen) || is_selector(unseen) => {}
 replace: '\u{0}' => {}
 caught-by:
     cineris-agent context::prompt::tests::what_acts_unseen_is_taken_out_of_a_description_and_a_text
@@ -5781,8 +5781,8 @@ caught-by:
 rule: Control characters and format characters (the bidirectional controls, the zero-width characters, U+FEFF) are taken out of a name and a description.
 file: crates/cineris-base/src/visible.rs
 in: one_line
-find: } else if !acts_unseen(character) {
-replace: } else {
+find: } else if !acts_unseen(character) && !is_selector(character) {
+replace: } else if !is_selector(character) {
 packages: cineris-base,cineris-ext,cineris-agent
 caught-by:
     cineris-base visible::tests::one_line_takes_out_what_acts_unseen_and_cuts_at_an_edge
