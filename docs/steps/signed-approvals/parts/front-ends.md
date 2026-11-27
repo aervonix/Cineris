@@ -52,7 +52,13 @@ The breaks: [mutations/signed-approvals-front-ends.breaks](../../../../mutations
 
 ## What ran
 
-On the reference machine, its disk stalling for much of each run: see the end of this record.
+On the reference machine, its disk stalling for much of each run (up to 98% of a run's time waiting on I/O):
+
+- `cargo xtask clippy` of `cineris-core`, `cineris-policy`, `cineris-tui`, `cineris-cli`, `cineris-rpc`, `cineris-testkit` and `cineris-term`, with the features the workspace's build turns on: clean. `cargo xwin clippy --target x86_64-pc-windows-msvc --workspace --all-targets --locked -- -D warnings`: clean.
+- `cargo xtask test -p cineris-tui`: 840 passed. `-p cineris-policy`: 274 passed. `-p cineris-rpc`: 52, the conformance test among them, passed. `cineris-core`'s `signed::` tests (the new one among them) and `cineris-term`'s `exclusive` test: passed.
+- `cargo xtask test -p cineris-cli`: every test passed but `commands::sys_ext_add_disable_and_remove_act_only_on_what_is_shown`, which fails on the core's `extension_gates` ("Left open"); the tests that failed on the branch before this part (`ext add`, `ext remove`, `permissions trust`, the examples, `runs::sys_exit_6…`, the signals test of an extension's command, `serve`'s conformance, the three trust dialogs) pass.
+- `cargo xtask check`: formatting, rules, generated files, clippy, the build without the script engine and the licences passed; the break lists, which this part's changes had moved code under, are pointed at the code again and checked with `cargo xtask mutate --check`.
+- Not run: CI, Windows among it (the Windows variant of the signals test, and every pty test there); `stress` and `mutate` (no long run on the shared machine).
 
 ## Left open
 
