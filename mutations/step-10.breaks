@@ -50,8 +50,8 @@ caught-by:
 rule: The checkpoint is handed the bytes the tool read, so that the change can be undone.
 file: crates/cineris-tools/src/change.rs
 in: Target::commit
-find: Found::File(existing) => Some(existing.bytes.as_slice())
-replace: Found::File(_) => None
+find: Found::File(existing) => (Some(existing.bytes.as_slice()), existing.mode)
+replace: Found::File(existing) => (None, existing.mode)
 caught-by:
     change::tests::a_change_that_goes_through_is_recorded_as_what_the_file_now_is
 

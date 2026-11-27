@@ -39,14 +39,19 @@ A file a rewind or an undo made again lost its mode. A tracked `run.sh` (`0755`)
 
 - **It is written only where it is known.** A version whose mode is not known (a protected path a command changed, whose look before keeps none; a file's `after`) is written as it was before the field, byte for byte: `cineris-session` `entry::tests::a_versions_mode_is_written_only_when_known_and_never_loses_the_version` checks the line, and `put_back::unix::a_version_from_a_log_written_before_modes_is_made_again_as_before` writes such a checkpoint, reads the session back from disk and puts the file back with the default mode, as before.
 - **A value this build cannot read is no mode**, never a reason to lose the version (`mode_text::read`): a number, a word, `null`, an object, an array or too many digits all read as a version without a mode. A `before` that failed to read as a version would have become `"unknown"`, a file never put back, which is why the field has a reader of its own.
-- **An older build reads a newer log.** `FileVersion` refuses no field it does not know, and `Before`'s reader reads a version object through it, so a build from before the field reads `{"hash", "bytes", "mode"}` as the version it always was, and puts the file back with the default mode; the same test reads a version with fields this build does not know. A fork copies a line as it is, so the field goes with it. The log's version is unchanged.
+- **An older build reads a newer log.** `FileVersion` refuses no field it does not know, and `Before`'s reader reads a version object through it, so a build from before the field reads `{"hash", "bytes", "mode"}` as the version it always was, and puts the file back with the default mode. **Shown on `main`'s code** (`69090915`, before this change) by a throwaway test run with `cargo xtask scratch-test cineris-session`, not kept, since it is a test of the old code: it wrote a checkpoint, edited its line on the disk into the form this build writes (`{"bytes":10,"mode":"755","hash":…}`), resumed the session, planned the undo and put the file back; it passed, the version read whole and the line left as it was. A fork copies a line as it is, so the field goes with it. The log's version is unchanged.
 - **Nothing in `cineris-protocol` changed:** a rewind's plan names what a file goes back to, not its mode, and the plan's mark hashes the content alone. The golden transcript and the recorded fixtures are not touched.
 
 07's `checkpoint` row says so.
 
 ## The tests
 
-Each fails without the fix: the two of the review failed on `main` as the review recorded (`run.sh` put back at `0644`, `private.txt` at `0644`), and the breaks below put back what `main` did, one piece at a time.
+**On `main`'s code** (`69090915`), the three core tests, which use nothing this change added, were run as they are with `cargo xtask scratch-test cineris-core`, and each failed as the review found:
+
+- `a_private_file_put_back_after_it_was_removed_is_private_again`: "the private file was put back with mode 644: other users can read it" (`420` against `384`);
+- `sys_an_undo_puts_back_a_removed_script_with_its_execute_bit` and `…_in_a_workspace_below_its_repository`: "…/bin/run.sh was put back with mode 644: it is no longer executable" (`420` against `493`).
+
+The other tests use the new API, and the breaks below show that each fails without its piece of the fix.
 
 | Test | What it shows |
 |---|---|
@@ -69,7 +74,25 @@ Each fails without the fix: the two of the review failed on `main` as the review
 
 `mutations/step-25-fixes-put-back.breaks`:
 
-VERDICTS
+Run with `cargo xtask mutate step-25-fixes-put-back --jobs 2`: 13 breaks, 13 caught, 0 flagged.
+
+| Break | What it puts back of `main` | Caught by |
+|---|---|---|
+| `a-put-back-made-with-the-default-mode` | The put-back passes no mode (both of the review's scenarios) | the three core tests, and the session's `a_removed_file_is_made_again_with_the_mode_it_had` and `a_file_put_back_over_one_still_there_is_never_left_wider` |
+| `a-new-file-ignores-the-mode-it-is-given` | A file made again gets `0o666` | `cineris-base::it atomic::unix::a_file_put_back_is_created_with_the_mode_it_had`, the session's `a_removed_file_…` |
+| `a-file-written-over-keeps-a-wider-mode` | A file still there keeps whatever mode it has | base's and the session's `a_file_put_back_over_one_still_there_is_never_left_wider` |
+| `a-file-written-over-takes-the-kept-mode-whole` | A file still there is opened up to the kept mode | the same two |
+| `a-set-id-bit-read-from-a-log` | A set-id bit is kept and put back | `cineris-base mode::tests::only_the_nine_permission_bits_are_held`, base's `a_file_put_back_is_created_…`, the session's entry test and `a_removed_file_…` |
+| `the-store-keeps-no-mode` | `put_file` records no mode | the session's `a_removed_file_…` and `a_file_put_back_over_…` |
+| `the-editing-tools-hand-over-no-mode` | The tools hand over no mode (the second scenario) | `cineris-core::it put_back::a_private_file_put_back_after_it_was_removed_is_private_again` |
+| `the-core-drops-the-tools-mode` | The core drops it (the second scenario) | the same |
+| `a-commands-change-keeps-no-mode-from-git` | A command's change has no mode (the first scenario) | both core `sys_an_undo_puts_back_a_removed_script_…` tests |
+| `git-modes-asked-from-the-top-of-the-repository` | Git asked with `--full-name`, which names paths from the repository's top | `…_in_a_workspace_below_its_repository` |
+| `a-links-mode-taken-from-git` | A link's or a submodule's entry gives a mode | `cineris-core checkpoints::tests::git_modes_are_read_for_regular_files_alone` |
+| `a-mode-that-cannot-be-read-loses-the-version` | An unreadable `mode` makes the version `"unknown"` | `cineris-session entry::tests::a_versions_mode_is_written_only_when_known_and_never_loses_the_version` |
+| `no-mode-written-as-null` | `"mode": null` written where none is known | the same, and `put_back::unix::a_version_from_a_log_written_before_modes_is_made_again_as_before` |
+
+`step-10/checkpoint-given-no-bytes` (`mutations/step-10.breaks`) no longer applied, since the tools now hand over the bytes and the mode as a pair. Its `find` was updated to the code as it is now, and it is still caught by 5 tests (`cineris-tools change::tests::a_change_that_goes_through_is_recorded_as_what_the_file_now_is` among them).
 
 ## Twins: other files made again without their mode
 
@@ -100,4 +123,9 @@ All additive except one signature:
 
 - The protected path's mode in an undo's checkpoint (above), for step 32.
 - [the-editing-tools-write-a-private-file-open-on-windows](../../../outstanding/the-editing-tools-write-a-private-file-open-on-windows.md), for step 32.
-- The Windows tests above run only on a Windows runner.
+- The Windows tests above run only on a Windows runner. `cargo xwin clippy` for Windows passes on them.
+
+## Measured
+
+- **Stress:** with `cargo xtask stress --count 100`, cineris-session's 123 tests and cineris-core's 27 put-back and checkpoint tests all passed every time, seeds 0 to 99.
+- **Cost:** `put_file` asks the handle it already holds for its mode (one `fstat` on Linux, and one `GetSecurityInfo` on Windows). A command's change read from git costs one more `git ls-tree` for up to 256 restorable paths. Neither was timed on its own.

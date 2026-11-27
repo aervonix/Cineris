@@ -12,7 +12,7 @@ use std::fs;
 
 use cineris_base::ContentHash;
 use cineris_protocol::ids::TurnId;
-use cineris_session::entry::{Before, Body, Checkpoint, FileChange, FileVersion};
+use cineris_session::entry::FileVersion;
 use cineris_session::{Restore, RoundCheckpoint, Session};
 
 use crate::{World, user};
@@ -84,6 +84,8 @@ fn log_of(session: &Session) -> String {
 mod unix {
     use std::os::unix::fs::{PermissionsExt, symlink};
     use std::path::Path;
+
+    use cineris_session::entry::{Before, Body, Checkpoint, FileChange};
 
     use super::*;
 
