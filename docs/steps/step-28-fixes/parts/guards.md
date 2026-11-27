@@ -77,4 +77,7 @@ A plain terminal; SSH (`sshd` another user's, shown or hidden); `sudo`; tmux and
 
 ## Verdicts and runs
 
-To be filled.
+- **The breaks:** every one of the 20 in `mutations/step-28-fixes-guards.breaks` was caught. The 17 that are not Windows's alone, on Linux (`cargo xtask mutate step-28-fixes-guards --jobs 2`, at `3c36f68b`). On a hosted Windows runner (`try` 45950165410, at `3c36f68b`): `pipe-ignores-the-peer-check`, `b-stores-no-programdata` and `b-stores-no-localappdata` (the three `os: windows` breaks), and `serve-passes-no-peer-check` and `project-add-not-under-a-session` again there.
+- **Windows tests:** `try` 45947478156 (at `75f368f2`) and 45950158764 (at `3c36f68b`), the session, socket, pipe, nested and guards tests of `cineris-sandbox`, `cineris-rpc` and `cineris-cli`: all passed.
+- **Linux tests:** locally, the same tests passed. On a hosted `ubuntu-latest` runner (`try` 45950161915) `guards::sys_a_harness_that_is_process_1_is_seen` failed, at its own check that the runner allows user namespaces: Ubuntu 24.04 refuses them through AppArmor. It now says it was not run there, and must run on CI anywhere else; it ran on `linux-22.04` (`try` 45951626783, at `ec189478`), and on `ubuntu-latest` said it was not run (`try` 45951630207); both runs passed the rest.
+- **What each test showed before its fix:** the review's runs, named under each finding, and the breaks above, each of which puts back the code before the fix (or its twin) and was caught.
