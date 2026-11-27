@@ -53,15 +53,6 @@ replace: let description = if false {
 caught-by:
     cineris-tools::it registry::a_held_tool_shows_only_its_name_and_why_it_waits
 
-[break] a-held-tools-arguments-are-held-to-its-schema
-rule: `tool_call` does not check a held tool's arguments against a schema the model was not shown, nor quote it.
-file: crates/cineris-tools/src/registry.rs
-in: ToolCall::plan
-find: if hold.is_none() {
-replace: if true {
-caught-by:
-    cineris-tools::it registry::a_held_tool_shows_only_its_name_and_why_it_waits
-
 [break] a-searchs-schema-strings-are-not-cut
 rule: A search shows every string of a tool's schema cut at 2 KiB.
 file: crates/cineris-tools/src/registry.rs
@@ -83,9 +74,9 @@ caught-by:
 [break] a-schema-string-is-cut-past-its-cap
 rule: A shown schema's string is cut at 2 KiB, not later.
 file: crates/cineris-tools/src/registry.rs
-in: has_long_string
-find: Json::String(text) => text.len() > MAX_DESCRIPTION_BYTES
-replace: Json::String(text) => text.len() > 2 * MAX_DESCRIPTION_BYTES
+in: changes_when_shown
+find: text.len() > MAX_DESCRIPTION_BYTES ||
+replace: text.len() > 2 * MAX_DESCRIPTION_BYTES ||
 caught-by:
     cineris-tools::it registry::every_string_of_a_shown_schema_is_cut_at_two_kib
 
