@@ -3491,8 +3491,8 @@ caught-by:
 rule: A trusted project with nothing else new is asked about an extension in it that is new or changed.
 file: crates/cineris-core/src/assemble.rs
 in: look
-find: if quiet && extensions.pins.is_empty() && hooks.pins.is_empty() {
-replace: if quiet && hooks.pins.is_empty() {
+find: quiet && extensions.pins.is_empty() && hooks.pins.is_empty()
+replace: quiet && hooks.pins.is_empty()
 caught-by:
     extensions_found::a_projects_extension_walks_through_its_trust
 
@@ -3731,8 +3731,8 @@ caught-by:
 rule: Keep trusting it, without a changed extension, is kept by the core for its run: it asks no more until the next start.
 file: crates/cineris-core/src/assemble.rs
 in: kept_answer
-find: if !question.extensions.is_empty() || !question.hooks.is_empty() {
-replace: if !question.hooks.is_empty() {
+find: if !question.extensions.is_empty() || !question.hooks.is_empty()
+replace: if !question.hooks.is_empty()
 caught-by:
     extensions_trust::keeping_the_trust_without_a_changed_extension_leaves_it_off_until_the_next_start
 
@@ -4137,10 +4137,10 @@ caught-by:
     extensions_review::a_folder_changed_while_the_question_is_open_is_pinned_as_listed_and_withdrawn
 
 [break] pinned-users-names-listed-for-nothing
-rule: The user's folder is listed for its names only when the project's folder holds an extension: a question with none looks at nothing of the user's.
+rule: The user's folder is listed for its names only when the project's folder holds an extension, or the project has one pinned (which may be listed as removed): a question with neither looks at nothing of the user's.
 file: crates/cineris-core/src/assemble.rs
-find: let extensions = if found.found.is_empty() {
-replace: let extensions = if false {
+find: let users = (!found.found.is_empty() || pinned_extensions).then(
+replace: let users = (true || pinned_extensions).then(
 caught-by:
     extensions_reload::with_no_extension_a_session_looks_once_a_folder_and_reads_nothing
 
@@ -6328,8 +6328,8 @@ caught-by:
 rule: A project's hook runs only as it was approved: a pin of another hash is a change.
 file: crates/cineris-core/src/ext/hooks.rs
 in: in_session
-find: Some(Standing::Approved) => Standing::Approved
-replace: Some(_) => Standing::Approved
+find: || stored.is_some_and(|stored| stored.standing(&definition).is_approved());
+replace: || stored.is_some();
 caught-by:
     ext::hooks::tests::a_projects_hook_runs_only_trusted_and_approved_as_it_is
 
@@ -6659,11 +6659,11 @@ caught-by:
     cineris-core::it hook_wiring::a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back
 
 [break] a-changed-projects-hook-lapses
-rule: A project's hook approved once and changed since is on its event as a hook that fails.
+rule: A project's hook approved once and changed since holds failing gates (since the review of step 28: on both gating events, for every call).
 file: crates/cineris-core/src/ext/hooks.rs
 in: in_session
-find: refused.push(Refused {
-replace: let _ = (Refused {
+find: refused.extend(held_gates(&name, how));
+replace: let _ = held_gates(&name, how);
 caught-by:
     ext::hooks::tests::a_projects_hook_runs_only_trusted_and_approved_as_it_is
 
@@ -6836,8 +6836,8 @@ caught-by:
 rule: A trusted project with nothing else new is asked about a hook in it that is new or changed.
 file: crates/cineris-core/src/assemble.rs
 in: look
-find: if quiet && extensions.pins.is_empty() && hooks.pins.is_empty() {
-replace: if quiet && extensions.pins.is_empty() {
+find: quiet && extensions.pins.is_empty() && hooks.pins.is_empty()
+replace: quiet && extensions.pins.is_empty()
 caught-by:
     cineris-core::it hook_wiring::a_projects_hooks_reach_a_session_only_through_trust
 
@@ -7160,8 +7160,8 @@ caught-by:
 rule: A hook's allow never lifts the policy's question.
 file: crates/cineris-agent/src/round.rs
 in: Planning::hooked
-find: Before::Pass => self.planned(plan, decision),
-replace: Before::Pass => self.planned(plan, Decision::Allow),
+find: Before::Pass => Report::Planned { token: self.token, plan, decision,
+replace: Before::Pass => Report::Planned { token: self.token, plan, decision: Decision::Allow,
 caught-by:
     cineris-agent::it hooks::tool_before_hooks_deny_or_ask_on_top_of_the_policy_and_run_together
 
@@ -7693,8 +7693,8 @@ caught-by:
 rule: An interrupt, or a response thrown away, while a call's `tool.before` hooks are asked stops them at once.
 file: crates/cineris-agent/src/round.rs
 in: Planning::hooked
-find: self.cx.cancel.race(hooks::ask_all(set, matched, input, self.observers)).await
-replace: Some(hooks::ask_all(set, matched, input, self.observers).await)
+find: self.cx.cancel.race(hooks::ask_all(set, matched.clone(), input.clone(), self.observers)).await
+replace: Some(hooks::ask_all(set, matched.clone(), input.clone(), self.observers).await)
 caught-by:
     cineris-agent::it hooks::a_calls_hooks_are_stopped_when_it_is_thrown_away_or_interrupted
 

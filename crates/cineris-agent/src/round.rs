@@ -2056,7 +2056,12 @@ impl Planning {
         let Some(heard) = self
             .cx
             .cancel
-            .race(hooks::ask_all(set, matched.clone(), input.clone(), self.observers))
+            .race(hooks::ask_all(
+                set,
+                matched.clone(),
+                input.clone(),
+                self.observers,
+            ))
             .await
         else {
             return self.interrupted().await;

@@ -862,10 +862,7 @@ fn a_hook_that_waits_for_the_answer_runs_after_the_yes_and_before_the_call() {
     assert_eq!(hook.answered(), [false, true]);
     assert_eq!(p.count("end read env"), 1);
     let lines = p.lines();
-    assert!(
-        lines.iter().any(|line| line == "end read env"),
-        "{lines:?}"
-    );
+    assert!(lines.iter().any(|line| line == "end read env"), "{lines:?}");
     assert_eq!(p.results()[0].outcome, ToolOutcome::Success);
 
     // Its refusal after the yes refuses the call.
@@ -944,7 +941,11 @@ fn a_hook_that_waits_for_the_answer_runs_after_the_yes_and_before_the_call() {
     assert_eq!(p.started("start read"), 0);
     let results = p.results();
     assert_eq!(results[0].outcome, ToolOutcome::Denied);
-    assert!(text(&results[0]).contains("not this one"), "{}", text(&results[0]));
+    assert!(
+        text(&results[0]).contains("not this one"),
+        "{}",
+        text(&results[0])
+    );
 }
 
 #[test]

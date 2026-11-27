@@ -383,7 +383,11 @@ fn a_hook_is_held_back_from_the_files_asked_about_for_what_they_are() {
             (Effect::Read, "/work/app/.env", sensitive_held),
             (Effect::Write, "/work/app/.env", sensitive_held),
             (Effect::Read, "/work/app/deploy/id_rsa", sensitive_held),
-            (Effect::Write, "/work/app/.git/hooks/pre-commit", sensitive_held),
+            (
+                Effect::Write,
+                "/work/app/.git/hooks/pre-commit",
+                sensitive_held,
+            ),
             // Reading a protected path is not held back: only writing it.
             (Effect::Read, "/work/app/.git/config", false),
             // A rule's word holds at every level.

@@ -665,8 +665,7 @@ impl TrustStore {
         self.update(|file| {
             let Some(project) = file.projects.iter_mut().find(|project| project.key == *key) else {
                 return Err(self.not_understood(
-                    "the project is not trusted, so no approval of it can be taken away"
-                        .to_owned(),
+                    "the project is not trusted, so no approval of it can be taken away".to_owned(),
                 ));
             };
             let before = project.pinned.len();
@@ -1254,17 +1253,35 @@ mod tests {
             "{untrusted:?}"
         );
         store
-            .trust(&key, "~/app", &[gate.clone(), lint.clone(), tracker.clone()], false)
+            .trust(
+                &key,
+                "~/app",
+                &[gate.clone(), lint.clone(), tracker.clone()],
+                false,
+            )
             .unwrap();
-        assert_eq!(store.drop_pins(&key, &[gate.clone(), tracker.clone()]).unwrap(), 2);
+        assert_eq!(
+            store
+                .drop_pins(&key, &[gate.clone(), tracker.clone()])
+                .unwrap(),
+            2
+        );
         let now = store.project(&key).unwrap();
         assert_eq!(now.standing(&gate), Standing::New);
         assert_eq!(now.standing(&tracker), Standing::New);
         assert_eq!(now.standing(&lint), Standing::Approved);
         // Approved again at another hash since it was listed: it stays.
         let again = hook("lint", &["lint", "--fix"]);
-        store.approve(&key, std::slice::from_ref(&again), false).unwrap();
-        assert_eq!(store.drop_pins(&key, std::slice::from_ref(&lint)).unwrap(), 0);
-        assert_eq!(store.project(&key).unwrap().standing(&again), Standing::Approved);
+        store
+            .approve(&key, std::slice::from_ref(&again), false)
+            .unwrap();
+        assert_eq!(
+            store.drop_pins(&key, std::slice::from_ref(&lint)).unwrap(),
+            0
+        );
+        assert_eq!(
+            store.project(&key).unwrap().standing(&again),
+            Standing::Approved
+        );
     }
 }

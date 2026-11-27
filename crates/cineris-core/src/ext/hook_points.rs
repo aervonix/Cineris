@@ -190,9 +190,7 @@ fn on_now<'a>(
     target: Option<ToolTarget<'a>>,
 ) -> impl Iterator<Item = &'a OnEvent> {
     on.iter().filter(move |hook| {
-        hook.event == event
-            && (project || !hook.project)
-            && on_target(hook.filter.as_ref(), target)
+        hook.event == event && (project || !hook.project) && on_target(hook.filter.as_ref(), target)
     })
 }
 
@@ -218,9 +216,10 @@ impl Hooks for PointHooks {
     }
 
     fn matching(&self, event: LoopEvent, target: Option<ToolTarget<'_>>) -> Vec<Arc<dyn Hook>> {
-        let mut matched: Vec<Arc<dyn Hook>> = on_now(&self.on, self.project_in_force(), event, target)
-            .map(|hook| Arc::clone(&hook.run))
-            .collect();
+        let mut matched: Vec<Arc<dyn Hook>> =
+            on_now(&self.on, self.project_in_force(), event, target)
+                .map(|hook| Arc::clone(&hook.run))
+                .collect();
         #[cfg(feature = "scripts")]
         matched.extend(self.scripts.matching(event, target));
         if event == LoopEvent::PromptSubmit && self.commands.stop_pending() {

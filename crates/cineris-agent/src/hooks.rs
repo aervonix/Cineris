@@ -1348,7 +1348,8 @@ mod tests {
         ] {
             let said = after_the_answer(vec![allow.clone(), one]);
             assert!(
-                said.as_ref().is_err_and(|why| why.contains(words) && why.contains("`gate`")),
+                said.as_ref()
+                    .is_err_and(|why| why.contains(words) && why.contains("`gate`")),
                 "{case}: {said:?}"
             );
         }

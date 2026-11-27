@@ -659,10 +659,7 @@ impl Core {
             .project(&project.key)
             .map_err(|failure| error(ErrorKind::Internal, "store_failed", failure.to_string()))?;
         let mut removed = Vec::new();
-        if !stored
-            .pinned_of(&TrustResourceKind::Extension)
-            .is_empty()
-        {
+        if !stored.pinned_of(&TrustResourceKind::Extension).is_empty() {
             let options = &self.inner.options;
             let resolver = self.resolver(&project.root)?;
             let (found, _) = crate::ext::found::in_project(&resolver, &options.clock);
@@ -684,7 +681,13 @@ impl Core {
             let loaded = self.load_trusted(project)?;
             let configured = crate::ext::hooks::Configured::of(&loaded);
             let asked = crate::ext::hooks::asked(&configured, &stored, false);
-            removed.extend(asked.resources.into_iter().skip(asked.pins.len()).zip(asked.removed));
+            removed.extend(
+                asked
+                    .resources
+                    .into_iter()
+                    .skip(asked.pins.len())
+                    .zip(asked.removed),
+            );
         }
         Ok(removed
             .into_iter()
