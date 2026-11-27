@@ -218,7 +218,7 @@ fn parse_record(text: &str) -> Result<(u64, Option<String>)> {
 /// A run whose size job failed over the budget kept one too.
 fn main_size(target: &str) -> Result<MainSize> {
     let name = record_name(target);
-    let run = runs::latest_main_run_of("main", "completed", &[name.as_str()])?;
+    let run = runs::latest_main_run_of("main", "completed", &[runs::Wanted::one(&name)])?;
     let directory =
         runs::artifact_dir(run, &name)?.ok_or_else(|| format!("run {run} kept no `{name}`"))?;
     let file = directory.join(format!("{target}.json"));

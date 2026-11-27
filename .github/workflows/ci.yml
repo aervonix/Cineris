@@ -5,9 +5,13 @@
 #
 # What a job runs is defined in the xtask crate, so `cargo xtask ci` runs the
 # same thing locally. The layout, the reasons and the measured times are in
-# docs/testing-and-ci.md. `cargo xtask rules` checks this file: actions pinned
-# by commit hash, a read-only token, and no secret but the owner's protected
-# terms, which the owner guard reads.
+# docs/testing-and-ci.md. On Windows the tests are built in one job and run
+# from its archive in two more, side by side (`build-windows`, then
+# `test-windows-tiers` and `test-windows-system`): built and run in one job,
+# they did not fit its five minutes on a slow runner. `cargo xtask rules`
+# checks this file: actions pinned by commit hash, a read-only token, no
+# secret but the owner's protected terms, which the owner guard reads, and
+# no artifact downloaded from another run.
 name: ci
 
 on:
@@ -37,7 +41,7 @@ env:
 # Every job starts by asking whether the pull request touches anything other
 # than documentation (.github/actions/changes). If it does not, the job's
 # remaining steps are skipped and the job still reports success under its own
-# name, so the four checks can be required without a gate job. The one thing a
+# name, so the six checks can be required without a gate job. The one thing a
 # documentation-only pull request still runs is the repo rules, on Linux: the
 # check for home-directory paths and the check of docs/dependencies.md exist
 # mostly for documentation.
@@ -110,10 +114,12 @@ jobs:
           fi
           cargo run --locked --quiet --package xtask -- owner-guard --base "$GUARD_BASE" --head "$GUARD_HEAD"
 
-  # Tiers 1 to 3.
+  # Tiers 1 to 3 on Linux, in one job. Its id is `test`, as it was when
+  # it was a matrix with Windows: rust-cache's key is made of the job's id,
+  # and `ts-client` here and the `try` workflow read the cache it saves.
   test:
-    name: test-${{ matrix.name }}
-    runs-on: ${{ matrix.os }}
+    name: test-linux
+    runs-on: ubuntu-latest
     # Five minutes on a pull request: rule 2's budget. Twelve on every other
     # event, because only main saves the build cache and a run cut off saves
     # nothing: a main run must be able to rebuild from cold and save, or every
@@ -122,16 +128,68 @@ jobs:
     # 10 s into its tests). A cold lint job takes under 2.5 minutes, so the
     # lint jobs keep five.
     timeout-minutes: ${{ github.event_name == 'pull_request' && 5 || 12 }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: linux
-            os: ubuntu-latest
-          - name: windows
-            os: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+      - id: changes
+        uses: ./.github/actions/changes
+      - name: Install the toolchain from rust-toolchain.toml
+        if: steps.changes.outputs.code == 'true'
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        if: steps.changes.outputs.code == 'true'
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-bin: "false"
+      - name: Install cargo-nextest
+        if: steps.changes.outputs.code == 'true'
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: cargo-nextest@0.9.151
+      - name: Tests
+        if: steps.changes.outputs.code == 'true'
+        # A hosted runner's disk goes with the job: the tests leave their
+        # directories there, where removing them was 2.7 ms of each core
+        # test on Windows (docs/steps/ci-budgets-2/answered.md).
+        env:
+          CINERIS_TESTKIT_KEEP_DIRECTORIES: "1"
+        run: cargo run --locked --quiet --package xtask -- ci test
+      # Said before anything else runs, so that a job the time limit cuts off
+      # after this (while it uploads the report, say) is told apart from one
+      # whose tests failed: the notice is on the run's page and in its
+      # annotations.
+      - name: Say that every test passed
+        if: success() && steps.changes.outputs.code == 'true'
+        run: echo "::notice title=test-linux::Every test passed. A cancellation after this is the job's time limit, not a failure."
+      # Every test's time, which the log does not show for a test under two
+      # seconds. `cargo xtask ci --tiers --from junit.xml` reads it
+      # (docs/testing-and-ci.md, "A CI run's test times"). It is kept when
+      # the tests failed too: that is when it is wanted most.
+      - name: Keep the JUnit report
+        if: ${{ !cancelled() && steps.changes.outputs.code == 'true' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: junit-linux
+          path: target/nextest/ci/junit.xml
+          if-no-files-found: ignore
+          retention-days: 14
+          # A re-run of the job replaces the report of the attempt before.
+          overwrite: true
+
+  # Windows' tests, built here and run by the two `test-windows` jobs
+  # below, each from this job's archive: a pull request that changes a
+  # crate every other is built on (`cineris-base`) builds every crate
+  # again, and the build and both runs of the tests did not fit in one
+  # job's five minutes on a slow runner (docs/steps/windows-split/).
+  build-windows:
+    name: build-windows
+    runs-on: windows-latest
+    # As the Linux test job's, and for the same reason: only main saves the
+    # build caches, and a main run must be able to build from cold.
+    timeout-minutes: ${{ github.event_name == 'pull_request' && 5 || 12 }}
     env:
-      # The build of the workspace's own crates, which the Windows job caches
+      # The build of the workspace's own crates, which this job caches
       # beside rust-cache's third-party crates (docs/testing-and-ci.md, "The
       # workspace's own build, cached"): every file cargo made for a
       # `cineris-*` crate or xtask, by its package's name (`.fingerprint`,
@@ -168,8 +226,147 @@ jobs:
           fetch-depth: 2
       - id: changes
         uses: ./.github/actions/changes
-      - name: Keep cargo's and rustup's files off the system disk (Windows)
-        if: runner.os == 'Windows' && steps.changes.outputs.code == 'true'
+      - name: Keep cargo's and rustup's files off the system disk
+        if: steps.changes.outputs.code == 'true'
+        run: |
+          "CARGO_HOME=$env:RUNNER_TEMP\cargo" >> $env:GITHUB_ENV
+          "RUSTUP_HOME=$env:RUNNER_TEMP\rustup" >> $env:GITHUB_ENV
+          # Temporary files too, as in the test jobs below.
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\tmp" | Out-Null
+          "TEMP=$env:RUNNER_TEMP\tmp" >> $env:GITHUB_ENV
+          "TMP=$env:RUNNER_TEMP\tmp" >> $env:GITHUB_ENV
+      - name: Install the toolchain from rust-toolchain.toml
+        if: steps.changes.outputs.code == 'true'
+        run: rustup toolchain install
+      # `shared-key: test`: the key the Windows test job had when it was
+      # one job of id `test`, so that the `try` workflow (whose job's id is
+      # `test`) restores the cache this job saves.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        if: steps.changes.outputs.code == 'true'
+        with:
+          shared-key: test
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-bin: "false"
+      - name: Install cargo-nextest
+        if: steps.changes.outputs.code == 'true'
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: cargo-nextest@0.9.151
+      # The build of the workspace's own crates that the main branch saved
+      # last (the last step below), where building them is most of the job:
+      # a pull request then builds only the crates it changes and what
+      # depends on them. Every run but the main branch's reads it; the main
+      # branch builds every crate afresh and saves that, so a saved build is
+      # always one commit's whole build. Only the main branch writes it, as
+      # with rust-cache.
+      #
+      # Its key holds what decides the bytes a checkout writes without being
+      # any file's content: git's line-ending settings and every attributes
+      # file. A build made under other ones is not restored, since a file it
+      # read could differ on disk with nothing in git saying so.
+      - name: The checkout's settings, for the key of the workspace's build
+        id: checkout-settings
+        if: steps.changes.outputs.code == 'true'
+        shell: bash
+        run: |
+          hash=$({
+            git config --get core.autocrlf || echo "no autocrlf"
+            git config --get core.eol || echo "no eol"
+            git ls-files -s -- ':(glob)**/.gitattributes'
+            cat .git/info/attributes 2>/dev/null || echo "no info/attributes"
+          } | sha256sum | cut -c1-16)
+          echo "hash=$hash" >> "$GITHUB_OUTPUT"
+      - name: Restore the main branch's build of the workspace's crates
+        id: workspace-build
+        if: steps.changes.outputs.code == 'true' && github.ref != 'refs/heads/main'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.WORKSPACE_BUILD }}
+          key: workspace-build-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-${{ steps.checkout-settings.outputs.hash }}-${{ github.sha }}
+          restore-keys: workspace-build-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-${{ steps.checkout-settings.outputs.hash }}-
+      # Cargo judges a workspace crate's build by its files' dates, and a
+      # checkout dates every file now: this dates them against the commit the
+      # restored build was made from, which its key ends in, so that what
+      # differs from it is rebuilt and nothing else. Anything it cannot work
+      # out leaves the dates alone, and everything is rebuilt.
+      - name: Date the checkout against that build
+        if: steps.workspace-build.outcome == 'success'
+        shell: bash
+        env:
+          RESTORED: ${{ steps.workspace-build.outputs.cache-matched-key }}
+        run: bash .github/scripts/date-the-checkout.sh "$RESTORED"
+      # The tests as `cargo xtask ci test` builds them, in a nextest archive,
+      # and xtask's binary beside it: the test jobs run both, and build
+      # nothing.
+      - name: Build the tests and archive them
+        if: steps.changes.outputs.code == 'true'
+        run: cargo run --locked --quiet --package xtask -- ci test --archive "$env:RUNNER_TEMP\windows-tests"
+      # An artifact of this run alone, for its test jobs, kept a day: a
+      # re-run of a failed test job reads it again. The archive is already
+      # compressed. A re-run of this job replaces it.
+      - name: Keep the archive for the test jobs
+        if: steps.changes.outputs.code == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-tests
+          path: ${{ runner.temp }}/windows-tests/
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+          overwrite: true
+      # The main branch's build of the workspace's crates, for the runs
+      # after it to restore (above), under a key that ends in its commit.
+      # Saved when the build and the archive succeeded: the build is whole
+      # then, whatever the tests make of it.
+      - name: Save this build of the workspace's crates (main branch)
+        if: success() && steps.changes.outputs.code == 'true' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.WORKSPACE_BUILD }}
+          key: workspace-build-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-${{ steps.checkout-settings.outputs.hash }}-${{ github.sha }}
+
+  # Windows' tests, from the build job's archive, in two jobs that run side
+  # by side: tiers 1 and 2 (`test-windows-tiers`) and the system tests
+  # (`test-windows-system`), each with the tier budgets of its own tiers.
+  # The system tests' job runs a start probe first, a few hundred unit tests,
+  # to measure what starting a test's process costs on its runner, which
+  # tier 3 is held to its budget above (docs/testing-and-ci.md, "The
+  # tiers").
+  #
+  # They run whatever became of the build job, unless the run was
+  # cancelled, and fail at once when it did not succeed: a job skipped
+  # because a job it needs failed reports success, and would pass as a
+  # required check with nothing tested.
+  test-windows:
+    name: test-windows-${{ matrix.part }}
+    needs: build-windows
+    if: ${{ !cancelled() }}
+    runs-on: windows-latest
+    timeout-minutes: ${{ github.event_name == 'pull_request' && 5 || 12 }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - part: tiers
+            junit: junit-windows-tiers
+          - part: system
+            junit: junit-windows-system
+    steps:
+      - name: Stop unless the build job succeeded
+        if: needs.build-windows.result != 'success'
+        shell: bash
+        env:
+          RESULT: ${{ needs.build-windows.result }}
+        run: |
+          echo "::error title=build-windows did not succeed::The build job ended as '$RESULT': there are no tests to run, and this job fails rather than pass having run none."
+          exit 1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+      - id: changes
+        uses: ./.github/actions/changes
+      - name: Keep cargo's and rustup's files off the system disk
+        if: steps.changes.outputs.code == 'true'
         run: |
           "CARGO_HOME=$env:RUNNER_TEMP\cargo" >> $env:GITHUB_ENV
           "RUSTUP_HOME=$env:RUNNER_TEMP\rustup" >> $env:GITHUB_ENV
@@ -181,62 +378,24 @@ jobs:
           New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\tmp" | Out-Null
           "TEMP=$env:RUNNER_TEMP\tmp" >> $env:GITHUB_ENV
           "TMP=$env:RUNNER_TEMP\tmp" >> $env:GITHUB_ENV
+      # Nothing is built here, and no cache is read. The toolchain is for
+      # `cargo nextest`, and for the tests that run cargo.
       - name: Install the toolchain from rust-toolchain.toml
         if: steps.changes.outputs.code == 'true'
         run: rustup toolchain install
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        if: steps.changes.outputs.code == 'true'
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          cache-bin: "false"
       - name: Install cargo-nextest
         if: steps.changes.outputs.code == 'true'
         uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-nextest@0.9.151
-      # The build of the workspace's own crates that the main branch saved
-      # last (the last step below), on Windows, where building them is most
-      # of the job: a pull request then builds only the crates it changes and
-      # what depends on them. Every run but the main branch's reads it; the
-      # main branch builds every crate afresh and saves that, so a saved
-      # build is always one commit's whole build. Only the main branch
-      # writes it, as with rust-cache.
-      #
-      # Its key holds what decides the bytes a checkout writes without being
-      # any file's content: git's line-ending settings and every attributes
-      # file. A build made under other ones is not restored, since a file it
-      # read could differ on disk with nothing in git saying so.
-      - name: The checkout's settings, for the key of the workspace's build (Windows)
-        id: checkout-settings
-        if: runner.os == 'Windows' && steps.changes.outputs.code == 'true'
-        shell: bash
-        run: |
-          hash=$({
-            git config --get core.autocrlf || echo "no autocrlf"
-            git config --get core.eol || echo "no eol"
-            git ls-files -s -- ':(glob)**/.gitattributes'
-            cat .git/info/attributes 2>/dev/null || echo "no info/attributes"
-          } | sha256sum | cut -c1-16)
-          echo "hash=$hash" >> "$GITHUB_OUTPUT"
-      - name: Restore the main branch's build of the workspace's crates (Windows)
-        id: workspace-build
-        if: runner.os == 'Windows' && steps.changes.outputs.code == 'true' && github.ref != 'refs/heads/main'
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      # This run's own archive: the action reads the artifacts of the run
+      # it is in, and of no other.
+      - name: Fetch the build job's archive
+        if: steps.changes.outputs.code == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          path: ${{ env.WORKSPACE_BUILD }}
-          key: workspace-build-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-${{ steps.checkout-settings.outputs.hash }}-${{ github.sha }}
-          restore-keys: workspace-build-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-${{ steps.checkout-settings.outputs.hash }}-
-      # Cargo judges a workspace crate's build by its files' dates, and a
-      # checkout dates every file now: this dates them against the commit the
-      # restored build was made from, which its key ends in, so that what
-      # differs from it is rebuilt and nothing else. Anything it cannot work
-      # out leaves the dates alone, and everything is rebuilt.
-      - name: Date the checkout against that build (Windows)
-        if: steps.workspace-build.outcome == 'success'
-        shell: bash
-        env:
-          RESTORED: ${{ steps.workspace-build.outputs.cache-matched-key }}
-        run: bash .github/scripts/date-the-checkout.sh "$RESTORED"
+          name: windows-tests
+          path: ${{ runner.temp }}/windows-tests
       - name: Tests
         if: steps.changes.outputs.code == 'true'
         # A hosted runner's disk goes with the job: the tests leave their
@@ -244,38 +403,30 @@ jobs:
         # test on Windows (docs/steps/ci-budgets-2/answered.md).
         env:
           CINERIS_TESTKIT_KEEP_DIRECTORIES: "1"
-        run: cargo run --locked --quiet --package xtask -- ci test
-      # Said before anything else runs, so that a job the time limit cuts off
-      # after this (while it uploads the report, say) is told apart from one
-      # whose tests failed: the notice is on the run's page and in its
-      # annotations.
+          PART: ${{ matrix.part }}
+        run: '& "$env:RUNNER_TEMP\windows-tests\xtask.exe" ci test "$env:PART" --from-archive "$env:RUNNER_TEMP\windows-tests"'
       - name: Say that every test passed
         if: success() && steps.changes.outputs.code == 'true'
         shell: bash
         env:
-          JOB: test-${{ matrix.name }}
+          JOB: test-windows-${{ matrix.part }}
         run: echo "::notice title=$JOB::Every test passed. A cancellation after this is the job's time limit, not a failure."
-      # Every test's time, which the log does not show for a test under two
-      # seconds. `cargo xtask ci --tiers --from junit.xml` reads it
-      # (docs/testing-and-ci.md, "A CI run's test times"). It is kept when
-      # the tests failed too: that is when it is wanted most.
+      # The part's report, and the system job's start probe beside it. The
+      # readers of a run make the two parts' reports one, tiers 1 and 2
+      # first (`xtask/src/runs.rs`, `report_forms`).
       - name: Keep the JUnit report
         if: ${{ !cancelled() && steps.changes.outputs.code == 'true' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: junit-${{ matrix.name }}
-          path: target/nextest/ci/junit.xml
+          name: ${{ matrix.junit }}
+          path: |
+            target/nextest/ci/junit.xml
+            target/nextest/ci/start-probe.xml
           if-no-files-found: ignore
           retention-days: 14
-      # The main branch's build of the workspace's crates, for the runs
-      # after it to restore (above), under a key that ends in its commit.
-      # Saved when the tests passed: the build is whole then.
-      - name: Save this build of the workspace's crates (Windows, main branch)
-        if: success() && runner.os == 'Windows' && steps.changes.outputs.code == 'true' && github.ref == 'refs/heads/main'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ env.WORKSPACE_BUILD }}
-          key: workspace-build-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-${{ steps.checkout-settings.outputs.hash }}-${{ github.sha }}
+          # A re-run of a failed test job replaces the report of the attempt
+          # before, rather than fail on its name.
+          overwrite: true
 
   # Not a required check, and not one of the blocking jobs: the shipped
   # binary's size on each system, against its budget and against the size
@@ -284,14 +435,15 @@ jobs:
   # pull request's binary size"). Over the budget, it fails with a line that
   # says by how much.
   #
-  # It starts only after the four required jobs have passed (`needs`), so it
+  # It starts only after the six required jobs have passed (`needs`), so it
   # never takes a runner they are waiting for, and a new push cancels it
   # with the rest of the run. A pull request that cannot change the binary
   # skips its build (.github/actions/changes, `binary`). No build cache, as
-  # in the `main` workflow's size jobs: the caches here are the test jobs'.
+  # in the `main` workflow's size jobs: the caches here are the test and
+  # build jobs'.
   pr-size:
     name: pr-size-${{ matrix.name }}
-    needs: [lint, test]
+    needs: [lint, test, build-windows, test-windows]
     if: github.event_name == 'pull_request'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
@@ -352,11 +504,11 @@ jobs:
   #
   # On a pull request that changes the protocol, the server, the client or
   # this workflow, and when the workflow is started by hand. Like `pr-size`,
-  # it starts only after the four required jobs have passed. It reads the
+  # it starts only after the six required jobs have passed. It reads the
   # Linux test job's build cache (`shared-key: test`), so it builds only the
   # workspace's crates.
   ts-client:
-    needs: [lint, test]
+    needs: [lint, test, build-windows, test-windows]
     if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 15

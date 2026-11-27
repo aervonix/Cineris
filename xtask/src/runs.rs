@@ -90,37 +90,176 @@ pub(crate) fn kept(artifacts: &[(String, bool)], name: &str) -> Kept {
     }
 }
 
-/// A run's artifacts, as `name expired` lines from GitHub's API, read.
-pub(crate) fn parse_artifacts(listed: &str) -> Result<Vec<(String, bool)>> {
+/// A run's artifacts, asked of GitHub. A failure here is an error, never
+/// "no artifacts": the network or the sign-in is not the run.
+pub(crate) fn artifacts(run: u64) -> Result<Vec<(String, bool)>> {
+    Ok(pairs_of(&listing(run)?))
+}
+
+/// One of a run's artifacts as GitHub lists it: its name, whether it has
+/// expired, and its id, which a new upload of the same name (a job run
+/// again, with `overwrite`) changes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Listed {
+    pub(crate) name: String,
+    pub(crate) expired: bool,
+    pub(crate) id: u64,
+}
+
+/// A run's artifacts with their ids, asked of GitHub.
+pub(crate) fn listing(run: u64) -> Result<Vec<Listed>> {
+    parse_listing(&gh(&[
+        "api",
+        &format!("repos/{{owner}}/{{repo}}/actions/runs/{run}/artifacts?per_page=100"),
+        "--jq",
+        ".artifacts[] | \"\\(.name) \\(.expired) \\(.id)\"",
+    ])?)
+}
+
+/// A run's artifacts, as `name expired id` lines from GitHub's API, read.
+pub(crate) fn parse_listing(listed: &str) -> Result<Vec<Listed>> {
     listed
         .lines()
         .filter(|line| !line.trim().is_empty())
-        .map(|line| match line.trim().rsplit_once(' ') {
-            Some((name, "true")) => Ok((name.to_owned(), true)),
-            Some((name, "false")) => Ok((name.to_owned(), false)),
-            _ => Err(format!(
-                "an artifact line that is not `name expired`: `{line}`"
-            )),
+        .map(|line| {
+            let refused = || format!("an artifact line that is not `name expired id`: `{line}`");
+            let (rest, id) = line.trim().rsplit_once(' ').ok_or_else(refused)?;
+            let id = id.parse::<u64>().map_err(|_| refused())?;
+            let (name, expired) = match rest.rsplit_once(' ') {
+                Some((name, "true")) => (name, true),
+                Some((name, "false")) => (name, false),
+                _ => return Err(refused()),
+            };
+            Ok(Listed {
+                name: name.to_owned(),
+                expired,
+                id,
+            })
         })
         .collect()
 }
 
-/// A run's artifacts, asked of GitHub. A failure here is an error, never
-/// "no artifacts": the network or the sign-in is not the run.
-pub(crate) fn artifacts(run: u64) -> Result<Vec<(String, bool)>> {
-    parse_artifacts(&gh(&[
-        "api",
-        &format!("repos/{{owner}}/{{repo}}/actions/runs/{run}/artifacts?per_page=100"),
-        "--jq",
-        ".artifacts[] | \"\\(.name) \\(.expired)\"",
-    ])?)
+/// Each artifact's name and whether it has expired.
+fn pairs_of(listed: &[Listed]) -> Vec<(String, bool)> {
+    listed
+        .iter()
+        .map(|artifact| (artifact.name.clone(), artifact.expired))
+        .collect()
+}
+
+/// What a download of the artifacts `names` is kept with: each one's name
+/// and id, as `listed` has them. A download whose stamp is not the
+/// listing's is of an upload that has since been replaced, and is fetched
+/// again. `None` when one of them is not listed.
+fn stamp(listed: &[Listed], names: &[&str]) -> Option<String> {
+    names
+        .iter()
+        .map(|name| {
+            listed
+                .iter()
+                .find(|artifact| artifact.name == *name)
+                .map(|artifact| format!("{}={}", artifact.name, artifact.id))
+        })
+        .collect::<Option<Vec<_>>>()
+        .map(|parts| parts.join(","))
+}
+
+/// Whether the download that `marker` was written beside is of the uploads
+/// `stamp` names: a marker of an older form (empty) or of another upload
+/// is not.
+fn is_current(marker: &Path, stamp: &str) -> bool {
+    fs::read_to_string(marker).is_ok_and(|text| text == stamp)
+}
+
+/// What a run must have kept for one thing to be read from it: the
+/// artifacts of one of its forms, every one of them. A `ci` run keeps a
+/// test job's JUnit report in one artifact (`junit-linux`; `junit-windows`
+/// before the Windows job was split) or in one for each part of a split
+/// job (`junit-windows-tiers` and `junit-windows-system`), read as one
+/// report ([`ci_report`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Wanted {
+    forms: Vec<Vec<String>>,
+}
+
+impl Wanted {
+    /// One artifact, in one form.
+    pub(crate) fn one(name: &str) -> Self {
+        Self {
+            forms: vec![vec![name.to_owned()]],
+        }
+    }
+
+    /// The test report of `os` that a `ci` run keeps, in each form it has
+    /// kept it in.
+    pub(crate) fn ci_report(os: Os) -> Self {
+        Self {
+            forms: report_forms(os)
+                .iter()
+                .map(|form| form.iter().map(|name| (*name).to_owned()).collect())
+                .collect(),
+        }
+    }
+
+    /// Whether `artifacts` hold every artifact of one of the forms.
+    fn kept_by(&self, artifacts: &[(String, bool)]) -> bool {
+        self.forms
+            .iter()
+            .any(|form| form.iter().all(|name| kept(artifacts, name) == Kept::Yes))
+    }
+
+    /// `` `junit-windows`, or `junit-windows-tiers` and `junit-windows-system` ``.
+    pub(crate) fn describe(&self) -> String {
+        self.forms
+            .iter()
+            .map(|form| {
+                form.iter()
+                    .map(|name| format!("`{name}`"))
+                    .collect::<Vec<_>>()
+                    .join(" and ")
+            })
+            .collect::<Vec<_>>()
+            .join(", or ")
+    }
+}
+
+/// The forms a `ci` run keeps the test report of `os` in, each a list of
+/// artifacts that make one report together. The Windows job was one job,
+/// `test-windows`, until it was split into a build job and two jobs that
+/// run the tests from its archive, each keeping the report of its own
+/// part, tiers 1 and 2 first ([`checks::ci_test_steps`]'s order): a run
+/// from before keeps one, and the records cite such runs. The names are
+/// the workflow's (`.github/workflows/ci.yml`), which a test holds to
+/// these.
+///
+/// [`checks::ci_test_steps`]: crate::checks
+pub(crate) fn report_forms(os: Os) -> &'static [&'static [&'static str]] {
+    match os {
+        Os::Linux => &[&["junit-linux"]],
+        Os::Windows => &[
+            &["junit-windows-tiers", "junit-windows-system"],
+            &["junit-windows"],
+        ],
+    }
+}
+
+/// `needs`, each described, joined.
+fn describe_all(needs: &[Wanted]) -> String {
+    needs
+        .iter()
+        .map(Wanted::describe)
+        .collect::<Vec<_>>()
+        .join("; and ")
 }
 
 /// The first of `runs` (newest first, each with its artifacts) that kept
-/// every artifact of `needs`.
-pub(crate) fn first_that_kept(runs: &[(u64, Vec<(String, bool)>)], needs: &[&str]) -> Option<u64> {
+/// everything of `needs`.
+pub(crate) fn first_that_kept(
+    runs: &[(u64, Vec<(String, bool)>)],
+    needs: &[Wanted],
+) -> Option<u64> {
     runs.iter()
-        .find(|(_, artifacts)| needs.iter().all(|name| kept(artifacts, name) == Kept::Yes))
+        .find(|(_, artifacts)| needs.iter().all(|wanted| wanted.kept_by(artifacts)))
         .map(|(run, _)| *run)
 }
 
@@ -128,14 +267,14 @@ pub(crate) fn first_that_kept(runs: &[(u64, Vec<(String, bool)>)], needs: &[&str
 /// `needs`: a run of a documentation change alone is successful and keeps
 /// none, and is passed over. It is printed, so that a reader knows which
 /// run `main` was.
-pub(crate) fn latest_main_run(needs: &[&str]) -> Result<u64> {
+pub(crate) fn latest_main_run(needs: &[Wanted]) -> Result<u64> {
     latest_main_run_of("ci", "success", needs)
 }
 
 /// The main branch's latest run of `workflow` whose status is `status` (as
 /// `gh run list --status` takes it: `success`, `completed` and so on) that
-/// kept every artifact of `needs`.
-pub(crate) fn latest_main_run_of(workflow: &str, status: &str, needs: &[&str]) -> Result<u64> {
+/// kept everything of `needs`.
+pub(crate) fn latest_main_run_of(workflow: &str, status: &str, needs: &[Wanted]) -> Result<u64> {
     let limit = MAIN_RUNS_LOOKED_AT.to_string();
     let listed = gh(&[
         "run",
@@ -178,7 +317,7 @@ pub(crate) fn latest_main_run_of(workflow: &str, status: &str, needs: &[&str]) -
             println!(
                 "main: run {run} (at {sha}), the main branch's latest `{workflow}` run \
                  ({status}) that kept {}",
-                needs.join(" and ")
+                describe_all(needs)
             );
             return Ok(*run);
         }
@@ -186,7 +325,7 @@ pub(crate) fn latest_main_run_of(workflow: &str, status: &str, needs: &[&str]) -
     Err(format!(
         "none of the main branch's last {} `{workflow}` runs ({status}) kept {}",
         listed.len(),
-        needs.join(" and ")
+        describe_all(needs)
     ))
 }
 
@@ -197,7 +336,7 @@ pub(crate) fn latest_main_run_of(workflow: &str, status: &str, needs: &[&str]) -
 /// it, does not move its figures. `None`, said, when that commit has no such
 /// run (a documentation change keeps no report): the caller takes `main`'s
 /// latest then.
-pub(crate) fn base_main_run(head_sha: &str, needs: &[&str]) -> Result<Option<u64>> {
+pub(crate) fn base_main_run(head_sha: &str, needs: &[Wanted]) -> Result<Option<u64>> {
     let base = gh(&[
         "api",
         &format!("repos/{{owner}}/{{repo}}/compare/main...{head_sha}"),
@@ -243,7 +382,7 @@ pub(crate) fn base_main_run(head_sha: &str, needs: &[&str]) -> Result<Option<u64
             "main: the commit the pull request is based on ({short}) has no successful `ci` run \
              that kept {}; main's latest is taken instead, and its figures may hold other \
              changes",
-            needs.join(" and ")
+            describe_all(needs)
         ),
     }
     Ok(chosen)
@@ -251,7 +390,7 @@ pub(crate) fn base_main_run(head_sha: &str, needs: &[&str]) -> Result<Option<u64
 
 /// The run a source names, if it names one. `needs` is what a run of `main`
 /// must have kept.
-pub(crate) fn run_of(source: &Source, needs: &[&str]) -> Result<Option<u64>> {
+pub(crate) fn run_of(source: &Source, needs: &[Wanted]) -> Result<Option<u64>> {
     match source {
         Source::File(_) => Ok(None),
         Source::Run(id) => Ok(Some(*id)),
@@ -261,9 +400,15 @@ pub(crate) fn run_of(source: &Source, needs: &[&str]) -> Result<Option<u64>> {
 
 /// The JUnit report of a run's test job on `os`: downloaded once, into a
 /// directory of its own under `target/xtask-runs/`, and read from there
-/// afterwards. A run's artifacts do not change.
+/// afterwards, for as long as GitHub lists the same uploads: a job run
+/// again replaces its report (`overwrite`), and the new one is fetched.
 ///
-/// A run of the `ci` workflow keeps it as `junit-<os>`. A run of the `try`
+/// A run of the `ci` workflow keeps it as `junit-<os>`, or, since the
+/// Windows job was split, as one artifact for each part of the job
+/// ([`report_forms`]): the parts are fetched and made one report, tiers 1
+/// and 2 first, kept where the one artifact would be. A run that kept one
+/// part and not the other (a job cut or failed before its upload) has no
+/// whole report: it is said, and taken as none. A run of the `try`
 /// workflow, which keeps no such artifact, is read from its own,
 /// `try-<os>`: the report of its tests in the `ci` profile
 /// (`target/nextest/ci/junit.xml`, wherever the artifact keeps the runner's
@@ -276,30 +421,127 @@ pub(crate) fn junit_of(run: u64, os: Os) -> Result<Option<PathBuf>> {
     let name = artifact_name(os);
     let directory = download_root().join(run.to_string()).join(name);
     let report = directory.join("junit.xml");
-    if report.is_file() {
-        return Ok(Some(report));
-    }
     let tried = try_artifact_name(os);
-    let tried_directory = download_root().join(run.to_string()).join(tried);
-    if tried_directory.join(".downloaded").is_file() {
-        return report_of_try(run, &tried_directory);
-    }
-    match which_artifact(run, &artifacts(run)?, os)? {
-        None => return Ok(None),
-        Some(chosen) if chosen == tried => {
-            return match artifact_dir(run, tried)? {
+    let listed = listing(run)?;
+    let parts = match which_artifact(run, &pairs_of(&listed), os)? {
+        Chosen::None => return Ok(None),
+        Chosen::Partial { kept, missing } => {
+            println!(
+                "run {run} kept `{kept}` and not `{missing}`: one of its test jobs did not keep \
+                 its report, so the run has no whole report of its tests, and none is read"
+            );
+            return Ok(None);
+        }
+        Chosen::Try => {
+            return match artifact_dir_in(run, tried, &listed)? {
                 Some(directory) => report_of_try(run, &directory),
                 None => Ok(None),
             };
         }
-        Some(_) => {}
+        Chosen::Ci(names) => names,
+    };
+    let stamp = stamp(&listed, parts)
+        .ok_or_else(|| format!("run {run}: an artifact was listed and then was not"))?;
+    let marker = directory.join(".stamp");
+    if report.is_file() && is_current(&marker, &stamp) {
+        return Ok(Some(report));
     }
+    let written = if let [only] = parts {
+        download_one(run, only, &directory)?
+    } else {
+        // The parts, each downloaded whole, and then one report of them,
+        // written whole or not at all.
+        let mut downloaded = Vec::new();
+        for part in parts {
+            let part_directory = artifact_dir_in(run, part, &listed)?
+                .ok_or_else(|| format!("run {run}'s `{part}` was listed and then was not there"))?;
+            downloaded.push((*part, part_directory));
+        }
+        let Some(merged) = merge_parts(run, &downloaded)? else {
+            return Ok(None);
+        };
+        fs::create_dir_all(&directory)
+            .map_err(|error| format!("could not make {}: {error}", directory.display()))?;
+        workspace::forget_report(&marker)?;
+        let partial = directory.join("junit.xml.partial");
+        fs::write(&partial, merged)
+            .map_err(|error| format!("could not write {}: {error}", partial.display()))?;
+        fs::rename(&partial, &report)
+            .map_err(|error| format!("could not write {}: {error}", report.display()))?;
+        Some(report)
+    };
+    // Written last: a report without it is fetched again.
+    fs::write(&marker, &stamp)
+        .map_err(|error| format!("could not write {}: {error}", marker.display()))?;
+    Ok(written)
+}
+
+/// One report of a split run's `parts`, each an artifact's name and the
+/// directory it was downloaded into, in the order given; `None`, said,
+/// when a part holds no report. A part that kept its start probe's report
+/// beside its own has its cases held above that start
+/// ([`junit::with_start`]).
+fn merge_parts(run: u64, parts: &[(&str, PathBuf)]) -> Result<Option<String>> {
+    let mut merged: Option<String> = None;
+    for (part, part_directory) in parts {
+        let file = part_directory.join("junit.xml");
+        if !file.is_file() {
+            // A job that kept its start probe's report and not its own (its
+            // run of the tests ended before nextest wrote one).
+            println!(
+                "run {run}'s `{part}` has no junit.xml: one of its test jobs did not keep its \
+                 report, so the run has no whole report of its tests, and none is read"
+            );
+            return Ok(None);
+        }
+        let mut text = fs::read_to_string(&file)
+            .map_err(|error| format!("could not read {}: {error}", file.display()))?;
+        // A part that measured its own start (the system tests' job, by its
+        // probe) is held above it, on its own runner, and not above the
+        // other part's.
+        let probe = part_directory.join(crate::tiers::START_PROBE_FILE);
+        if probe.is_file() {
+            // A probe the job's own check refused (a failure, too few tests,
+            // none) measured no start, and the part is no measurement.
+            let cases = match crate::tiers::read_probe(&probe) {
+                Ok(cases) => cases,
+                Err(error) => {
+                    println!(
+                        "run {run}'s `{part}`: {error}; the run has no whole report of its \
+                         tests, and none is read"
+                    );
+                    return Ok(None);
+                }
+            };
+            let (start, sample) = crate::tiers::start_of(&cases);
+            println!(
+                "run {run}: `{part}`'s tests are held above its own runner's start, {:.0} ms a \
+                 test (its start probe's {sample} unit tests)",
+                1000.0 * start
+            );
+            text = junit::with_start(&text, start);
+        }
+        merged = Some(match merged {
+            None => text,
+            Some(earlier) => junit::merge(&earlier, &text)
+                .map_err(|error| format!("run {run}'s `{part}`: {error}"))?,
+        });
+    }
+    merged
+        .map(Some)
+        .ok_or_else(|| format!("run {run}: a report of no parts"))
+}
+
+/// A run's one artifact `name`, holding its report, downloaded into
+/// `directory`.
+fn download_one(run: u64, name: &str, directory: &Path) -> Result<Option<PathBuf>> {
+    let report = directory.join("junit.xml");
     // A partial download from an earlier attempt is not trusted.
     if directory.exists() {
-        fs::remove_dir_all(&directory)
+        fs::remove_dir_all(directory)
             .map_err(|error| format!("could not clear {}: {error}", directory.display()))?;
     }
-    fs::create_dir_all(&directory)
+    fs::create_dir_all(directory)
         .map_err(|error| format!("could not make {}: {error}", directory.display()))?;
     let run_text = run.to_string();
     let target = directory.to_string_lossy().into_owned();
@@ -317,36 +559,73 @@ pub(crate) fn junit_of(run: u64, os: Os) -> Result<Option<PathBuf>> {
     }
 }
 
-/// Which of a run's artifacts holds the JUnit report of `os`: the `ci`
-/// workflow's `junit-<os>`, else a `try` run's `try-<os>`; none when the
-/// run kept neither, and an error when the one it kept has expired.
-fn which_artifact(run: u64, listed: &[(String, bool)], os: Os) -> Result<Option<&'static str>> {
-    for name in [artifact_name(os), try_artifact_name(os)] {
-        match kept(listed, name) {
-            Kept::Yes => return Ok(Some(name)),
-            Kept::Expired => {
-                return Err(format!(
-                    "run {run}'s `{name}` has expired: a run's reports are kept for 14 days"
-                ));
-            }
-            Kept::Never => {}
-        }
-    }
-    Ok(None)
+/// Where a run keeps its report of one OS, as [`which_artifact`] finds it.
+#[derive(Debug, PartialEq, Eq)]
+enum Chosen {
+    /// The `ci` workflow's artifacts of one form, every one kept.
+    Ci(&'static [&'static str]),
+    /// One part of a split job's report kept, and the other not.
+    Partial {
+        kept: &'static str,
+        missing: &'static str,
+    },
+    /// A `try` run's own artifact.
+    Try,
+    /// Neither.
+    None,
 }
 
+/// Which of a run's artifacts hold the JUnit report of `os`: the `ci`
+/// workflow's, in one of its forms ([`report_forms`]), else a `try` run's
+/// `try-<os>`; none when the run kept neither, and an error when one it
+/// kept has expired.
+fn which_artifact(run: u64, listed: &[(String, bool)], os: Os) -> Result<Chosen> {
+    let expired = |name: &str| {
+        format!("run {run}'s `{name}` has expired: a run's reports are kept for 14 days")
+    };
+    for form in report_forms(os) {
+        if let Some(name) = form.iter().find(|name| kept(listed, name) == Kept::Expired) {
+            return Err(expired(name));
+        }
+        let (kept_names, missing): (Vec<&&str>, Vec<&&str>) = form
+            .iter()
+            .partition(|name| kept(listed, name) == Kept::Yes);
+        match (kept_names.first(), missing.first()) {
+            (Some(_), None) => return Ok(Chosen::Ci(form)),
+            (Some(kept), Some(missing)) => {
+                return Ok(Chosen::Partial { kept, missing });
+            }
+            _ => {}
+        }
+    }
+    match kept(listed, try_artifact_name(os)) {
+        Kept::Yes => Ok(Chosen::Try),
+        Kept::Expired => Err(expired(try_artifact_name(os))),
+        Kept::Never => Ok(Chosen::None),
+    }
+}
 /// The directory a run's artifact `name` is downloaded into, under
 /// `target/xtask-runs/`, fetched through `gh` the first time. `None` only
 /// when the run made no such artifact; an expired one and a download that
 /// fails are errors, as for [`junit_of`].
 pub(crate) fn artifact_dir(run: u64, name: &str) -> Result<Option<PathBuf>> {
+    artifact_dir_in(run, name, &listing(run)?)
+}
+
+/// [`artifact_dir`], with the run's artifacts already listed.
+fn artifact_dir_in(run: u64, name: &str, listed: &[Listed]) -> Result<Option<PathBuf>> {
     let directory = download_root().join(run.to_string()).join(name);
-    // Written once the download is whole: a partial one is not trusted.
+    // Written once the download is whole, with the upload's id: a partial
+    // one is not trusted, nor one of an upload since replaced.
     let whole = directory.join(".downloaded");
-    if whole.is_file() {
+    let current = stamp(listed, &[name]);
+    if current
+        .as_deref()
+        .is_some_and(|current| is_current(&whole, current))
+    {
         return Ok(Some(directory));
     }
-    match kept(&artifacts(run)?, name) {
+    match kept(&pairs_of(listed), name) {
         Kept::Yes => {}
         Kept::Never => return Ok(None),
         Kept::Expired => {
@@ -367,7 +646,7 @@ pub(crate) fn artifact_dir(run: u64, name: &str) -> Result<Option<PathBuf>> {
         "run", "download", &run_text, "--name", name, "--dir", &target,
     ])
     .map_err(|error| format!("run {run}'s `{name}` is there and could not be fetched: {error}"))?;
-    fs::write(&whole, b"")
+    fs::write(&whole, current.unwrap_or_default())
         .map_err(|error| format!("could not write {}: {error}", whole.display()))?;
     Ok(Some(directory))
 }
@@ -470,8 +749,8 @@ pub(crate) enum Resolved {
 /// The artifacts a run of `main` must have kept for every OS of `oses` to be
 /// read from it: one run of `main` for all of them, so that the two OSes of
 /// a comparison are of one commit.
-fn needs_of(oses: &[Os]) -> Vec<&'static str> {
-    oses.iter().map(|os| artifact_name(*os)).collect()
+fn needs_of(oses: &[Os]) -> Vec<Wanted> {
+    oses.iter().map(|os| Wanted::ci_report(*os)).collect()
 }
 
 /// `source`'s run, when it names one, chosen so that it kept the report of
@@ -503,8 +782,9 @@ pub(crate) fn report_of(source: &Resolved, os: Os) -> Result<(String, Vec<TestCa
             };
             let report = junit_of(*id, os)?.ok_or_else(|| {
                 format!(
-                    "run {id} kept no `{}` or `{}`: its tests did not run",
-                    artifact_name(os),
+                    "run {id} kept no whole report of its tests ({}, or `{}`): its tests did \
+                     not run, or not all of them",
+                    Wanted::ci_report(os).describe(),
                     try_artifact_name(os)
                 )
             })?;
@@ -832,7 +1112,7 @@ pub(crate) fn ci_times(arguments: &[String]) -> Result<()> {
         Source::Run(id) => id,
         _ => return Err(format!("`{run}` is not a run's id\n{USAGE}")),
     };
-    let needs = [artifact_name(Os::Linux), artifact_name(Os::Windows)];
+    let needs = needs_of(&[Os::Linux, Os::Windows]);
     let against = match against.map(|text| Source::parse(text)) {
         // A pull request's own run is compared with `main` where the pull
         // request is based, not with `main`'s latest.
@@ -850,10 +1130,7 @@ pub(crate) fn ci_times(arguments: &[String]) -> Result<()> {
                 path.display()
             ));
         }
-        Some(source) => run_of(
-            &source,
-            &[artifact_name(Os::Linux), artifact_name(Os::Windows)],
-        )?,
+        Some(source) => run_of(&source, &needs)?,
     };
     let mut runs = Vec::new();
     for id in against.into_iter().chain([run]) {
@@ -868,8 +1145,9 @@ pub(crate) fn ci_times(arguments: &[String]) -> Result<()> {
                 Some(path) => Some(junit::read(&path)?),
                 None => {
                     println!(
-                        "run {id} kept no `{}`: its tests did not run",
-                        artifact_name(os)
+                        "run {id} kept no whole report of its tests ({}): its tests did not \
+                         run, or not all of them",
+                        Wanted::ci_report(os).describe()
                     );
                     None
                 }
@@ -943,20 +1221,60 @@ fn download_root() -> PathBuf {
 
 #[cfg(test)]
 mod artifact_tests {
-    use super::{Kept, first_that_kept, kept, parse_artifacts};
+    use super::{Kept, Listed, Wanted, first_that_kept, kept, pairs_of, parse_listing};
+    use crate::tiers::Os;
 
     #[test]
     fn a_report_is_absent_only_when_the_run_made_none() {
-        let artifacts = parse_artifacts("junit-linux false\njunit-windows true\n").unwrap();
+        let listed = parse_listing("junit-linux false 11\njunit-windows true 12\n").unwrap();
+        let artifacts = pairs_of(&listed);
         assert_eq!(kept(&artifacts, "junit-linux"), Kept::Yes);
         assert_eq!(kept(&artifacts, "junit-windows"), Kept::Expired);
         assert_eq!(kept(&artifacts, "junit-other"), Kept::Never);
-        assert_eq!(parse_artifacts("").unwrap(), []);
-        assert!(parse_artifacts("junit-linux maybe\n").is_err());
+        assert_eq!(listed[1].id, 12);
+        assert_eq!(parse_listing("").unwrap(), []);
+        assert!(parse_listing("junit-linux maybe 3\n").is_err());
+        assert!(parse_listing("junit-linux false\n").is_err());
+        assert!(parse_listing("junit-linux false x\n").is_err());
         // A name with a space in it keeps it.
         assert_eq!(
-            parse_artifacts("a b false").unwrap(),
-            [("a b".to_owned(), false)]
+            parse_listing("a b false 7").unwrap(),
+            [Listed {
+                name: "a b".to_owned(),
+                expired: false,
+                id: 7
+            }]
+        );
+    }
+
+    /// A download is read again only while GitHub lists the uploads it was
+    /// made of: a job run again replaces its report (`overwrite`), with a
+    /// new id, and a marker of the older form (empty) is no stamp.
+    #[test]
+    fn a_download_is_reused_only_while_its_uploads_are_the_ones_listed() {
+        let first =
+            parse_listing("junit-windows-tiers false 1\njunit-windows-system false 2\n").unwrap();
+        let rerun =
+            parse_listing("junit-windows-tiers false 1\njunit-windows-system false 9\n").unwrap();
+        let parts = ["junit-windows-tiers", "junit-windows-system"];
+        let stamp = super::stamp(&first, &parts).unwrap();
+        assert_eq!(stamp, "junit-windows-tiers=1,junit-windows-system=2");
+        assert_ne!(super::stamp(&rerun, &parts).unwrap(), stamp);
+        assert_eq!(super::stamp(&first, &["junit-linux"]), None);
+
+        let dir = std::env::temp_dir().join(format!("xtask-runs-stamp-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let marker = dir.join(".stamp");
+        let missing = super::is_current(&marker, &stamp);
+        std::fs::write(&marker, "").unwrap();
+        let old_form = super::is_current(&marker, &stamp);
+        std::fs::write(&marker, &stamp).unwrap();
+        let same = super::is_current(&marker, &stamp);
+        let replaced = super::is_current(&marker, &super::stamp(&rerun, &parts).unwrap());
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(
+            (missing, old_form, same, replaced),
+            (false, false, true, false)
         );
     }
 
@@ -981,12 +1299,76 @@ mod artifact_tests {
                 named(&[("junit-linux", false), ("junit-windows", false)]),
             ),
         ];
-        assert_eq!(first_that_kept(&runs, &["junit-linux"]), Some(29));
+        let linux = Wanted::ci_report(Os::Linux);
+        let windows = Wanted::ci_report(Os::Windows);
         assert_eq!(
-            first_that_kept(&runs, &["junit-linux", "junit-windows"]),
+            first_that_kept(&runs, std::slice::from_ref(&linux)),
+            Some(29)
+        );
+        assert_eq!(
+            first_that_kept(&runs, &[linux.clone(), windows.clone()]),
             Some(27)
         );
-        assert_eq!(first_that_kept(&runs[..3], &["junit-windows"]), None);
+        assert_eq!(first_that_kept(&runs[..3], &[windows]), None);
+        assert_eq!(
+            first_that_kept(&runs, &[Wanted::one("junit-windows")]),
+            Some(27)
+        );
+    }
+
+    /// Since the Windows job was split, a run keeps Windows' report in two
+    /// parts: a run of `main` kept it when it kept both, and a run that
+    /// kept one part only did not.
+    #[test]
+    fn a_split_run_kept_its_windows_report_when_it_kept_both_parts() {
+        let named = |names: &[&str]| {
+            names
+                .iter()
+                .map(|name| ((*name).to_owned(), false))
+                .collect::<Vec<_>>()
+        };
+        let runs = vec![
+            (40, named(&["junit-linux", "junit-windows-tiers"])),
+            (39, named(&["junit-linux", "junit-windows-system"])),
+            (
+                38,
+                named(&["junit-linux", "junit-windows-tiers", "junit-windows-system"]),
+            ),
+        ];
+        let needs = [Wanted::ci_report(Os::Linux), Wanted::ci_report(Os::Windows)];
+        assert_eq!(first_that_kept(&runs, &needs), Some(38));
+        // Neither part alone stands for the report.
+        assert_eq!(first_that_kept(&runs[..2], &needs), None);
+        assert_eq!(
+            Wanted::ci_report(Os::Windows).describe(),
+            "`junit-windows-tiers` and `junit-windows-system`, or `junit-windows`"
+        );
+        assert_eq!(Wanted::ci_report(Os::Linux).describe(), "`junit-linux`");
+    }
+
+    /// The names the readers look for are the ones the `ci` workflow
+    /// uploads: each part's artifact is named in its job's matrix, and the
+    /// Linux one in its job.
+    #[test]
+    fn the_report_artifacts_are_named_as_the_ci_workflow_names_them() {
+        let workflow =
+            std::fs::read_to_string(crate::workspace::root().join(".github/workflows/ci.yml"))
+                .unwrap();
+        for os in [Os::Linux, Os::Windows] {
+            let current = super::report_forms(os)[0];
+            for name in current {
+                assert!(
+                    workflow.contains(&format!("junit: {name}\n"))
+                        || workflow.contains(&format!("name: {name}\n")),
+                    "ci.yml does not upload `{name}`"
+                );
+            }
+        }
+        // Tiers 1 and 2 first, as the one job's report held them.
+        assert_eq!(
+            super::report_forms(Os::Windows)[0],
+            ["junit-windows-tiers", "junit-windows-system"]
+        );
     }
 }
 
@@ -1222,7 +1604,7 @@ mod try_artifact_tests {
     use std::path::{Path, PathBuf};
 
     use super::{
-        Resolved, TimesRequest, ab_report_name, ends_with_names, files_under, needs_of,
+        Chosen, Resolved, TimesRequest, ab_report_name, ends_with_names, files_under, needs_of,
         report_of_try, which_artifact,
     };
 
@@ -1318,21 +1700,52 @@ mod try_artifact_tests {
                 .map(|(name, expired)| ((*name).to_owned(), *expired))
                 .collect::<Vec<_>>()
         };
-        // A `ci` run: its own report.
+        // A `ci` run from before the split: its own report.
         let ci = listed(&[("junit-linux", false), ("junit-windows", false)]);
         assert_eq!(
             which_artifact(1, &ci, Os::Windows).unwrap(),
-            Some("junit-windows")
+            Chosen::Ci(&["junit-windows"])
+        );
+        assert_eq!(
+            which_artifact(1, &ci, Os::Linux).unwrap(),
+            Chosen::Ci(&["junit-linux"])
+        );
+        // A split run: both parts, tiers 1 and 2 first.
+        let split = listed(&[
+            ("junit-linux", false),
+            ("junit-windows-system", false),
+            ("junit-windows-tiers", false),
+        ]);
+        assert_eq!(
+            which_artifact(1, &split, Os::Windows).unwrap(),
+            Chosen::Ci(&["junit-windows-tiers", "junit-windows-system"])
+        );
+        // One part only: no whole report, said, and never the one part read
+        // as the whole.
+        let cut = listed(&[("junit-linux", false), ("junit-windows-tiers", false)]);
+        assert_eq!(
+            which_artifact(1, &cut, Os::Windows).unwrap(),
+            Chosen::Partial {
+                kept: "junit-windows-tiers",
+                missing: "junit-windows-system"
+            }
+        );
+        // A part that has expired is an error, as a whole report's is.
+        let old_part = listed(&[
+            ("junit-windows-tiers", false),
+            ("junit-windows-system", true),
+        ]);
+        let error = which_artifact(1, &old_part, Os::Windows).unwrap_err();
+        assert!(
+            error.contains("`junit-windows-system` has expired"),
+            "{error}"
         );
         // A `try` run of Windows alone: Windows' is there and Linux's is not.
         let tried = listed(&[("try-windows", false)]);
-        assert_eq!(
-            which_artifact(1, &tried, Os::Windows).unwrap(),
-            Some("try-windows")
-        );
-        assert_eq!(which_artifact(1, &tried, Os::Linux).unwrap(), None);
+        assert_eq!(which_artifact(1, &tried, Os::Windows).unwrap(), Chosen::Try);
+        assert_eq!(which_artifact(1, &tried, Os::Linux).unwrap(), Chosen::None);
         // A run that kept nothing (a change of documentation): none.
-        assert_eq!(which_artifact(1, &[], Os::Linux).unwrap(), None);
+        assert_eq!(which_artifact(1, &[], Os::Linux).unwrap(), Chosen::None);
         // One that has expired is an error naming it, never "none".
         let old = listed(&[("junit-linux", true), ("try-windows", true)]);
         let error = which_artifact(1, &old, Os::Linux).unwrap_err();
@@ -1343,11 +1756,12 @@ mod try_artifact_tests {
 
     #[test]
     fn a_run_of_main_must_have_kept_every_oses_report_so_that_both_are_of_one_commit() {
+        use super::Wanted;
         use crate::tiers::Os;
-        assert_eq!(needs_of(&[Os::Windows]), ["junit-windows"]);
+        assert_eq!(needs_of(&[Os::Windows]), [Wanted::ci_report(Os::Windows)]);
         assert_eq!(
             needs_of(&[Os::Linux, Os::Windows]),
-            ["junit-linux", "junit-windows"]
+            [Wanted::ci_report(Os::Linux), Wanted::ci_report(Os::Windows)]
         );
     }
 
@@ -1423,5 +1837,71 @@ mod try_artifact_tests {
             let error = TimesRequest::parse(&strings(arguments)).unwrap_err();
             assert!(error.contains(expected), "{arguments:?}: {error}");
         }
+    }
+
+    /// A split run's two parts are made one report, tiers 1 and 2 first,
+    /// the system tests held above the start their probe measured; a part
+    /// with no report of its own (its probe's alone) makes no report.
+    #[test]
+    fn a_split_runs_parts_are_one_report_with_the_system_tests_above_their_own_start() {
+        let suite = |binary: &str, name: &str, time: &str| {
+            format!(
+                "<testsuites name=\"nextest-run\">\n<testsuite name=\"{binary}\"><testcase \
+                 name=\"{name}\" classname=\"{binary}\" time=\"{time}\"/></testsuite>\n\
+                 </testsuites>\n"
+            )
+        };
+        let dir = scratch("merge-parts");
+        let (tiers, system) = (dir.join("tiers"), dir.join("system"));
+        std::fs::create_dir_all(&tiers).unwrap();
+        std::fs::create_dir_all(&system).unwrap();
+        std::fs::write(
+            tiers.join("junit.xml"),
+            suite("cineris-base", "t::a", "0.010"),
+        )
+        .unwrap();
+        std::fs::write(
+            system.join("junit.xml"),
+            suite("cineris-cli::system", "t::sys_a", "1.000"),
+        )
+        .unwrap();
+        let probe: String = (0..600)
+            .map(|index| {
+                format!(
+                    "<testsuite name=\"cineris-base\"><testcase name=\"t::q{index}\" \
+                     classname=\"cineris-base\" time=\"0.020\"/></testsuite>\n"
+                )
+            })
+            .collect();
+        std::fs::write(
+            system.join(crate::tiers::START_PROBE_FILE),
+            format!("<testsuites name=\"nextest-run\">\n{probe}</testsuites>\n"),
+        )
+        .unwrap();
+        let parts = [
+            ("junit-windows-tiers", tiers.clone()),
+            ("junit-windows-system", system.clone()),
+        ];
+        let merged = super::merge_parts(1, &parts).unwrap().unwrap();
+        let cases = crate::junit::parse(&merged);
+        let names: Vec<(&str, Option<f64>)> = cases
+            .iter()
+            .map(|case| (case.name.as_str(), case.start))
+            .collect();
+        assert_eq!(names, [("t::a", None), ("t::sys_a", Some(0.02))]);
+        // A probe the job's own check refused measured no start: no report.
+        std::fs::write(
+            system.join(crate::tiers::START_PROBE_FILE),
+            "<testsuites name=\"nextest-run\">\n<testsuite name=\"cineris-base\"><testcase \
+             name=\"t::q\" classname=\"cineris-base\" time=\"0.020\"/></testsuite>\n\
+             </testsuites>\n",
+        )
+        .unwrap();
+        assert_eq!(super::merge_parts(1, &parts).unwrap(), None);
+        // A part that kept its probe's report and not its own.
+        std::fs::remove_file(system.join("junit.xml")).unwrap();
+        let none = super::merge_parts(1, &parts).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(none, None);
     }
 }

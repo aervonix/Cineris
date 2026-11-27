@@ -322,6 +322,227 @@ fn ci_test_steps() -> Vec<Step> {
     all
 }
 
+/// The file of the tests' archive in the folder `ci test --archive DIR`
+/// writes, beside this command's own binary ([`xtask_copy_name`]).
+const ARCHIVE_FILE: &str = "tests.tar.zst";
+
+/// The name this command's binary is kept under beside the archive: the
+/// jobs that run from the archive run it, and build nothing.
+fn xtask_copy_name() -> String {
+    format!("xtask{}", std::env::consts::EXE_SUFFIX)
+}
+
+/// The unit tests the system part runs first, on its own runner, to
+/// measure the start of a test's process there (`tiers::start_probe_path`):
+/// the libraries' own tests of three crates whose tests do next to nothing
+/// but start, over 500 of them (`tiers::SMALL_SAMPLE`), so that the figure
+/// is not one of too few tests. About 4 s at two at a time on Windows.
+pub(crate) const START_PROBE: &str = "kind(lib) & (package(cineris-base) | package(cineris-term) \
+                                      | package(cineris-tools)) & not test(/(^|::)sys_/)";
+
+/// `cargo nextest archive` for the blocking test job: the build `ci test`
+/// makes, in the same profile with the same features, written to `file`.
+pub(crate) fn archive_command(file: &Path) -> Vec<String> {
+    let mut command = vec![
+        "nextest".to_owned(),
+        "archive".to_owned(),
+        "--workspace".to_owned(),
+    ];
+    command.extend(workspace::implied_features(&[]));
+    command.extend(["--locked", "--cargo-profile", "ci", "--archive-file"].map(str::to_owned));
+    command.push(file.display().to_string());
+    command
+}
+
+/// The steps of `ci test --archive DIR`: the tests built and archived, and
+/// this command's binary kept beside the archive.
+fn ci_archive_steps(dir: PathBuf) -> Vec<Step> {
+    let build_dir = dir.clone();
+    vec![
+        Step::closure("build tests", move || {
+            forget_reports(&workspace::root())?;
+            std::fs::create_dir_all(&build_dir)
+                .map_err(|error| format!("could not make {}: {error}", build_dir.display()))?;
+            let file = build_dir.join(ARCHIVE_FILE);
+            // An archive left by an earlier run is not this build's.
+            workspace::forget_report(&file)?;
+            steps::cargo(&archive_command(&file))
+        }),
+        Step::closure("keep xtask beside the archive", move || {
+            let here = std::env::current_exe()
+                .map_err(|error| format!("could not find this command's binary: {error}"))?;
+            let copy = dir.join(xtask_copy_name());
+            std::fs::copy(&here, &copy).map_err(|error| {
+                format!(
+                    "could not copy {} to {}: {error}",
+                    here.display(),
+                    copy.display()
+                )
+            })?;
+            Ok(())
+        }),
+    ]
+}
+
+/// `cargo nextest list` that extracts the archive `file` over the checkout
+/// at `root`: the tests' binaries land in `target/` where the build job
+/// built them, so the paths compiled into them (`CARGO_BIN_EXE_*`,
+/// `CARGO_MANIFEST_DIR`, `CARGO_TARGET_TMPDIR`) hold in a checkout at the
+/// same place, which a hosted runner's workspace is.
+pub(crate) fn extract_command(file: &Path, root: &Path) -> Vec<String> {
+    let root = root.display().to_string();
+    let mut command: Vec<String> = ["nextest", "list", "--archive-file"]
+        .map(str::to_owned)
+        .to_vec();
+    command.push(file.display().to_string());
+    command.extend(["--workspace-remap".to_owned(), root.clone()]);
+    command.extend(["--extract-to".to_owned(), root]);
+    command.extend(
+        [
+            "--extract-overwrite",
+            "--list-type",
+            "binaries-only",
+            "--profile",
+            "ci",
+        ]
+        .map(str::to_owned),
+    );
+    command
+}
+
+/// That the archive's tests were built in a checkout at `root`'s place, as
+/// the cargo metadata the archive carries (`metadata`) says: the paths
+/// compiled into them point there, and in a checkout elsewhere the system
+/// tests would start a binary that is not there, or read another tree's
+/// files.
+pub(crate) fn check_built_at(metadata: &Path, root: &Path) -> Result<()> {
+    let text = std::fs::read_to_string(metadata)
+        .map_err(|error| format!("could not read {}: {error}", metadata.display()))?;
+    let value: serde_json::Value =
+        serde_json::from_str(&text).map_err(|error| format!("{}: {error}", metadata.display()))?;
+    let built = value
+        .get("workspace_root")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| format!("{} names no workspace_root", metadata.display()))?;
+    if workspace::same_tree(Path::new(built), root) {
+        Ok(())
+    } else {
+        Err(format!(
+            "the tests were built in {built}, and this checkout is {}: the paths compiled into \
+             them (`CARGO_BIN_EXE_*`, `CARGO_MANIFEST_DIR`) point at the other. The build job and \
+             the test jobs must check out to the same folder",
+            root.display()
+        ))
+    }
+}
+
+/// `cargo nextest run` of the tests `filter` chooses, from the archive
+/// [`extract_command`] extracted at `root`, in the `ci` profile. A filter
+/// that chooses no test fails the run.
+pub(crate) fn from_archive_run(root: &Path, filter: &str) -> Vec<String> {
+    let metadata = root.join("target").join("nextest");
+    let mut run: Vec<String> = vec!["nextest".to_owned(), "run".to_owned()];
+    run.push("--binaries-metadata".to_owned());
+    run.push(
+        metadata
+            .join("binaries-metadata.json")
+            .display()
+            .to_string(),
+    );
+    run.push("--cargo-metadata".to_owned());
+    run.push(metadata.join("cargo-metadata.json").display().to_string());
+    run.extend(["--workspace-remap".to_owned(), root.display().to_string()]);
+    run.extend([
+        "--target-dir-remap".to_owned(),
+        root.join("target").display().to_string(),
+    ]);
+    run.extend(["--profile", "ci", "--no-tests=fail", "-E"].map(str::to_owned));
+    run.push(filter.to_owned());
+    run
+}
+
+/// The steps of `ci test PART --from-archive DIR`: the archive extracted
+/// over this checkout, the part's runs, and the tier budgets of its tiers.
+/// The system part runs its start probe first ([`START_PROBE`]), and keeps
+/// its report apart from the job's.
+fn ci_part_steps(part: tiers::Part, dir: PathBuf) -> Vec<Step> {
+    // Whether the archive was extracted, and into the checkout it was built
+    // in: every later step needs it, and none runs a test without it. The
+    // steps run whatever an earlier one did, so each asks.
+    let extracted = std::rc::Rc::new(std::cell::Cell::new(false));
+    let once = extracted.clone();
+    let mut all = vec![Step::closure("extract the tests", move || {
+        let root = workspace::root();
+        forget_reports(&root)?;
+        steps::cargo(&extract_command(&dir.join(ARCHIVE_FILE), &root))?;
+        check_built_at(
+            &root
+                .join("target")
+                .join("nextest")
+                .join("cargo-metadata.json"),
+            &root,
+        )?;
+        // Cargo makes the folder of `CARGO_TARGET_TMPDIR` as it builds the
+        // tests, and the archive does not hold it.
+        let tmp = root.join("target").join("ci").join("tmp");
+        std::fs::create_dir_all(&tmp)
+            .map_err(|error| format!("could not make {}: {error}", tmp.display()))?;
+        once.set(true);
+        Ok(())
+    })];
+    let needs = move |extracted: &std::cell::Cell<bool>| {
+        if extracted.get() {
+            Ok(())
+        } else {
+            Err("not run: the tests were not extracted".to_owned())
+        }
+    };
+    let ready = extracted.clone();
+    match part {
+        tiers::Part::Tiers => all.push(Step::closure("run tiers 1 and 2", move || {
+            needs(&ready)?;
+            let root = workspace::root();
+            let run = from_archive_run(&root, &format!("not {SYSTEM_TESTS}"));
+            run_with_rerun(&run, &root, crate::stall::UNIT_AND_INTEGRATION)
+        })),
+        tiers::Part::System => {
+            let probe_ready = ready.clone();
+            all.push(Step::closure(
+                "measure the start of a test's process",
+                move || {
+                    needs(&probe_ready)?;
+                    let root = workspace::root();
+                    let run = from_archive_run(&root, START_PROBE);
+                    let ran = run_with_rerun(&run, &root, crate::stall::SYSTEM);
+                    // Its report is kept apart, whatever the run did: the tier
+                    // check reads it, and refuses one that failed.
+                    let (report, probe) = (
+                        workspace::nextest_report(&root, "ci"),
+                        tiers::start_probe_path(&root),
+                    );
+                    if report.is_file() {
+                        std::fs::rename(&report, &probe).map_err(|error| {
+                            format!("could not move {}: {error}", report.display())
+                        })?;
+                    }
+                    ran
+                },
+            ));
+            all.push(Step::closure("run the system tests", move || {
+                needs(&ready)?;
+                let root = workspace::root();
+                let run = from_archive_run(&root, SYSTEM_TESTS);
+                run_with_rerun(&run, &root, crate::stall::SYSTEM)
+            }));
+        }
+    }
+    all.push(Step::closure("tier budgets", move || {
+        needs(&extracted)?;
+        tiers::check_ci_part(part)
+    }));
+    all
+}
+
 /// The system tests, tier 3, as `.config/nextest.toml` picks them: by name.
 pub(crate) const SYSTEM_TESTS: &str = "test(/(^|::)sys_/)";
 
@@ -571,6 +792,9 @@ fn aside_path(root: &Path) -> PathBuf {
 pub(crate) fn forget_reports(root: &Path) -> Result<()> {
     workspace::forget_report(&workspace::nextest_report(root, "ci"))?;
     workspace::forget_report(&aside_path(root))?;
+    // The system part's start probe, which `ci --tiers` would otherwise
+    // read beside the next run's report.
+    workspace::forget_report(&tiers::start_probe_path(root))?;
     // What the pressure said of the runs that wrote them.
     workspace::forget_report(&crate::stall::record_path(root))
 }
@@ -635,6 +859,22 @@ pub(crate) fn ci(arguments: &[String]) -> Result<()> {
             require_nextest()?;
             steps::run("Tests", ci_test_steps())
         }
+        ["test", "--archive", dir] => {
+            require_nextest()?;
+            steps::run(
+                "Build the tests and archive them",
+                ci_archive_steps(PathBuf::from(dir)),
+            )
+        }
+        ["test", part, "--from-archive", dir] => {
+            let part = tiers::Part::parse(part).ok_or_else(|| CI_USAGE.to_owned())?;
+            require_nextest()?;
+            let title = match part {
+                tiers::Part::Tiers => "Tiers 1 and 2, from the tests' archive",
+                tiers::Part::System => "The system tests, from the tests' archive",
+            };
+            steps::run(title, ci_part_steps(part, PathBuf::from(dir)))
+        }
         [] => {
             require_nextest()?;
             let mut all: Vec<Step> = CHECK_STEPS
@@ -656,15 +896,24 @@ pub(crate) fn check_ci_arguments(arguments: &[String]) -> Result<()> {
     }
     let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
     match arguments.as_slice() {
-        [] | ["lint" | "test"] => Ok(()),
+        [] | ["lint" | "test"] | ["test", "--archive", _] => Ok(()),
+        ["test", part, "--from-archive", _] if tiers::Part::parse(part).is_some() => Ok(()),
         other => Err(format!(
-            "`ci {}` is not a form of `ci`: `ci`, `ci lint`, `ci test` or `ci --tiers …`",
+            "`ci {}` is not a form of `ci`: `ci`, `ci lint`, `ci test`, `ci test --archive DIR`, \
+             `ci test tiers|system --from-archive DIR` or `ci --tiers …`",
             other.join(" ")
         )),
     }
 }
 
 const CI_USAGE: &str = "usage: cargo xtask ci [lint|test]
+       cargo xtask ci test --archive DIR
+                              builds the tests as `ci test` does and writes DIR/tests.tar.zst
+                              (a nextest archive) and DIR/xtask, this command, beside it
+       cargo xtask ci test tiers|system --from-archive DIR
+                              one part of `ci test` from that archive, run in this checkout:
+                              tiers 1 and 2, or the system tests after a start probe; then
+                              the tier budgets of that part
        cargo xtask ci --tiers [-p CRATE]... [--top N] [-- NEXTEST ARGUMENT...]
        cargo xtask ci --tiers --like-runner [--base DIR] [-p CRATE]... [--top N]
                               DIR: another checkout of the workspace (`main`'s), run and
@@ -1629,5 +1878,181 @@ mod tests {
     fn an_unknown_ci_argument_is_refused_with_the_usage() {
         let error = ci(&strings(&["tests"])).unwrap_err();
         assert!(error.contains("ci --tiers"), "{error}");
+    }
+
+    #[test]
+    fn the_archive_is_the_build_ci_test_makes() {
+        let file = std::path::Path::new("out").join("tests.tar.zst");
+        let command = super::archive_command(&file);
+        let file = file.display().to_string();
+        assert_eq!(
+            command,
+            strings(&[
+                "nextest",
+                "archive",
+                "--workspace",
+                "--locked",
+                "--cargo-profile",
+                "ci",
+                "--archive-file",
+                &file,
+            ])
+        );
+        // The same profile and packages as the job's own build.
+        let mut build = super::ci_run(&[]);
+        build.retain(|word| word != "run" && word != "--profile");
+        for word in build.iter().filter(|word| word.as_str() != "nextest") {
+            assert!(command.contains(word), "{word} of {build:?}");
+        }
+    }
+
+    #[test]
+    fn the_archive_is_extracted_over_the_checkout_and_run_from_there() {
+        let root = std::path::Path::new("work");
+        let archive = std::path::Path::new("dir").join("tests.tar.zst");
+        let root_text = root.display().to_string();
+        let extract = super::extract_command(&archive, root);
+        assert_eq!(&extract[..2], strings(&["nextest", "list"]).as_slice());
+        let after = |list: &[String], flag: &str| {
+            let at = list.iter().position(|word| word == flag).unwrap();
+            list[at + 1].clone()
+        };
+        assert_eq!(
+            after(&extract, "--archive-file"),
+            archive.display().to_string()
+        );
+        assert_eq!(after(&extract, "--extract-to"), root_text);
+        assert_eq!(after(&extract, "--workspace-remap"), root_text);
+        assert!(extract.contains(&"--extract-overwrite".to_owned()));
+
+        let run = super::from_archive_run(root, "test(=a)");
+        assert_eq!(&run[..2], strings(&["nextest", "run"]).as_slice());
+        let target = root.join("target");
+        assert_eq!(
+            after(&run, "--binaries-metadata"),
+            target
+                .join("nextest")
+                .join("binaries-metadata.json")
+                .display()
+                .to_string()
+        );
+        assert_eq!(
+            after(&run, "--target-dir-remap"),
+            target.display().to_string()
+        );
+        assert_eq!(after(&run, "--workspace-remap"), root_text);
+        assert_eq!(after(&run, "--profile"), "ci");
+        assert_eq!(after(&run, "-E"), "test(=a)");
+        // A part that chooses no test fails; it never passes having run
+        // nothing.
+        assert!(run.contains(&"--no-tests=fail".to_owned()), "{run:?}");
+        assert!(!run.iter().any(|word| word == "--no-tests=pass"), "{run:?}");
+        // The run does not extract the archive again, and builds nothing.
+        assert!(
+            !run.iter().any(|word| word.starts_with("--archive")),
+            "{run:?}"
+        );
+        assert!(!run.iter().any(|word| word == "--cargo-profile"), "{run:?}");
+    }
+
+    #[test]
+    fn the_start_probe_is_unit_tests_and_no_system_test() {
+        let probe = super::START_PROBE;
+        assert!(probe.starts_with("kind(lib) & "), "{probe}");
+        assert!(
+            probe.ends_with(&format!("& not {}", super::SYSTEM_TESTS)),
+            "{probe}"
+        );
+    }
+
+    #[test]
+    fn the_archive_forms_of_ci_test_are_taken_and_others_refused() {
+        for taken in [
+            &["test", "--archive", "d"][..],
+            &["test", "tiers", "--from-archive", "d"],
+            &["test", "system", "--from-archive", "d"],
+        ] {
+            assert_eq!(
+                super::check_ci_arguments(&strings(taken)),
+                Ok(()),
+                "{taken:?}"
+            );
+        }
+        for refused in [
+            &["test", "all", "--from-archive", "d"][..],
+            &["test", "--archive"],
+            &["test", "tiers"],
+            &["test", "system", "--archive", "d"],
+        ] {
+            assert!(
+                super::check_ci_arguments(&strings(refused)).is_err(),
+                "{refused:?}"
+            );
+            assert!(ci(&strings(refused)).is_err(), "{refused:?}");
+        }
+    }
+
+    #[test]
+    fn the_tests_are_run_only_in_a_checkout_where_they_were_built() {
+        let dir = std::env::temp_dir().join(format!("xtask-built-at-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let metadata = dir.join("cargo-metadata.json");
+        let here = dir.join("work");
+        let write = |root: &std::path::Path| {
+            let value = serde_json::json!({ "workspace_root": root.display().to_string() });
+            std::fs::write(&metadata, value.to_string()).unwrap();
+        };
+        write(&here);
+        let same = super::check_built_at(&metadata, &here);
+        write(&dir.join("elsewhere"));
+        let other = super::check_built_at(&metadata, &here);
+        std::fs::write(&metadata, "{}").unwrap();
+        let unnamed = super::check_built_at(&metadata, &here);
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(same, Ok(()));
+        assert!(
+            other
+                .as_ref()
+                .is_err_and(|error| error.contains("same folder")),
+            "{other:?}"
+        );
+        assert!(unnamed.is_err());
+    }
+
+    /// A part's runs and its tier check run nothing until the archive has
+    /// been extracted into the checkout it was built in.
+    #[test]
+    fn a_parts_runs_wait_for_the_extraction() {
+        for part in [crate::tiers::Part::Tiers, crate::tiers::Part::System] {
+            let steps = super::ci_part_steps(part, PathBuf::from("no-such-archive-folder"));
+            assert_eq!(steps[0].name, "extract the tests");
+            assert!(steps.len() >= 3, "{part:?}");
+            // The first step not run: every other refuses, running nothing.
+            for step in &steps[1..] {
+                let crate::steps::Action::Closure(run) = &step.action else {
+                    panic!("{}: not a closure", step.name);
+                };
+                let ran = run();
+                assert!(
+                    ran.as_ref()
+                        .is_err_and(|error| error.contains("not extracted")),
+                    "{part:?} {}: {ran:?}",
+                    step.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_reports_of_an_earlier_run_go_with_its_start_probe() {
+        let root = std::env::temp_dir().join(format!("xtask-forget-{}", std::process::id()));
+        let probe = crate::tiers::start_probe_path(&root);
+        std::fs::create_dir_all(probe.parent().unwrap()).unwrap();
+        std::fs::write(&probe, "<testsuites/>").unwrap();
+        let forgot = super::forget_reports(&root);
+        let left = probe.exists();
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(forgot, Ok(()));
+        assert!(!left, "the start probe of an earlier run was left");
     }
 }

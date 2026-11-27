@@ -980,6 +980,7 @@ FAILED 2 of 4 times: cineris-agent::it denials::needs_one_order
             failed,
             retried,
             repeat: Some(repeat),
+            start: None,
         };
         let cases = [
             case("flaky", 3, false, false),

@@ -1489,8 +1489,8 @@ caught-by:
 rule: A run of the `try` workflow is a source of tiers: its `try-<os>` artifact holds the report when the run kept no `junit-<os>`.
 file: xtask/src/runs.rs
 in: which_artifact
-find: for name in [artifact_name(os), try_artifact_name(os)] {
-replace: for name in [artifact_name(os)] {
+find: Kept::Yes => Ok(Chosen::Try),
+replace: Kept::Yes => Ok(Chosen::None),
 caught-by:
     runs::try_artifact_tests::a_report_is_the_ci_workflows_or_failing_that_a_try_runs_and_an_expired_one_is_an_error
 
@@ -1498,10 +1498,7 @@ caught-by:
 rule: A report that has expired is an error naming it, never a report to read or a column left out.
 file: xtask/src/runs.rs
 in: which_artifact
-find:
-    return Err(format!(
-        "run {run}'s `{name}` has expired: a run's reports are kept for 14 days"
-    ));
+find: return Err(expired(name));
 replace: continue;
 caught-by:
     runs::try_artifact_tests::a_report_is_the_ci_workflows_or_failing_that_a_try_runs_and_an_expired_one_is_an_error
@@ -1537,8 +1534,8 @@ caught-by:
 rule: A comparison of both OSes reads them from one run of `main`, which kept both reports.
 file: xtask/src/runs.rs
 in: needs_of
-find: oses.iter().map(|os| artifact_name(*os)).collect()
-replace: oses.iter().take(1).map(|os| artifact_name(*os)).collect()
+find: oses.iter().map(|os| Wanted::ci_report(*os)).collect()
+replace: oses.iter().take(1).map(|os| Wanted::ci_report(*os)).collect()
 caught-by:
     runs::try_artifact_tests::a_run_of_main_must_have_kept_every_oses_report_so_that_both_are_of_one_commit
 

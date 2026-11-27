@@ -6,7 +6,7 @@
 rule: Each side of a comparison is held against its own process-start cost.
 file: xtask/src/compare.rs
 in: moved
-find: let above = (case.seconds - start).max(0.0);
+find: let above = case.above(start);
 replace: let above = case.seconds;
 caught-by:
     compare::tests::a_slower_runner_alone_moves_nothing

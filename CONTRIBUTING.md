@@ -206,7 +206,7 @@ No new dependency without a row in [docs/dependencies.md](docs/dependencies.md) 
 
 ## Continuous integration
 
-Four jobs block a pull request: `lint-linux`, `lint-windows`, `test-linux` and `test-windows`. Each must finish in under 5 minutes, and on a pull request a job that takes longer fails by its timeout (a test job on `main` has 12, so that it can rebuild a cold cache and save it). The layout and the measured times are in [docs/testing-and-ci.md](docs/testing-and-ci.md).
+Six jobs block a pull request: `lint-linux`, `lint-windows`, `test-linux`, and on Windows `build-windows`, which builds the tests, and `test-windows-tiers` and `test-windows-system`, which run them from its archive. Each must finish in under 5 minutes, and on a pull request a job that takes longer fails by its timeout (a test or build job on `main` has 12, so that it can rebuild a cold cache and save it). The layout and the measured times are in [docs/testing-and-ci.md](docs/testing-and-ci.md).
 
 - A step is not done until its tests pass on both OSes.
 - Nothing that blocks uses a secret or a paid API.

@@ -32,9 +32,36 @@ pub(crate) struct TestCase {
     /// The repeat this case is from, counted from 0, when the report is of
     /// a `--stress-count` run. nextest names the suite `<binary>@stress-<n>`.
     pub(crate) repeat: Option<u32>,
+    /// The start of a test's process on the runner this case ran on, when
+    /// its report was measured apart from the rest of the run's: a split
+    /// job's system tests, by their own start probe, written on their
+    /// suites as [`START_ATTRIBUTE`] when the parts are made one report
+    /// ([`with_start`]). `None`: the start of the whole report.
+    pub(crate) start: Option<f64>,
+}
+
+/// The attribute of a `<testsuite>` that says the start its cases are held
+/// above ([`TestCase::start`]). nextest writes no such attribute; only the
+/// readers of a split run do, in the report they make of its parts.
+pub(crate) const START_ATTRIBUTE: &str = "cineris-start";
+
+/// `xml`, every `<testsuite>` of it saying that its cases are held above a
+/// start of `start` seconds ([`TestCase::start`]).
+pub(crate) fn with_start(xml: &str, start: f64) -> String {
+    xml.replace(
+        "<testsuite ",
+        &format!("<testsuite {START_ATTRIBUTE}=\"{start:.6}\" "),
+    )
 }
 
 impl TestCase {
+    /// What the case took above the start of its process: `start`, the
+    /// report's, unless the case carries its own runner's. A case that took
+    /// less counts as nothing.
+    pub(crate) fn above(&self, start: f64) -> f64 {
+        (self.seconds - self.start.unwrap_or(start)).max(0.0)
+    }
+
     /// `<binary> <name>`: how nextest writes a test, and how a break names
     /// the tests that catch it.
     pub(crate) fn id(&self) -> String {
@@ -111,6 +138,9 @@ pub(crate) fn parse(xml: &str) -> Vec<TestCase> {
             let (_, number) = name.rsplit_once("@stress-")?;
             number.parse().ok()
         });
+        let start = attribute(suite_tag, START_ATTRIBUTE)
+            .and_then(|start| start.parse::<f64>().ok())
+            .filter(|start| start.is_finite() && *start >= 0.0);
         for element in suite.split("<testcase ").skip(1) {
             let tag = element.split('>').next().unwrap_or(element);
             // `<testcase ... />` has no children. Otherwise they run to the
@@ -140,6 +170,7 @@ pub(crate) fn parse(xml: &str) -> Vec<TestCase> {
                     failed: children.contains("<failure") || children.contains("<error"),
                     retried: children.contains("<flakyFailure") || children.contains("<flakyError"),
                     repeat,
+                    start,
                 });
             }
         }
@@ -459,6 +490,7 @@ pub(crate) mod tests {
             failed: false,
             retried: false,
             repeat: None,
+            start: None,
         }
     }
 
@@ -766,5 +798,30 @@ lost the race</stackTrace><system-out>running 1 test</system-out><system-err>noi
     fn a_report_without_its_root_is_not_merged() {
         assert!(super::merge(REPORT, "<testsuite name=\"a\"></testsuite>").is_err());
         assert!(super::merge("", REPORT).is_err());
+    }
+
+    /// A split run's system tests are held above their own runner's start:
+    /// the report made of the parts says so on their suites, and a case
+    /// read from it carries it.
+    #[test]
+    fn a_suites_own_start_is_read_onto_its_cases_and_taken_off_them() {
+        let system = "<testsuites name=\"nextest-run\">\n<testsuite name=\"cineris-cli::system\">\
+                      <testcase name=\"t::sys_a\" classname=\"cineris-cli::system\" \
+                      time=\"1.000\"/></testsuite>\n</testsuites>\n";
+        let tiers = "<testsuites name=\"nextest-run\">\n<testsuite name=\"cineris-base\">\
+                     <testcase name=\"t::a\" classname=\"cineris-base\" time=\"0.010\"/>\
+                     </testsuite>\n</testsuites>\n";
+        let merged = super::merge(tiers, &super::with_start(system, 0.25)).unwrap();
+        assert!(!merged.contains("<testsuites cineris-start"), "{merged}");
+        let cases = parse(&merged);
+        assert_eq!(cases.len(), 2);
+        assert_eq!(cases[0].start, None);
+        assert_eq!(cases[1].start, Some(0.25));
+        // The report's start for the one, its own for the other.
+        assert!((cases[0].above(0.004) - 0.006).abs() < 1e-9);
+        assert!((cases[1].above(0.004) - 0.75).abs() < 1e-9);
+        // A start that is not a time is none.
+        let odd = system.replace("<testsuite ", "<testsuite cineris-start=\"-1\" ");
+        assert_eq!(parse(&odd)[0].start, None);
     }
 }
