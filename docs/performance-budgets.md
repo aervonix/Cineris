@@ -62,6 +62,20 @@ Numbers the product and the tooling must meet, how each is measured, and where e
 
 Both are within budget. The inline presenter's peak is near its budget, and most of it comes before any turn: 34.2 MB at the peak while idle, the index's first pass over the 20,000 files (above). The full screen keeps every finished block to draw again; what it holds of a box's output is its last 64 KiB ([outstanding/a-kept-box-holds-only-the-end-of-its-output.md](outstanding/a-kept-box-holds-only-the-end-of-its-output.md)).
 
+**Measured again with reasoning, in the fixes of the review of step 25:** the same test, which now plays the design's mix with 16 KiB of reasoning streamed at the start of each turn, on the shipped build, on an otherwise idle machine, 2026-11-27, in MB. The tree before the fix held every reasoning twice in the interface, and without a bound; the fix holds it once, to 8 KiB.
+
+| | After 200 turns | Peak |
+|---|---|---|
+| `main`, no reasoning: inline (budget 40) | 32.6 | 42.4 |
+| `main`, no reasoning: full screen (budget 80) | 32.8; 35.6 after scrolling, resizing and searching | 43.0 |
+| Reasoning, before the fix: inline | 55.5 | 71.7 |
+| Reasoning, before the fix: full screen | 55.7; 59.4 after | 83.0 |
+| Reasoning, with the fix: inline | 48.4 | 64.5 |
+| Reasoning, with the fix: full screen | 48.8; 53.5 after | 66.9 |
+| The fix's tree with no reasoning: inline | 32.3 | 41.1 |
+
+**The inline presenter is over its budget with reasoning, by 8.4 MB after the fix.** The interface holds at most 1.6 MB of it; the rest of the 16.1 MB, and of the 22.9 MB of peak, is the session's and the requests' ([outstanding/two-hundred-turns-of-reasoning-pass-the-inline-budget.md](outstanding/two-hundred-turns-of-reasoning-pass-the-inline-budget.md)). The full screen is within its 80 MB. The 200 turns took 10.9 s inline (11.4 s of the binary's CPU) and 11.2 s in the full screen with reasoning, and 9.6 s and 9.8 s without; a run of the test before it waited on the screen took 130 s inline, the test's own reading of the terminal's history. Repeat with `cargo xtask corpus fetch`, then `cargo test --profile dist --target x86_64-unknown-linux-musl -p cineris-cli --test system perf_two_hundred_turns -- --ignored --nocapture` (`CINERIS_PERF_REASONING=0` for none).
+
 **In a workspace of real code, since the fixes of the review of step 23** (finding 12c), which found 29.2 MB at 20,000 files: the budget holds for a workspace of 20,000 files as well as an empty one, the owner's call. `perf_idle_memory_in_a_workspace_of_real_code` (same file) fills the workspace with the pinned corpus's files (`cargo xtask corpus fetch`), 20,000 and 100,000 of them, and reads the binary's memory once it has used no CPU for a second, its session's first index pass made: `VmRSS` and its peak `VmHWM` on Linux, the working set and its peak on Windows. The `@` list, which the application asked for when a session opened and copied on its way to its worker, is now asked for on the first `@` typed and kept in one buffer. Idle, in MB, with the peak in brackets:
 
 | Build | Where | Empty | 20,000 files | 100,000 files | After the first `@`, 20,000 / 100,000 |
