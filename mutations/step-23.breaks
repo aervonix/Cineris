@@ -878,7 +878,7 @@ caught-by:
 rule: A dialog is shown by the inline screen's frame alone: under the viewer its grace has not begun. Since the review of step 23 the viewer's closing also starts the dialog's grace again, a second guard that leaves nothing this break can show.
 expect: survives
 file: crates/cineris-tui/src/app/state.rs
-in: App::drawn
+in: App::frame_drawn
 find: if self.viewing() {
 replace: if self.viewing() && at < self.began {
 packages: cineris-tui

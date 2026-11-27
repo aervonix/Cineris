@@ -802,6 +802,23 @@ pub(crate) fn permissions(command: PermissionsCommand, name: &'static str) -> Do
                 let at_terminal = crate::approvals::at_terminal();
                 let mut approved = (Vec::new(), Vec::new());
                 if !extensions.is_empty() || !hooks.is_empty() {
+                    // What the project's entry pins already, signed or not:
+                    // no signature is checked before the password, so each
+                    // is shown again, and says so (the signed approvals step).
+                    let held = core
+                        .approvals_held(Some(&project))
+                        .map(|held| held.project_pins)
+                        .unwrap_or_default();
+                    let before = |kind: &str, name: &str, hash: cineris_base::ContentHash| {
+                        if held
+                            .iter()
+                            .any(|(k, n, h)| k == kind && n == name && *h == hash)
+                        {
+                            "    Approved before at this hash; your password confirms it again.\n"
+                        } else {
+                            ""
+                        }
+                    };
                     let mut listing = String::new();
                     if !extensions.is_empty() {
                         listing.push_str(
@@ -814,6 +831,7 @@ pub(crate) fn permissions(command: PermissionsCommand, name: &'static str) -> Do
                         listing
                             .push_str(&format!("  {}\n", extension.detail.replace('\n', "\n    ")));
                         listing.push_str(&format!("    Its hash is {}.\n", extension.hash()));
+                        listing.push_str(before("extension", &extension.name, extension.hash()));
                     }
                     if !hooks.is_empty() {
                         listing.push_str(
@@ -823,6 +841,7 @@ pub(crate) fn permissions(command: PermissionsCommand, name: &'static str) -> Do
                     for hook in &hooks {
                         listing.push_str(&format!("  {}\n", hook.detail.replace('\n', "\n    ")));
                         listing.push_str(&format!("    Its hash is {}.\n", hook.hash()));
+                        listing.push_str(before("hook", &hook.name, hook.hash()));
                     }
                     out!("{listing}");
                     let what = match (extensions.is_empty(), hooks.is_empty()) {

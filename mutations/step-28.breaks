@@ -3827,17 +3827,17 @@ find: pin.extend(extensions.iter().map(|extension| extension.definition.clone())
 replace: pin.extend(extensions.iter().take(0).map(|extension| extension.definition.clone()));
 packages: cineris-cli
 caught-by:
-    cineris-cli::system commands::sys_permissions_trust_approves_a_projects_extensions_only_with_the_flag_where_none_can_ask
+    cineris-cli::system commands::sys_permissions_trust_approves_a_projects_extensions_on_a_signed_yes
 
 [break] pinned-permissions-trust-asks-nobody
-rule: `cineris permissions trust` approves a project's extensions on a yes at a terminal, and with no terminal only those named with the hash they are shown with (by hash since the owner's answer to the early review of the third pull request).
+rule: `cineris permissions trust` approves a project's extensions on a yes at a terminal, the trust signed with the person's password; with no terminal it trusts nothing, whatever is named (since the signed approvals step; by hash before it, as the owner answered the early review of the third pull request).
 file: crates/cineris-cli/src/commands.rs
 in: permissions
 occurrence: 1
-find: if at_terminal {
-replace: if !at_terminal {
+find: if !at_terminal {
+replace: if at_terminal {
 caught-by:
-    cineris-cli::system commands::sys_permissions_trust_approves_a_projects_extensions_only_with_the_flag_where_none_can_ask
+    cineris-cli::system commands::sys_permissions_trust_approves_a_projects_extensions_on_a_signed_yes
 
 [break] pinned-closed-session-goes-on
 rule: A session's end ends its extensions' finding: a closed session's registration does not go on.
@@ -4280,7 +4280,7 @@ find: .map(|exe| (exe, vec![std::ffi::OsString::from(crate::args::SANDBOX)]));
 replace: .map(|exe| (exe, vec![std::ffi::OsString::from(crate::args::SANDBOX)])).filter(|_| false);
 os: linux
 caught-by:
-    commands::sys_permissions_trust_approves_a_projects_extensions_only_with_the_flag_where_none_can_ask
+    commands::sys_permissions_trust_approves_a_projects_extensions_on_a_signed_yes
 
 [break] pinned-sandbox-off-unwarned
 rule: The trust question warns, before the yes, of a write root of the project's own configuration that holds the harness's files, which trusting it leaves out of the grant (it turned the sandbox off before the third security fix).
@@ -9856,9 +9856,9 @@ caught-by:
 [break] add-question-hides-the-replacement
 rule: An existing folder of another hash at the destination is replaced only on a yes to a question that names it.
 file: crates/cineris-cli/src/ext.rs
-in: add_question
-find: Some(what) => format!("Approve `{code}` as shown, and replace {what} with it?"),
-replace: Some(_) => format!("Approve `{code}` as shown?"),
+in: add_signed
+find: Some(what) => format!("`{code}` as shown, replacing {what}")
+replace: Some(_) => format!("`{code}` as shown")
 caught-by:
     cineris-cli::bin/cineris ext::tests::what_cannot_be_added_or_removed_is_refused_first
 
@@ -10426,7 +10426,7 @@ find: (Some(given), Some(shown)) if !given.trim().eq_ignore_ascii_case(shown) =>
 replace: (Some(given), Some(shown)) if false && !given.trim().eq_ignore_ascii_case(shown) => {
 caught-by:
     cineris-cli::bin/cineris ext::tests::a_yes_is_the_persons_at_a_terminal_and_the_shown_hash_without_one
-    cineris-cli::system commands::sys_ext_add_disable_and_remove_act_only_on_the_hash_shown
+    cineris-cli::system commands::sys_ext_add_disable_and_remove_act_only_on_what_is_shown
 
 [break] hash-does-not-approve-without-a-terminal
 rule: With no terminal to ask at, the hash of what was shown approves it.
@@ -10436,16 +10436,16 @@ find: (Some(_), Some(_)) => Answer::Yes
 replace: (Some(_), Some(_)) => Answer::No
 caught-by:
     cineris-cli::bin/cineris ext::tests::a_yes_is_the_persons_at_a_terminal_and_the_shown_hash_without_one
-    cineris-cli::system commands::sys_ext_add_disable_and_remove_act_only_on_the_hash_shown
+    cineris-cli::system commands::sys_ext_add_disable_and_remove_act_only_on_what_is_shown
 
 [break] remove-without-a-yes
-rule: `ext remove` unpins and deletes only on its one yes, or the hash shown with no terminal.
+rule: `ext remove` of a folder nothing pins deletes it only on its one yes, or the hash shown with no terminal (a pinned one's yes is the person's password since the signed approvals step).
 file: crates/cineris-cli/src/ext.rs
 occurrence: 2
 find: if answer != Answer::Yes {
 replace: if false {
 caught-by:
-    cineris-cli::system commands::sys_ext_add_disable_and_remove_act_only_on_the_hash_shown
+    cineris-cli::system commands::sys_ext_add_disable_and_remove_act_only_on_what_is_shown
 
 [break] disable-of-a-gate-not-asked
 rule: `ext disable` of an extension that holds gates asks first, naming them, and with no terminal needs its pinned version's hash.
@@ -10453,7 +10453,7 @@ file: crates/cineris-cli/src/ext.rs
 find: if !gates.held.is_empty() || gates.unknown {
 replace: if false {
 caught-by:
-    cineris-cli::system commands::sys_ext_add_disable_and_remove_act_only_on_the_hash_shown
+    cineris-cli::system commands::sys_ext_add_disable_and_remove_act_only_on_what_is_shown
 
 [break] add-not-evaluated-before-the-question
 rule: `ext add` evaluates the extension before its question, and shows what it registers.
@@ -10461,7 +10461,7 @@ file: crates/cineris-cli/src/ext.rs
 find: .block_on(core.evaluate_extension(&mut to_add))
 replace: .block_on(async { Ok::<(), OpError>(()) })
 caught-by:
-    cineris-cli::system commands::sys_ext_add_disable_and_remove_act_only_on_the_hash_shown
+    cineris-cli::system commands::sys_ext_add_disable_and_remove_act_only_on_what_is_shown
 
 [break] tilde-not-expanded
 rule: A leading `~` of `ext add`'s path is the home directory.
@@ -10480,15 +10480,7 @@ find: Some((_, shown)) if !hash.trim().eq_ignore_ascii_case(shown) => Some(forma
 replace: Some((_, shown)) if false && !hash.trim().eq_ignore_ascii_case(shown) => Some(format!(
 caught-by:
     cineris-cli::bin/cineris commands::tests::a_projects_extensions_are_named_by_the_hashes_shown
-    cineris-cli::system commands::sys_permissions_trust_approves_a_projects_extensions_only_with_the_flag_where_none_can_ask
-
-[break] trust-approves-what-is-not-named
-rule: With no terminal, `permissions trust` approves only the extensions and hooks named with their hashes.
-file: crates/cineris-cli/src/commands.rs
-find: .filter(|one| is_named(&named_extensions, &one.name))
-replace: .filter(|_| true)
-caught-by:
-    cineris-cli::system commands::sys_permissions_trust_approves_a_projects_extensions_only_with_the_flag_where_none_can_ask
+    cineris-cli::system commands::sys_permissions_trust_approves_a_projects_extensions_on_a_signed_yes
 
 [break] gates-not-told
 rule: An extension's hooks on a gating event are the gates turning it off lets go.
@@ -10498,7 +10490,7 @@ find: .is_some_and(cineris_ext::event::Event::gates)
 replace: .is_some_and(|_| false)
 packages: cineris-cli
 caught-by:
-    cineris-cli::system commands::sys_ext_add_disable_and_remove_act_only_on_the_hash_shown
+    cineris-cli::system commands::sys_ext_add_disable_and_remove_act_only_on_what_is_shown
 
 [break] add-tools-not-shown
 rule: What `ext add` shows names each tool and its description, evaluated before the question.
@@ -10509,7 +10501,7 @@ replace: to_add.tools = Vec::new(); let _: Vec<(String, String)> = registration
 packages: cineris-cli
 caught-by:
     cineris-cli::bin/cineris ext::tests::ext_add_shows_what_it_registers_and_its_prompt_before_the_question
-    cineris-cli::system commands::sys_ext_add_disable_and_remove_act_only_on_the_hash_shown
+    cineris-cli::system commands::sys_ext_add_disable_and_remove_act_only_on_what_is_shown
 
 [break] add-prompt-not-shown
 rule: What `ext add` shows holds the whole text the extension adds to the system prompt.
@@ -10617,6 +10609,7 @@ caught-by:
 [break] nested-run-not-said-held
 rule: A headless run held to `read-only` says so on standard error and in its result.
 file: crates/cineris-cli/src/headless.rs
+in: write_result
 find: if front.plan.capped {
 replace: if false {
 caught-by:

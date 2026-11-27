@@ -7,8 +7,8 @@
 rule: Guard A: the permission engine, given the command line's own grammar, refuses `cineris approvals reset` to every command of a session; `approvals status` only reads.
 file: crates/cineris-cli/src/nested.rs
 in: standing
-find: ApprovalsCommand::Reset => approves("approvals reset"),
-replace: ApprovalsCommand::Reset => Standing::Safe,
+find: ApprovalsCommand::Reset => approves("approvals reset")
+replace: ApprovalsCommand::Reset => Standing::Safe
 caught-by:
     cineris-cli::bin/cineris nested::tests::each_command_is_refused_by_the_engine_exactly_when_its_standing_says
     cineris-cli::bin/cineris nested::tests::the_engines_table_reads_the_same_with_this_grammar
@@ -16,8 +16,8 @@ caught-by:
 [break] the-fallback-lets-the-password-be-reset
 rule: Guard A without a front end's grammar: the engine's fallback refuses `cineris approvals reset` as it refuses `approvals setup`.
 file: crates/cineris-policy/src/approving.rs
-find: ("approvals", Some(&["setup", "reset"])),
-replace: ("approvals", Some(&["setup"])),
+find: ("approvals", Some(&["setup", "reset"]))
+replace: ("approvals", Some(&["setup"]))
 caught-by:
     cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
 
@@ -36,8 +36,8 @@ caught-by:
 rule: With no terminal there is no signed approval: `--hash` checks what is shown, and approves nothing on its own.
 file: crates/cineris-cli/src/ext.rs
 in: signing
-find: _ => Signing::NoTerminal,
-replace: _ => Signing::Ask,
+find: _ => Signing::NoTerminal
+replace: _ => Signing::Ask
 caught-by:
     cineris-cli::bin/cineris ext::tests::a_signed_change_is_asked_only_at_a_terminal_and_no_hash_replaces_it
 

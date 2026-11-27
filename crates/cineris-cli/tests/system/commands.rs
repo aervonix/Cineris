@@ -523,6 +523,13 @@ fn sys_permissions_trust_approves_a_projects_extensions_on_a_signed_yes() {
     let again = machine.signing(&["permissions", "trust"], &["n"], PASSWORD);
     again.expect_code(0);
     assert!(again.screen.contains("Its extensions"), "{}", again.screen);
+    assert!(
+        again
+            .raw
+            .contains("Approved before at this hash; your password confirms it again."),
+        "{}",
+        again.screen
+    );
     let file = pinned();
     assert!(
         file.contains("kind = \"extension\"") && file.contains("name = \"probe\""),

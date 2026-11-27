@@ -434,8 +434,8 @@ caught-by:
 rule: The search's row is not drawn over a dialog's own last row.
 file: crates/cineris-tui/src/app/state/screen.rs
 in: App::screen_frame
-find: view.search.as_ref().filter(|_| self.dialogs.is_empty())
-replace: view.search.as_ref()
+find: .filter(|_| self.dialogs.is_empty() && !self.asking_password())
+replace: .filter(|_| true)
 caught-by:
     cineris-tui app::tests::dialogs::typing_into_the_full_screen_search_does_not_answer_a_dialog
 
@@ -2340,7 +2340,7 @@ caught-by:
 [break] the-session-opens-before-the-file-is-written
 rule: The first run holds the session until the configuration file is written and read again, so that the session is made with what was chosen.
 file: crates/cineris-tui/src/app/state.rs
-in: App::drawn
+in: App::frame_drawn
 find: if !self.first_run_holds_open()
 replace: if true
 caught-by:

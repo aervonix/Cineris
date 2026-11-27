@@ -757,7 +757,13 @@ fn what_carries_a_signature_is_counted_and_nothing_is_opened() {
         .unwrap();
     let tool = cineris_policy::Definition::of(TrustResourceKind::Hook, "probe", ["a"]);
     crate::person().pin(&pins, &tool);
-    crate::person().trust(&trust, &project.key, &project.shown, &[], false);
+    crate::person().trust(
+        &trust,
+        &project.key,
+        &project.shown,
+        std::slice::from_ref(&tool),
+        false,
+    );
     let elsewhere = cineris_protocol::ProjectKey::new("elsewhere");
     crate::model_key().trust(&trust, &elsewhere, "/elsewhere", &[], false);
     let held = core.approvals_held(Some(&project)).unwrap();
@@ -770,6 +776,10 @@ fn what_carries_a_signature_is_counted_and_nothing_is_opened() {
     assert_eq!((held.pins, held.pins_carry_signature), (1, true));
     assert_eq!((held.projects_carrying, held.projects_not_carrying), (2, 0));
     assert!(held.project_carries && held.to_use());
+    assert_eq!(
+        held.project_pins,
+        [("hook".to_owned(), "probe".to_owned(), tool.hash)]
+    );
     // Another project's entry is not this one's.
     let other = core.approvals_held(None).unwrap();
     assert!(!other.project_carries);

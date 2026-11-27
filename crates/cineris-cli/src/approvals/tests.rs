@@ -11,6 +11,7 @@ fn held(key: HeldKey) -> ApprovalsHeld {
         projects_carrying: 0,
         projects_not_carrying: 0,
         project_carries: false,
+        project_pins: Vec::new(),
     }
 }
 

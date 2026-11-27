@@ -378,7 +378,7 @@ caught-by:
 [break] typing-before-the-dialog-is-not-typing
 rule: Input no dialog took just before a dialog came holds it as typing while it is up would: a quiet second after it.
 file: crates/cineris-tui/src/app/state.rs
-in: App::drawn
+in: App::frame_drawn
 find: dialog.typed(untaken);
 replace: let _ = untaken;
 caught-by:
@@ -387,7 +387,7 @@ caught-by:
 [break] the-next-dialog-takes-a-held-answer
 rule: The dialog after one a key answered is ready no sooner than the repeat window after that key.
 file: crates/cineris-tui/src/app/state.rs
-in: App::drawn
+in: App::frame_drawn
 find: dialog.not_before(taken + super::ready::scaled(REPEAT));
 replace: let _ = taken;
 caught-by:

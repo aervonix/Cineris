@@ -32,6 +32,7 @@ use cineris_policy::signed::{
 };
 use cineris_policy::{Checked, PinStore, TrustStore};
 use cineris_protocol::ids::Timestamp;
+use cineris_protocol::methods::TrustResourceKind;
 
 use crate::core::Core;
 use crate::manage::Project;
@@ -185,6 +186,11 @@ pub struct ApprovalsHeld {
     pub projects_not_carrying: usize,
     /// Whether the entry of the project asked about carries a signature.
     pub project_carries: bool,
+    /// What the entry of the project asked about pins, signed or not: each
+    /// extension and hook command by its kind (`extension`, `hook`), its
+    /// name and the hash it was approved at. Not what counts: what a
+    /// listing can say was approved before, for the password to confirm.
+    pub project_pins: Vec<(String, String, cineris_base::ContentHash)>,
 }
 
 /// The key file, as [`ApprovalsHeld`] says it.
@@ -253,6 +259,17 @@ impl Core {
             .map_err(|failure| KeyRefusal::Failed(failure.to_string()))?;
         // Read with no key: a signature is `NoKey`, none is `Unsigned`.
         let carries = |checked: Checked| checked == Checked::NoKey;
+        let mut project_pins = Vec::new();
+        if let Some(project) = project {
+            let entry = TrustStore::new(state.trust_file(), Arc::clone(&self.inner.options.clock))
+                .project(&project.key, None)
+                .map_err(|failure| KeyRefusal::Failed(failure.to_string()))?;
+            for kind in [TrustResourceKind::Extension, TrustResourceKind::Hook] {
+                for (name, hash) in entry.held(&kind) {
+                    project_pins.push((kind.as_str().to_owned(), name, hash));
+                }
+            }
+        }
         let projects_carrying = projects
             .iter()
             .filter(|(_, _, checked)| carries(*checked))
@@ -268,6 +285,7 @@ impl Core {
                     .iter()
                     .any(|(key, _, checked)| *key == project.key && carries(*checked))
             }),
+            project_pins,
         })
     }
 
