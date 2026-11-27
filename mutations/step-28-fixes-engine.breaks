@@ -1,0 +1,13 @@
+# The engine part's fix from a second Windows stress run of the step 28
+# fixes' third pull request: a queued call whose own time is up fails as
+# out of its time, whatever ended its runtime's thread first.
+
+[break] a-queued-call-out-of-time-says-it-never-ran
+rule: A call the thread never began whose own time (a hook's, from when it was asked) is up fails as out of its time, even when the thread's end reached it first.
+file: crates/cineris-ext/src/engine/mod.rs
+in: not_run
+find: if out_of_time {
+replace: if false {
+packages: cineris-ext
+caught-by:
+    cineris-ext::it engine::a_queued_hook_out_of_its_time_says_so_whatever_ended_the_thread

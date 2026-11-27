@@ -1034,8 +1034,14 @@ impl ScriptRuntime {
             })
             .await;
             match event {
-                // The thread ended: a call it never began did not run.
-                Event::Reply(None) if !began => return Err(CallError::NotRun),
+                // The thread ended: a call it never began did not run. One
+                // whose own time (a hook's, from when it was asked) is up
+                // ran out of it, whichever of the two the poll met first:
+                // its time is the clock's, the thread's end a real thread's,
+                // and which reached it first is no reason of its own (the
+                // review of the step 28 fixes' third pull request: a
+                // Windows stress run).
+                Event::Reply(None) if !began => return Err(not_run(&cx)),
                 Event::Reply(None) => return Err(CallError::Gone),
                 Event::Reply(Some(FromThread::Started)) => {
                     began = true;
@@ -1127,6 +1133,7 @@ impl ScriptRuntime {
                 }
                 Event::Reply(Some(FromThread::Done(result))) => {
                     return result.map_err(|failure| match failure {
+                        Failure::NotRun if !began => not_run(&cx),
                         Failure::NotRun => CallError::NotRun,
                         Failure::Limit(Limit::Time) if cx.cancel.is_cancelled() => {
                             CallError::Cancelled
@@ -1209,6 +1216,20 @@ impl Drop for ScriptRuntime {
         // A script running when its runtime goes is stopped, not left to
         // run on with no deadline, and counted until its thread ends.
         self.stop_thread();
+    }
+}
+
+/// Why a call the thread never began did not run: out of its time when its
+/// time (a hook's, from when it was asked) is up, whatever ended the thread
+/// meanwhile; otherwise it never ran.
+fn not_run<H: Host + ?Sized>(cx: &CallContext<'_, H>) -> CallError {
+    let out_of_time = cx
+        .asked
+        .is_some_and(|asked| cx.clock.monotonic().saturating_sub(asked) >= cx.time);
+    if out_of_time {
+        CallError::TimedOut
+    } else {
+        CallError::NotRun
     }
 }
 
