@@ -44,7 +44,7 @@ use cineris_policy::{Definition, PinStore, ProjectTrust, UserPins};
 use cineris_protocol::ErrorKind;
 use cineris_protocol::methods::TrustResourceKind;
 
-use super::found::{UserNames, definition, in_words_where, prompt_shown, quoted_shown, shown_path};
+use super::found::{UserNames, definition, in_words_where, prompt_shown, shown_path};
 use crate::core::{Core, OpError, error};
 use crate::manage::Project;
 
@@ -1149,7 +1149,7 @@ impl Core {
             .map(|tool| {
                 (
                     in_code(&tool.name).into_owned(),
-                    quoted_shown(&tool.description),
+                    super::found::quoted_shown(&tool.description),
                 )
             })
             .collect();
@@ -1159,7 +1159,7 @@ impl Core {
             .map(|command| {
                 (
                     in_code(&command.name).into_owned(),
-                    quoted_shown(&command.description),
+                    super::found::quoted_shown(&command.description),
                 )
             })
             .collect();

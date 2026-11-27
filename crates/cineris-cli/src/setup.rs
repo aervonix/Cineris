@@ -170,10 +170,7 @@ fn skill_folders_here(env: Env) -> Result<(bool, String), String> {
 /// when it says the same (the fixes of step 28's full review, finding 15: reads
 /// turned off were said to be off where a managed file's lock, or the
 /// profile selected, kept them on).
-fn otherwise_in_force(
-    written: bool,
-    in_force: Result<(bool, String), String>,
-) -> Option<String> {
+fn otherwise_in_force(written: bool, in_force: Result<(bool, String), String>) -> Option<String> {
     match in_force {
         Ok((value, _)) if value == written => None,
         Ok((true, from)) => Some(format!(
