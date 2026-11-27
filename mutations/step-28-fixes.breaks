@@ -100,9 +100,9 @@ in: walk
 find: if at == 0 {
 replace: if at <= 1 {
 packages: cineris-sandbox,cineris-cli
+os: linux
 caught-by:
     cineris-sandbox session::tests::a_harness_that_is_process_1_is_seen_and_the_line_ends_at_process_0
-    cineris-cli::system guards::sys_a_harness_that_is_process_1_is_seen
 
 [break] stores-harness-stops-before-process-1
 rule: On Linux the session's process whose environment a nested run's stores are compared with is found when it is process 1.
@@ -111,9 +111,9 @@ in: harnesses_on_the_line
 find: if at == 0 {
 replace: if at <= 1 {
 packages: cineris-sandbox, cineris-cli
+os: linux
 caught-by:
     cineris-sandbox session::tests::the_harnesses_of_a_line_are_every_one_to_process_0
-    cineris-cli::system guards::sys_a_harness_that_is_process_1_is_seen
 
 [break] stores-not-compared-without-a-harness
 rule: On Linux, under a session's command whose harness is not found on the line, a nested run's stores cannot be compared with the session's, and it is refused.
@@ -121,6 +121,7 @@ file: crates/cineris-sandbox/src/session.rs
 find: return Some("the session's own environment, whose process was not found,".to_owned());
 replace: return None;
 packages: cineris-cli
+os: linux
 caught-by:
     cineris-cli::system guards::sys_a_nested_run_whose_line_cannot_be_read_is_refused_with_its_stores_moved
 
@@ -130,6 +131,7 @@ file: crates/cineris-sandbox/src/session.rs
 find: Seen::Of { parent, .. } => walk(parent, |pid| seen(&own, pid), false),
 replace: Seen::Of { .. } => Under::Nothing,
 packages: cineris-sandbox
+os: linux
 caught-by:
     cineris-sandbox session::sys::tests::sys_another_processs_line_is_read_as_this_ones
 
@@ -148,6 +150,7 @@ file: crates/cineris-rpc/src/socket/unix.rs
 find: .and_then(|check| check.refusal(pid))
 replace: .and_then(|check| check.refusal(pid).filter(|_| false))
 packages: cineris-rpc,cineris-cli
+os: linux
 caught-by:
     cineris-rpc::it socket::a_peer_the_front_ends_check_refuses_is_closed_unanswered
     cineris-cli::system guards::sys_another_harnesss_command_is_refused_at_the_socket
@@ -189,6 +192,7 @@ file: crates/cineris-sandbox/src/session.rs
 in-string: XDG_STATE_HOME
 replace: NOT_A_STORE
 packages: cineris-cli
+os: linux
 caught-by:
     cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
 
@@ -208,6 +212,7 @@ file: crates/cineris-sandbox/src/session.rs
 find: for pid in found {
 replace: for pid in found.into_iter().take(1) {
 packages: cineris-cli
+os: linux
 caught-by:
     cineris-cli::system guards::sys_a_shell_named_cineris_on_the_line_does_not_pass_moved_stores
 
