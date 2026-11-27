@@ -506,38 +506,25 @@ fn cut(text: &str, max: usize) -> String {
 /// `text` with its lines kept and nothing else in it that acts unseen: a
 /// line break of any kind (`\r\n`, `\r`, a vertical tab, a form feed,
 /// U+0085, U+2028, U+2029) is `\n`, a tab stays, every other character that
-/// [acts unseen](acts_unseen) is taken out, and a variation selector stays
-/// only right after a character kept. What `cineris_base::one_line` takes as
-/// white space and makes a space, this takes as a line break and keeps.
+/// [acts unseen](acts_unseen) is taken out, and so is every variation
+/// selector, as `cineris_base::one_line` takes them out: one after each
+/// character can carry a byte unseen, and a run any bytes (the review of
+/// step 28 found a skill's description hiding an instruction so). What
+/// `cineris_base::one_line` takes as white space and makes a space, this
+/// takes as a line break and keeps.
 fn plain(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
-    let mut base = false;
     let mut characters = text.chars().peekable();
     while let Some(character) = characters.next() {
         match character {
             '\r' => {
                 characters.next_if_eq(&'\n');
                 out.push('\n');
-                base = false;
             }
-            '\n' | '\u{b}' | '\u{c}' | '\u{85}' | '\u{2028}' | '\u{2029}' => {
-                out.push('\n');
-                base = false;
-            }
-            '\t' => {
-                out.push('\t');
-                base = false;
-            }
-            selector if is_selector(selector) => {
-                if base {
-                    out.push(selector);
-                }
-            }
-            unseen if acts_unseen(unseen) => {}
-            kept => {
-                out.push(kept);
-                base = !kept.is_whitespace();
-            }
+            '\n' | '\u{b}' | '\u{c}' | '\u{85}' | '\u{2028}' | '\u{2029}' => out.push('\n'),
+            '\t' => out.push('\t'),
+            unseen if acts_unseen(unseen) || is_selector(unseen) => {}
+            kept => out.push(kept),
         }
     }
     out
@@ -1025,6 +1012,39 @@ mod tests {
             part_of(&texts, "tracker"),
             "> Line one\n> Line two\n> Line three\n> \tIndented.\n> Four\n> Five\n> Six"
         );
+    }
+
+    /// No variation selector reaches section 6 or section 7: a run of them
+    /// can carry any bytes unseen, and one after each character a byte
+    /// each. An emoji's own is taken out too, which changes nothing the
+    /// model reads.
+    #[test]
+    fn no_variation_selector_reaches_the_index_or_a_text() {
+        let hidden: String = "IGNORE"
+            .bytes()
+            .map(|byte| char::from_u32(0xE0100 + u32::from(byte) - 16).unwrap())
+            .collect();
+        let each: String = "Write notes."
+            .chars()
+            .zip(hidden.chars().cycle())
+            .flat_map(|(character, selector)| [character, selector])
+            .collect();
+        let sections = ExtensionSections {
+            skills: format!("Skills: instructions.\n- pdf: Fill in PDF forms.{hidden}"),
+            sources: Vec::new(),
+            prompts: vec![prompt(
+                "notes",
+                &format!("{each}{hidden}\n\u{2764}\u{fe0f}\u{fe0f} kept"),
+            )],
+        };
+        let index = render_index(&sections);
+        assert!(
+            index.contains("- pdf: Fill in PDF forms.\n")
+                || index.ends_with("- pdf: Fill in PDF forms."),
+            "{index:?}"
+        );
+        let texts = render_texts(&sections.prompts).text;
+        assert_eq!(part_of(&texts, "notes"), "> Write notes.\n> \u{2764} kept");
     }
 
     /// Each text is cut to 4 KiB as its author wrote it, before it is

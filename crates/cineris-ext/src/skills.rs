@@ -86,7 +86,7 @@ use std::path::{Component, Path, PathBuf};
 
 use cineris_base::{
     AbsPath, PathError, PathResolver, ResolvedPath, location_within, same_location,
-    strip_location_prefix, visible,
+    strip_location_prefix, visible, visible_to_the_model,
 };
 use cineris_sandbox::unfollowed::{Kind, Refused};
 
@@ -564,7 +564,9 @@ impl Places<'_> {
                 }
             }),
         };
-        visible(&text.unwrap_or_else(|| path.as_str().to_owned())).into_owned()
+        // Every selector an escape: the prompt's sections keep none, and the
+        // one `visible` keeps would make the path another file's.
+        visible_to_the_model(&text.unwrap_or_else(|| path.as_str().to_owned())).into_owned()
     }
 }
 
@@ -751,7 +753,12 @@ fn look_in(
         if !matches!(kind, Kind::Folder | Kind::Link) {
             continue;
         }
-        let named = format!("{}/{}", look.shown, visible(&name.to_string_lossy()));
+        // Every selector an escape, as the root is shown (`Places::show`).
+        let named = format!(
+            "{}/{}",
+            look.shown,
+            visible_to_the_model(&name.to_string_lossy())
+        );
         // The entry itself, before it is looked into: a `SKILL.md` made in
         // it, or the folder swapped for a link, is a change.
         seen(Seen::Place(&look.real.to_fs_path().join(&name)));
