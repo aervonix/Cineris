@@ -1072,9 +1072,74 @@ pub(crate) fn unused() -> Result<()> {
     ))
 }
 
-/// `cargo xtask advisories`
+/// `cargo xtask advisories`: the advisory check of every lockfile the
+/// repository keeps, the workspace's and those of the packages outside it.
+/// Each is checked even when one before it failed, so that one run names
+/// every advisory.
 pub(crate) fn advisories() -> Result<()> {
-    steps::cargo(&["deny", "check", "advisories"])
+    let failed: Vec<String> = ADVISORIES
+        .iter()
+        .filter_map(|manifest| steps::cargo(&advisory_arguments(*manifest)).err())
+        .collect();
+    if failed.is_empty() {
+        Ok(())
+    } else {
+        Err(failed.join("\n"))
+    }
+}
+
+/// The manifests whose lockfiles the advisory check reads: the workspace's
+/// (`None`), then each package kept outside it, which has a lockfile of its
+/// own. Each reads the root's `deny.toml`.
+pub(crate) const ADVISORIES: [Option<&str>; 2] = [None, Some("fuzz/Cargo.toml")];
+
+/// The arguments of `cargo` that check one manifest's lockfile.
+fn advisory_arguments(manifest: Option<&str>) -> Vec<&str> {
+    match manifest {
+        None => vec!["deny", "check", "advisories"],
+        Some(path) => vec![
+            "deny",
+            "--manifest-path",
+            path,
+            "--config",
+            "deny.toml",
+            "check",
+            "advisories",
+        ],
+    }
+}
+
+#[cfg(test)]
+mod advisory_tests {
+    use super::{ADVISORIES, advisory_arguments};
+
+    #[test]
+    fn every_lockfile_the_repository_keeps_is_checked_with_the_roots_configuration() {
+        assert_eq!(
+            advisory_arguments(ADVISORIES[0]),
+            ["deny", "check", "advisories"]
+        );
+        for manifest in ADVISORIES.iter().flatten() {
+            let lockfile = std::path::Path::new(manifest).with_file_name("Cargo.lock");
+            assert!(
+                crate::workspace::root().join(&lockfile).is_file(),
+                "{} is not a lockfile the repository keeps",
+                lockfile.display()
+            );
+            let arguments = advisory_arguments(Some(manifest));
+            assert!(
+                arguments
+                    .windows(2)
+                    .any(|pair| pair == ["--manifest-path", *manifest])
+            );
+            assert!(
+                arguments
+                    .windows(2)
+                    .any(|pair| pair == ["--config", "deny.toml"])
+            );
+        }
+        assert!(ADVISORIES.contains(&Some("fuzz/Cargo.toml")));
+    }
 }
 
 #[cfg(test)]
