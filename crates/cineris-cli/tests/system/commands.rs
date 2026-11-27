@@ -517,10 +517,17 @@ fn sys_permissions_trust_approves_a_projects_extensions_on_a_signed_yes() {
         file.contains("kind = \"extension\"") && file.contains("name = \"probe\""),
         "{file}"
     );
-    // Approved as it is, it is not offered again.
-    let again = machine.signing(&["permissions", "trust"], &[], PASSWORD);
+    // Asked again, it is shown again: a subcommand's core checks no
+    // signature before the password is typed, so what the entry approves is
+    // not seen as approved until then. A no keeps its pin.
+    let again = machine.signing(&["permissions", "trust"], &["n"], PASSWORD);
     again.expect_code(0);
-    assert!(!again.screen.contains("Its extensions"), "{}", again.screen);
+    assert!(again.screen.contains("Its extensions"), "{}", again.screen);
+    let file = pinned();
+    assert!(
+        file.contains("kind = \"extension\"") && file.contains("name = \"probe\""),
+        "{file}"
+    );
 }
 
 /// `ext add` shows what the script registers, evaluated before its
