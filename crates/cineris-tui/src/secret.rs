@@ -20,6 +20,17 @@
 //! key from standard input. Where it is stored in Windows Credential
 //! Manager, a key that is not printable ASCII is refused before the store
 //! is asked (08, "Windows Credential Manager").
+//!
+//! **The approvals password** (since the signed approvals) is typed in a
+//! sibling of the key's input, over the same buffer: [`password`], whose
+//! items are named here too.
+
+pub mod password;
+
+pub use password::{
+    PasswordAsk, PasswordInput, PasswordPrompt, PasswordTerminal, PromptRows, Prompted, Purpose,
+    read_password, read_password_on,
+};
 
 use std::io;
 
@@ -182,7 +193,7 @@ impl KeyInput {
 
 /// `text` without the one line break at its very end, if it has one: `\n`,
 /// `\r\n` or `\r`.
-fn without_line_end(text: &str) -> &str {
+pub(crate) fn without_line_end(text: &str) -> &str {
     text.strip_suffix("\r\n")
         .or_else(|| text.strip_suffix(['\n', '\r']))
         .unwrap_or(text)
@@ -192,16 +203,27 @@ fn without_line_end(text: &str) -> &str {
 /// key has, never one of them, `width` columns wide.
 #[must_use]
 pub fn key_box(input: &KeyInput, width: usize, look: &Look) -> Vec<Line> {
-    let frame = RoundedBox::new(width, look.glyphs, look.theme.style(Token::Border));
-    let count = match input.chars() {
+    hidden_box(&hidden_count(input.chars()), width, look)
+}
+
+/// How many characters a hidden field holds, as its row says it: `1
+/// character, hidden`, `12 characters, hidden`.
+pub(crate) fn hidden_count(chars: usize) -> String {
+    match chars {
         1 => "1 character, hidden".to_owned(),
         many => format!("{many} characters, hidden"),
-    };
+    }
+}
+
+/// A hidden field's row: a rounded box holding `◆` and `said`, `width`
+/// columns wide.
+pub(crate) fn hidden_box(said: &str, width: usize, look: &Look) -> Vec<Line> {
+    let frame = RoundedBox::new(width, look.glyphs, look.theme.style(Token::Border));
     let row = Line::from(Span::new(
         format!("{} ", look.glyphs.user),
         look.theme.style(Token::User),
     ))
-    .with(Span::new(count, look.theme.style(Token::Muted)));
+    .with(Span::new(said.to_owned(), look.theme.style(Token::Muted)));
     frame.draw(&[(row, cineris_term::Style::PLAIN)], None)
 }
 
@@ -335,6 +357,9 @@ pub fn read_key_on<D: Device>(
             }
             _ => KeyEdit::Nothing,
         };
+        // A paste's string, taken or refused, is written over (since the
+        // signed approvals).
+        password::forget(event);
         match edit {
             KeyEdit::Submit => match input.take(asking.ascii_only) {
                 Ok(key) => break Some(key),
@@ -387,13 +412,26 @@ fn frame(asking: &Asking, input: &KeyInput, width: usize, look: &Look) -> Vec<Li
 
 /// A sentence wrapped two columns in.
 pub(crate) fn sentence(text: &str, width: usize, look: &Look) -> Vec<Line> {
+    wrapped(text, 2, Token::Text, width, look)
+}
+
+/// `text` in `token`'s style, wrapped `indent` columns in, whole: never
+/// cut.
+pub(crate) fn wrapped(
+    text: &str,
+    indent: usize,
+    token: Token,
+    width: usize,
+    look: &Look,
+) -> Vec<Line> {
+    let margin = " ".repeat(indent);
     wrap(
-        &[Span::new(text.to_owned(), look.theme.style(Token::Text))],
-        width.saturating_sub(2).max(1),
+        &[Span::new(text.to_owned(), look.theme.style(token))],
+        width.saturating_sub(indent).max(1),
     )
     .into_iter()
     .map(|line| {
-        let mut row = Line::plain("  ");
+        let mut row = Line::plain(margin.clone());
         for span in line.spans() {
             row.push(span.clone());
         }

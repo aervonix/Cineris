@@ -39,7 +39,7 @@ mod files;
 mod items;
 pub mod link;
 mod panels;
-mod ready;
+pub(crate) mod ready;
 mod scroll;
 mod search;
 pub mod setup;
@@ -477,6 +477,7 @@ fn run_with<D: Device>(
         let mut input = false;
         while let Some(event) = next.take() {
             input |= take(terminal, presenter, full, &mut scheduler, app, &event)?;
+            forget(event);
             // After the last key the application takes, what is typed is
             // the shell's: nothing more is read.
             if app.exit().is_some() {
@@ -520,12 +521,14 @@ fn run_with<D: Device>(
                 break;
             }
             // Keys first, between batches.
-            if let Some(event) = terminal.next(Some(Duration::ZERO))?
-                && take(terminal, presenter, full, &mut scheduler, app, &event)?
-            {
-                scheduler.input();
-                scheduler.stream();
-                break;
+            if let Some(event) = terminal.next(Some(Duration::ZERO))? {
+                let taken = take(terminal, presenter, full, &mut scheduler, app, &event)?;
+                forget(event);
+                if taken {
+                    scheduler.input();
+                    scheduler.stream();
+                    break;
+                }
             }
         }
         if app.exit().is_some() {
@@ -606,6 +609,13 @@ fn take<D: Device>(
     Ok(input)
 }
 
+/// A terminal event the application has taken: a paste's text, which may
+/// have been a password (since the signed approvals), is written over
+/// before it is freed.
+fn forget(event: Event) {
+    crate::secret::password::forget(event);
+}
+
 fn draw<D: Device>(
     terminal: &mut Terminal<D>,
     presenter: &mut Inline,
@@ -613,6 +623,10 @@ fn draw<D: Device>(
     app: &mut App,
     now: Instant,
 ) -> io::Result<()> {
+    // While the approvals password is asked, the terminal opens to no other
+    // program (since the signed approvals). Tried again at the next frame
+    // when the system refuses: the password is asked either way.
+    let _ = terminal.set_exclusive(app.asking_password());
     // The viewer and the full-screen presenter own the alternate screen:
     // the main screen, its scrollback and the live region wait as they
     // were. A screen entered again is drawn whole.

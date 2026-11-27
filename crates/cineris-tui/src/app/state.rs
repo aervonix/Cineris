@@ -59,6 +59,7 @@ mod custom;
 mod export;
 mod first_run;
 mod panel;
+mod password;
 mod recolour;
 mod restyle;
 mod rewind;
@@ -480,6 +481,9 @@ pub struct App {
     /// unless the file's own theme changed.
     theme_picked: Option<crate::app::ThemeChoice>,
     dialogs: VecDeque<Dialog>,
+    /// The approvals password asked (since the signed approvals), the one
+    /// shown first: while one is, keys and pastes go to it alone.
+    passwords: VecDeque<password::PasswordDialog>,
     /// When the running turn began, from this app's point of view.
     running: Option<Instant>,
     /// Whether a turn runs, as the core last said: the open, the history's
@@ -647,6 +651,7 @@ impl App {
             models: Vec::new(),
             usage: None,
             dialogs: VecDeque::new(),
+            passwords: VecDeque::new(),
             restyle: start.restyle,
             writer: start.export,
             points: None,
@@ -768,6 +773,7 @@ impl App {
         if self.viewing() {
             return;
         }
+        self.password_drawn(at);
         self.panel_drawn_at(at);
         if let Some(dialog) = self.dialogs.front_mut() {
             let first = dialog.shown().is_none();
@@ -948,7 +954,8 @@ impl App {
             return wait;
         }
         let drawn = self
-            .first_run_deadline()
+            .password_deadline()
+            .or_else(|| self.first_run_deadline())
             .or_else(|| self.dialogs.front().and_then(Dialog::deadline));
         match (drawn, wait) {
             (Some(drawn), Some(wait)) => Some(drawn.min(wait)),
@@ -1035,6 +1042,11 @@ impl App {
     /// paste), whose frame is drawn at once.
     pub fn terminal(&mut self, event: &TermEvent, at: Instant) -> bool {
         self.drop_stale_viewer();
+        // The approvals password takes every key and paste while it is
+        // asked (since the signed approvals).
+        if let Some(taken) = self.password_event(event, at) {
+            return taken;
+        }
         // A step of the first run takes the input box's place, and its keys
         // (since step 25).
         if let Some(taken) = self.first_run_event(event, at) {
@@ -2769,7 +2781,13 @@ impl App {
         // The panels' block (step 24), between the live rows and the bottom.
         let mut block = Vec::new();
         self.panel_drawn = None;
-        if self.dialogs.is_empty()
+        if let Some(lines) = self.password_bottom(now, width) {
+            // The approvals password, in the input box's place, over
+            // everything else (since the signed approvals).
+            self.input.focus_mut().update(boxes, &[]);
+            bottom.extend(lines);
+            cursor_row = None;
+        } else if self.dialogs.is_empty()
             && let Some(lines) = self.first_run_bottom(now, width)
         {
             // A step of the first run, in the input box's place (step 25).

@@ -462,6 +462,17 @@ fn passing_over() -> bool {
 /// Stops the program, which Windows has no way to do: nothing happens.
 pub(crate) fn suspend() {}
 
+/// The terminal's exclusive mode (since the signed approvals), which a
+/// console does not have: nothing happens. Another process attached to the
+/// same console can read its input whatever is done here.
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the same signature as Unix's, where the call can fail"
+)]
+pub(crate) fn set_exclusive(_on: bool) -> io::Result<()> {
+    Ok(())
+}
+
 /// The window's size, columns then rows.
 pub(crate) fn size() -> io::Result<(u16, u16)> {
     // SAFETY: a zeroed structure of plain integers, which the call fills.

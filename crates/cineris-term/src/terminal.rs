@@ -370,6 +370,18 @@ pub trait Device {
     fn now(&self) -> Instant {
         Instant::now()
     }
+
+    /// Turns the terminal's exclusive mode on or off
+    /// ([`Terminal::set_exclusive`]). A device for tests records it;
+    /// nothing happens by default.
+    ///
+    /// # Errors
+    ///
+    /// When the system refuses.
+    fn exclusive(&mut self, on: bool) -> io::Result<()> {
+        let _ = on;
+        Ok(())
+    }
 }
 
 /// The real terminal, through the operating system.
@@ -405,6 +417,10 @@ impl Device for System {
 
     fn active(&self) -> bool {
         sys::active()
+    }
+
+    fn exclusive(&mut self, on: bool) -> io::Result<()> {
+        sys::set_exclusive(on)
     }
 }
 
@@ -542,6 +558,9 @@ pub struct Terminal<D: Device = System> {
     /// What follows of it, to its end marker, is still the paste's (since
     /// step 25).
     stalled: Option<Instant>,
+    /// Whether the terminal's exclusive mode is on (since the signed
+    /// approvals): [`Terminal::set_exclusive`].
+    exclusive: bool,
 }
 
 impl Terminal<System> {
@@ -628,6 +647,7 @@ impl<D: Device> Terminal<D> {
             paste_tail: None,
             paste_enter: false,
             stalled: None,
+            exclusive: false,
         })
     }
 
@@ -844,6 +864,36 @@ impl<D: Device> Terminal<D> {
     #[must_use]
     pub fn is_alternate(&self) -> bool {
         self.alternate
+    }
+
+    /// Turns the terminal's exclusive mode on or off (since the signed
+    /// approvals; `docs/architecture/09-tui.md`, "The approvals password"):
+    /// on Unix, while it is on, the kernel refuses to open the terminal
+    /// again to a process without `CAP_SYS_ADMIN`, so that a program that
+    /// was not reading it cannot start to while a password is typed. A
+    /// descriptor already open goes on reading, and Windows has no such
+    /// mode: nothing happens there. Off at the start; putting the terminal
+    /// back turns it off, as an emergency restore does, and a stop until the
+    /// program is continued. Marked on or off only once the system has
+    /// done it, so that a call that failed is tried again by the next.
+    ///
+    /// # Errors
+    ///
+    /// When the system refuses.
+    pub fn set_exclusive(&mut self, on: bool) -> io::Result<()> {
+        if on == self.exclusive {
+            return Ok(());
+        }
+        self.device.exclusive(on)?;
+        self.exclusive = on;
+        Ok(())
+    }
+
+    /// Whether the terminal's exclusive mode is on
+    /// ([`set_exclusive`](Self::set_exclusive)).
+    #[must_use]
+    pub fn is_exclusive(&self) -> bool {
+        self.exclusive
     }
 
     /// Puts `text` on the clipboard of the terminal the program runs in,
@@ -1278,6 +1328,10 @@ impl<D: Device> Terminal<D> {
         }
         end.extend_from_slice(END);
         let written = self.device.write(&end);
+        // Open to others again; the system's leave does it too.
+        if std::mem::take(&mut self.exclusive) {
+            let _ = self.device.exclusive(false);
+        }
         self.device.leave();
         // Cleared whatever the write did: the terminal is left, so no
         // emergency restore reads the record before a terminal is entered

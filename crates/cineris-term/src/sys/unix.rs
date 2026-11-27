@@ -11,7 +11,10 @@
 //! here use `tcsetattr`, `write`, `signal`, `sigprocmask`, `raise` and atomic
 //! loads and stores, all of which POSIX lists as async-signal-safe, and read
 //! state that was put in place before the handlers were installed and is
-//! never moved after.
+//! never moved after. Since the signed approvals they also turn the
+//! terminal's exclusive mode off and on again with `ioctl` (`TIOCNXCL`,
+//! `TIOCEXCL`), which POSIX does not list but which is one system call with
+//! no lock and no allocation, the call `tcsetattr` itself makes.
 
 #![allow(
     unsafe_code,
@@ -52,6 +55,10 @@ static WOKEN: AtomicBool = AtomicBool::new(false);
 /// Set when the program is putting the terminal back for good: a
 /// suspension that ends after it does not turn raw mode on again.
 static LEAVING: AtomicBool = AtomicBool::new(false);
+/// Whether the program asked for the terminal's exclusive mode
+/// ([`set_exclusive`]): every way out turns it off, and a stop turns it
+/// off until the program is continued.
+static EXCLUSIVE: AtomicBool = AtomicBool::new(false);
 /// How long a program a signal was handed to has to end itself.
 const WATCHDOG_SECONDS: libc::c_uint = 3;
 
@@ -194,6 +201,11 @@ pub(crate) fn emergency() {
         // SAFETY: `original` is the complete `termios` the terminal had.
         unsafe { libc::tcsetattr(STDIN, libc::TCSADRAIN, original) };
     }
+    // The terminal opens to others again; the program's wish is kept, for
+    // a stop that is continued.
+    if EXCLUSIVE.load(Ordering::SeqCst) {
+        exclusive_mode(false);
+    }
 }
 
 /// Puts the original settings back without writing anything: for a normal
@@ -210,7 +222,41 @@ fn restore_modes() {
         // SAFETY: `original` is the complete `termios` the terminal had.
         unsafe { libc::tcsetattr(STDIN, libc::TCSADRAIN, original) };
     }
+    if EXCLUSIVE.swap(false, Ordering::SeqCst) {
+        exclusive_mode(false);
+    }
     ACTIVE.store(false, Ordering::SeqCst);
+}
+
+/// Turns the terminal's exclusive mode on or off (since the signed
+/// approvals): while it is on, the kernel refuses to open the terminal
+/// again (`/dev/pts/N`, `/dev/tty`, `/proc/<pid>/fd/0`) to any process
+/// without `CAP_SYS_ADMIN`, so that a program that was not reading the
+/// terminal cannot start to while a password is typed. A descriptor
+/// already open is not touched, and goes on reading. Every way out turns
+/// it off ([`emergency`], [`leave`]), and a stop until the program is
+/// continued.
+pub(crate) fn set_exclusive(on: bool) -> io::Result<()> {
+    if on {
+        // The wish first: a signal in between finds it, and turns it off.
+        EXCLUSIVE.store(true, Ordering::SeqCst);
+        if let Err(error) = check(exclusive_mode(true)) {
+            EXCLUSIVE.store(false, Ordering::SeqCst);
+            return Err(error);
+        }
+        return Ok(());
+    }
+    EXCLUSIVE.store(false, Ordering::SeqCst);
+    check(exclusive_mode(false)).map(|_| ())
+}
+
+/// `TIOCEXCL` or `TIOCNXCL` on the terminal, the call's result.
+/// Async-signal-safe: see the module documentation.
+fn exclusive_mode(on: bool) -> libc::c_int {
+    let request = if on { libc::TIOCEXCL } else { libc::TIOCNXCL };
+    // SAFETY: both requests take no argument and change only a flag of the
+    // terminal the descriptor is open on.
+    unsafe { libc::ioctl(STDIN, request) }
 }
 
 /// Makes the pipe that wakes a wait, once.
@@ -318,6 +364,10 @@ extern "C" fn on_stop(_: libc::c_int) {
         {
             ACTIVE.store(true, Ordering::SeqCst);
             libc::tcsetattr(STDIN, libc::TCSADRAIN, raw);
+            // Closed to others again, as it was when it stopped.
+            if EXCLUSIVE.load(Ordering::SeqCst) {
+                exclusive_mode(true);
+            }
         }
     }
     RESUMED.store(true, Ordering::SeqCst);
