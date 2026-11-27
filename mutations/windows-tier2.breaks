@@ -58,6 +58,24 @@ replace: let _ = side;
 caught-by:
     xtask::bin/xtask try_run::tests::a_job_ab_is_test_job_with_against_and_its_options_go_to_ab_job
 
+[break] after-the-round-never-called
+rule: A side's work after its round (an archive side's build put back) is done once its figures are taken, whatever the round did, and outside `the job`.
+file: xtask/src/job_ab.rs
+in: drive_side
+find: phases.after_round();
+replace: let _ = &phases;
+caught-by:
+    xtask::bin/xtask job_ab::tests::a_side_times_each_phase_and_a_failed_build_ends_its_round
+    xtask::bin/xtask job_ab::tests::an_archive_sides_extraction_is_timed_after_its_build_and_a_failed_one_ends_the_round
+
+[break] archive-side-build-never-put-back
+rule: After its round an archive side puts its build back in its place, so that its next build is warm and the tree is left as it was built.
+file: xtask/src/job_ab.rs
+find: let Err(error) = put_back(self.tree)
+replace: let Err(error) = Ok::<(), String>(())
+caught-by:
+    xtask::bin/xtask job_ab::tests::an_archive_side_puts_its_build_back_after_its_round_and_the_other_side_touches_nothing
+
 # ------------------------------------------- the test jobs' scratch folder
 
 [break] tests-scratch-folder-under-the-profile
