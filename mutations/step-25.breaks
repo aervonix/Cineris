@@ -1107,8 +1107,8 @@ caught-by:
 rule: Enter on a compaction reads its summary item through the link.
 file: crates/cineris-tui/src/app/state/viewer.rs
 in: App::viewer_act
-find: Some(Summary::Compaction(item)) => state.wants = Some(item)
-replace: Some(Summary::Compaction(_)) => {}
+find: item: ItemId::from(item.as_str())
+replace: item: ItemId::from("an item of no summary")
 caught-by:
     cineris-tui app::tests::screen::the_viewer_shows_a_reasoning_and_a_compactions_summary_whole
 
@@ -1116,8 +1116,8 @@ caught-by:
 rule: Enter on a reasoning shows all of its text.
 file: crates/cineris-tui/src/app/state/viewer.rs
 in: App::viewer_act
-find: Self::show_summary(state, "The reasoning, whole", &text);
-replace: Self::show_summary(state, "The reasoning, whole", text.lines().next().unwrap_or_default());
+find: Self::show_summary(state, label, &text);
+replace: Self::show_summary(state, label, text.lines().next().unwrap_or_default());
 caught-by:
     cineris-tui app::tests::screen::the_viewer_shows_a_reasoning_and_a_compactions_summary_whole
 

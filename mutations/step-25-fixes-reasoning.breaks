@@ -27,8 +27,8 @@ caught-by:
 rule: Each reasoning block of a response knows which of its item's reasoning runs it is.
 file: crates/cineris-tui/src/app/items.rs
 in: Mapper::delta
-find: run: response.reasonings.len(),
-replace: run: 0,
+find: run: response.reasonings.len()
+replace: run: 0
 caught-by:
     cineris-tui app::items::tests::each_reasoning_knows_its_run_of_its_item_and_holds_its_words_once
 
