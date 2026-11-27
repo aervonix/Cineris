@@ -13,7 +13,7 @@ use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use cineris_sandbox::launch::{FAILED, Launcher, MARK};
+use cineris_sandbox::launch::{FAILED, Launcher, MARK, POLICY_BYTES};
 use cineris_sandbox::policy::{Network, Policy, Reach};
 use cineris_sandbox::support::{Assessment, detect};
 use cineris_testkit::scratch::Scratch;
@@ -140,11 +140,13 @@ impl Ran {
     }
 }
 
-/// The launcher this test binary is, as the harness would make it.
+/// The launcher this test binary is, as the harness would make it. Its
+/// role comes after a `--` of the test runner's own, so that the runner
+/// does not read the launcher's option (`--policy-bytes`) as one of its.
 fn launcher(policy: Policy) -> Launcher {
     Launcher::new(
         std::env::current_exe().expect("the test binary has a path"),
-        ["--exact", ENTRY, "--nocapture", LAUNCH],
+        ["--exact", ENTRY, "--nocapture", "--", LAUNCH],
         policy,
     )
 }
@@ -816,4 +818,217 @@ fn sh_in(policy: Policy, cwd: &Path, script: &str) -> Ran {
     let launcher = launcher(policy);
     let stdin = launcher.policy().encode();
     run_with(&launcher, &stdin, &[], cwd, "/bin/sh", &["-c", script])
+}
+
+/// Starts the launcher with `before` (its options before `--`), then
+/// `/bin/sh -c script` in the workspace, writes `stdin` and closes it, and
+/// waits: what a launcher given a crafted command line, or a crafted input,
+/// does.
+fn launched_with(place: &Place, before: &[String], stdin: &[u8], script: &str) -> Ran {
+    let exe = std::env::current_exe().expect("the test binary has a path");
+    let mut command = Command::new(exe);
+    command
+        .args(["--exact", ENTRY, "--nocapture", "--", LAUNCH])
+        .args(before)
+        .args(["--", "/bin/sh", "-c", script])
+        .current_dir(place.ws())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().expect("start the launcher");
+    {
+        let mut input = child.stdin.take().expect("its input");
+        // A launcher that stopped before reading shows as a broken pipe.
+        let _ = input.write_all(stdin);
+    }
+    let output = child.wait_with_output().expect("wait for the launcher");
+    Ran {
+        code: output.status.code(),
+        output: format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ),
+    }
+}
+
+/// A confined command started with a live input (step 30: an MCP server's)
+/// reads each line as it is written and answers it before the next is
+/// sent, under the policy it was started with; its own arguments that look
+/// like the launcher's option are its own.
+#[test]
+fn sys_a_confined_command_reads_its_live_input_line_by_line() {
+    use std::io::BufRead;
+
+    let Some(landlock) = enforcing() else { return };
+    let place = Place::new("live");
+    let launcher = launcher(place.policy(Network::Off, landlock));
+    let outside = place.outside().join("written");
+    let script = format!(
+        "echo \"args: $0 $1\"; while IFS= read -r line; do echo \"got $line\"; done; \
+         if echo x > '{}' 2>/dev/null; then echo wrote; else echo refused; fi",
+        outside.display()
+    );
+    let wrapped = launcher.wrap_live(
+        "/bin/sh".as_ref(),
+        &["-c", &script, POLICY_BYTES, "1"].map(std::ffi::OsString::from),
+    );
+    let mut child = Command::new(&wrapped.program)
+        .args(&wrapped.arguments)
+        .current_dir(place.ws())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .expect("start the launcher");
+    let mut input = child.stdin.take().expect("its input");
+    let mut output = std::io::BufReader::new(child.stdout.take().expect("its output"));
+    input
+        .write_all(&wrapped.stdin)
+        .expect("the policy is written");
+    // The test runner's own first lines come before the command's.
+    let mut line = String::new();
+    while !line.starts_with("args: ") {
+        line.clear();
+        let read = output.read_line(&mut line).expect("a line");
+        assert!(read > 0, "the command said nothing");
+    }
+    assert_eq!(line, format!("args: {POLICY_BYTES} 1\n"));
+    // Each line is answered before the next is written: the input is live.
+    for word in ["one", "two", "end"] {
+        input
+            .write_all(format!("{word}\n").as_bytes())
+            .expect("a line is written");
+        input.flush().expect("flushed");
+        line.clear();
+        output.read_line(&mut line).expect("a line");
+        assert_eq!(line, format!("got {word}\n"));
+    }
+    drop(input);
+    line.clear();
+    output.read_line(&mut line).expect("a line");
+    assert_eq!(line, "refused\n", "the policy was not applied");
+    let status = child.wait().expect("it ends");
+    assert!(status.success(), "{status:?}");
+    assert!(!outside.exists());
+}
+
+/// A policy length that is missing, not written as a length is, zero, past
+/// the most a policy may take, given twice or beside another option, and an
+/// input that ends before the length, all run nothing: the launcher writes
+/// its line and ends with `FAILED`.
+#[test]
+fn sys_a_live_policy_length_that_is_wrong_runs_nothing() {
+    let Some(landlock) = enforcing() else { return };
+    let place = Place::new("live_length");
+    let policy = launcher(place.policy(Network::Off, landlock))
+        .policy()
+        .encode();
+    let length = policy.len().to_string();
+    let past = (cineris_sandbox::policy::MAX_BYTES + 1).to_string();
+    let cases: Vec<(Vec<&str>, &[u8], &str)> = vec![
+        (vec![POLICY_BYTES], &policy, "length"),
+        (vec![POLICY_BYTES, "abc"], &policy, "length"),
+        (vec![POLICY_BYTES, "0"], &policy, "length"),
+        (vec![POLICY_BYTES, "+1"], &policy, "length"),
+        (vec![POLICY_BYTES, &past], &policy, "more than"),
+        (
+            vec![POLICY_BYTES, &length, POLICY_BYTES, &length],
+            &policy,
+            "twice",
+        ),
+        (
+            vec![POLICY_BYTES, &length, POLICY_BYTES, "1"],
+            &policy,
+            "twice",
+        ),
+        (vec!["--policy-bytes=1"], &policy, "does not take"),
+        // The input ends before the length.
+        (
+            vec![POLICY_BYTES, &length],
+            &policy[..policy.len() / 2],
+            "ended before",
+        ),
+    ];
+    for (before, stdin, naming) in cases {
+        let before: Vec<String> = before.iter().map(|one| (*one).to_owned()).collect();
+        let ran = launched_with(&place, &before, stdin, "echo ran > ran");
+        assert_eq!(ran.code, Some(FAILED), "{before:?}: {ran:?}");
+        assert!(
+            ran.output.contains(MARK) && ran.output.contains(naming),
+            "{before:?}: {ran:?}"
+        );
+        assert!(!place.ws().join("ran").exists(), "{before:?}");
+    }
+}
+
+/// A length one short of the policy, or past it, runs nothing: the bytes
+/// read are a policy whole or nothing. So does a policy that carries a
+/// command's input (an `input` field) in the live mode.
+#[test]
+fn sys_a_live_length_that_is_not_the_policys_runs_nothing() {
+    let Some(landlock) = enforcing() else { return };
+    let place = Place::new("live_mismatch");
+    let launcher = launcher(place.policy(Network::Off, landlock));
+    let policy = launcher.policy().encode();
+    let mut longer = policy.clone();
+    longer.extend_from_slice(b"read\0all\0");
+    let with_input = launcher
+        .policy()
+        .encode_with_input(b"abc")
+        .expect("a small input");
+    for (length, stdin) in [
+        (policy.len() - 1, &policy),
+        (policy.len() + 1, &longer),
+        (longer.len(), &longer),
+        (with_input.len(), &with_input),
+    ] {
+        let ran = launched_with(
+            &place,
+            &[POLICY_BYTES.to_owned(), length.to_string()],
+            stdin,
+            "echo ran > ran",
+        );
+        assert_eq!(ran.code, Some(FAILED), "{length}: {ran:?}");
+        assert!(ran.output.contains(MARK), "{length}: {ran:?}");
+        assert!(!place.ws().join("ran").exists(), "{length}");
+    }
+}
+
+/// What follows the policy on a live input is the command's, never a
+/// policy: bytes that are a whole policy of their own, one that would let
+/// the command write anywhere and reach the network, reach the command as
+/// its input, and the command is held to the policy it was started with.
+#[test]
+fn sys_a_policy_written_after_the_live_policy_is_only_input() {
+    let Some(landlock) = enforcing() else { return };
+    let place = Place::new("live_after");
+    let launcher = launcher(place.policy(Network::Off, landlock));
+    let wider = Policy {
+        read: Reach::All,
+        write: vec![PathBuf::from("/")],
+        network: Network::Full,
+        temp: None,
+        landlock,
+    }
+    .encode();
+    let policy = launcher.wrap_live("/bin/sh".as_ref(), &[]).stdin;
+    let mut stdin = policy.clone();
+    stdin.extend_from_slice(&wider);
+    let outside = place.outside().join("written");
+    let ran = launched_with(
+        &place,
+        &[POLICY_BYTES.to_owned(), policy.len().to_string()],
+        &stdin,
+        &format!(
+            "cat > got; if echo x > '{}' 2>/dev/null; then echo wrote; else echo refused; fi",
+            outside.display()
+        ),
+    );
+    assert!(ran.ok() && ran.output.contains("refused"), "{ran:?}");
+    assert!(!outside.exists());
+    assert_eq!(
+        std::fs::read(place.ws().join("got")).expect("what it read"),
+        wider
+    );
 }

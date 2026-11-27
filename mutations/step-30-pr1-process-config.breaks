@@ -1,0 +1,81 @@
+# Step 30, the first pull request: a local server's process, and `[mcp]` in
+# the configuration (docs/steps/30/parts/pr1-process-config.md).
+
+# A. The launcher's live input (cineris-sandbox): neither what is written to
+# a server's input nor a crafted command line may change the policy.
+
+[break] live-length-of-zero-is-taken
+rule: The policy's length on the launcher's command line is written with no leading zero, and is never zero.
+file: crates/cineris-sandbox/src/launch.rs
+in: parse_length
+find: && !text.starts_with('0')
+replace:
+caught-by:
+    cineris-sandbox launch::tests::a_policy_length_not_written_as_the_harness_writes_it_is_refused
+
+[break] live-length-given-twice-is-taken
+rule: The policy's length is given once: a second `--policy-bytes` refuses the launch.
+file: crates/cineris-sandbox/src/launch.rs
+in: options
+find: if live.is_some() {
+replace: if live.is_some() && live.is_none() {
+caught-by:
+    cineris-sandbox launch::tests::a_policy_length_not_written_as_the_harness_writes_it_is_refused
+    cineris-sandbox::it confined::sys_a_live_policy_length_that_is_wrong_runs_nothing
+
+[break] live-length-past-the-most-is-taken
+rule: The policy's length is at most the most a policy may take.
+file: crates/cineris-sandbox/src/launch.rs
+in: parse_length
+find: if length > MAX_BYTES {
+replace: if length > MAX_BYTES * 2 {
+caught-by:
+    cineris-sandbox launch::tests::a_policy_length_not_written_as_the_harness_writes_it_is_refused
+    cineris-sandbox::it confined::sys_a_live_policy_length_that_is_wrong_runs_nothing
+
+[break] another-option-before-the-marker-is-passed-over
+rule: The launcher takes no option before `--` but `--policy-bytes`: anything else refuses the launch.
+file: crates/cineris-sandbox/src/launch.rs
+in: options
+find: if argument != POLICY_BYTES {
+replace: if argument != POLICY_BYTES && argument == "-x" {
+caught-by:
+    cineris-sandbox launch::tests::a_policy_length_not_written_as_the_harness_writes_it_is_refused
+    cineris-sandbox::it confined::sys_a_live_policy_length_that_is_wrong_runs_nothing
+
+[break] live-policy-read-through-a-buffer
+rule: The launcher reads exactly the policy's bytes of a live input, with no buffer that could take what follows them from the command.
+file: crates/cineris-sandbox/src/launch.rs
+in: read_exactly
+find: input.read_exact(&mut bytes)
+replace: std::io::stdin().lock().read_exact(&mut bytes)
+caught-by:
+    cineris-sandbox::it confined::sys_a_policy_written_after_the_live_policy_is_only_input
+
+[break] live-policy-with-an-input-field-is-taken
+rule: A policy that carries a command's input is refused when the command's input is live.
+file: crates/cineris-sandbox/src/launch.rs
+in: launch
+find: match Policy::decode_with_input(&bytes).map_err(Failure::sandbox)? {
+replace: match Policy::decode_with_input(&bytes).map(|(policy, _)| (policy, None::<Vec<u8>>)).map_err(Failure::sandbox)? {
+caught-by:
+    cineris-sandbox::it confined::sys_a_live_length_that_is_not_the_policys_runs_nothing
+
+[break] live-wrap-gives-a-length-past-the-policy
+rule: The harness gives the launcher the policy's exact length.
+file: crates/cineris-sandbox/src/launch.rs
+in: Launcher::wrap_live
+find: self.encoded.len().to_string()
+replace: (self.encoded.len() + 1).to_string()
+caught-by:
+    cineris-sandbox launch::tests::a_live_wrap_gives_the_policys_exact_length_before_the_marker
+
+[break] live-input-is-closed
+rule: A command started with a live input keeps the launcher's standard input, past the policy.
+file: crates/cineris-sandbox/src/launch.rs
+in: become_command
+find: Given::Live => std::process::Stdio::inherit()
+replace: Given::Live => std::process::Stdio::null()
+os: linux
+caught-by:
+    cineris-sandbox::it confined::sys_a_confined_command_reads_its_live_input_line_by_line

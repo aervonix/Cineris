@@ -973,8 +973,8 @@ caught-by:
 rule: A confined command with an input field is given that input, not a closed one.
 file: crates/cineris-sandbox/src/launch.rs
 in: become_command
-find: Some(input) => std::process::Stdio::from(input)
-replace: Some(_) => std::process::Stdio::null()
+find: Given::Sealed(input) => std::process::Stdio::from(input)
+replace: Given::Sealed(_) => std::process::Stdio::null()
 os: linux
 packages: cineris-sandbox, cineris-core
 caught-by:
