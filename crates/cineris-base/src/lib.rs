@@ -104,8 +104,8 @@ pub use secret_buf::SecretBuf;
 pub use time::{TimeError, UtcTime};
 pub use timer::{SharedTimer, Sleep, Timer};
 pub use visible::{
-    acts_unseen, in_code, one_line, unescape, visible, visible_keeping, visible_keeping_after,
-    visible_to_the_model,
+    acts_unseen, in_code, one_line, selectors_escaped, unescape, visible, visible_keeping,
+    visible_keeping_after, visible_to_the_model,
 };
 pub use watch::{FileStamp, TimedStamp, WatchList};
 pub use zone::{LocalDate, Zone};

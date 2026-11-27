@@ -36,7 +36,12 @@ fn an_approved_extensions_gates_hold_in_a_build_without_the_engine() {
         ],
     );
     world.put("a.txt", "the file\n");
-    let folder = world.dirs().config.unwrap().join("extensions").join("probe");
+    let folder = world
+        .dirs()
+        .config
+        .unwrap()
+        .join("extensions")
+        .join("probe");
     std::fs::create_dir_all(&folder).unwrap();
     std::fs::write(
         folder.join("extension.toml"),
@@ -93,10 +98,15 @@ fn an_approved_extensions_gates_hold_in_a_build_without_the_engine() {
             panic!("{results:?}");
         };
         assert_eq!(tool, "read");
-        assert!(*outcome != "success", "the held gate let the read go: {text}");
+        assert!(
+            *outcome != "success",
+            "the held gate let the read go: {text}"
+        );
         assert!(text.contains("no script engine"), "{text}");
         assert!(
-            notices.iter().any(|notice| notice.contains("is not loaded")),
+            notices
+                .iter()
+                .any(|notice| notice.contains("is not loaded")),
             "{notices:?}"
         );
         front.close().await;
@@ -169,7 +179,10 @@ fn a_users_refused_gate_holds_in_a_build_without_the_engine() {
             panic!("{results:?}");
         };
         assert_eq!(tool, "read");
-        assert!(*outcome != "success", "the refused gate let the read go: {text}");
+        assert!(
+            *outcome != "success",
+            "the refused gate let the read go: {text}"
+        );
         front.close().await;
     });
 }

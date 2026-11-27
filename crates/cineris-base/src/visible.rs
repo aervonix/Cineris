@@ -231,12 +231,24 @@ pub fn visible_keeping_after<'a>(
 /// another file. [`unescape`] reads it back.
 #[must_use]
 pub fn visible_to_the_model(text: &str) -> Cow<'_, str> {
-    let shown = visible(text);
-    if !shown.chars().any(is_selector) {
-        return shown;
+    match visible(text) {
+        Cow::Borrowed(text) => selectors_escaped(text),
+        Cow::Owned(shown) => Cow::Owned(selectors_escaped(&shown).into_owned()),
     }
-    let mut out = String::with_capacity(shown.len() + 8);
-    for character in shown.chars() {
+}
+
+/// `text` with every variation selector written as its escape and nothing
+/// else changed: for text the model is given that has already been made
+/// [`visible`] in some other way (a hook's words, with their line breaks
+/// kept), where one selector after each character would carry a byte
+/// unseen. [`unescape`] reads it back.
+#[must_use]
+pub fn selectors_escaped(text: &str) -> Cow<'_, str> {
+    if !text.chars().any(is_selector) {
+        return Cow::Borrowed(text);
+    }
+    let mut out = String::with_capacity(text.len() + 8);
+    for character in text.chars() {
         if is_selector(character) {
             push_escape(&mut out, character);
         } else {
@@ -476,6 +488,10 @@ mod tests {
             visible_to_the_model("plain/name"),
             Cow::Borrowed(_)
         ));
+        assert_eq!(
+            selectors_escaped("a\u{fe0f}\nb\u{e0100}"),
+            "a\\u{fe0f}\nb\\u{e0100}"
+        );
     }
 
     #[test]

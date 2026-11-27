@@ -606,7 +606,10 @@ struct Answer {
 
 /// What a hook wrote, as the harness passes it on: cut to [`TEXT_CAP`]
 /// bytes at a character's edge, the cut marked, and every character that
-/// acts unseen written as an escape, but for its line breaks.
+/// acts unseen written as an escape, but for its line breaks, and every
+/// variation selector too, since what a hook writes reaches the model,
+/// where one after each character would carry a byte unseen (the fixes to
+/// step 28).
 fn capped(mut text: String) -> String {
     if text.len() > TEXT_CAP {
         let mut end = TEXT_CAP;
@@ -617,8 +620,11 @@ fn capped(mut text: String) -> String {
         text.push_str(" […]");
     }
     match cineris_base::visible_keeping(&text, &['\n']) {
-        Cow::Borrowed(_) => text,
-        Cow::Owned(escaped) => escaped,
+        Cow::Borrowed(_) => match cineris_base::selectors_escaped(&text) {
+            Cow::Borrowed(_) => text,
+            Cow::Owned(escaped) => escaped,
+        },
+        Cow::Owned(escaped) => cineris_base::selectors_escaped(&escaped).into_owned(),
     }
 }
 
@@ -1300,6 +1306,22 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    /// What a hook writes reaches the model with every variation selector
+    /// as its escape, one after each character as a run, and its line
+    /// breaks kept: it hides no byte there (the fixes to step 28).
+    #[test]
+    fn what_a_hook_writes_has_its_selectors_as_escapes() {
+        assert_eq!(
+            capped("R\u{e0152}e\u{e0155}ad \u{2764}\u{fe0f}\nnow".to_owned()),
+            "R\\u{e0152}e\\u{e0155}ad \u{2764}\\u{fe0f}\nnow"
+        );
+        assert_eq!(
+            capped("a\u{202e}b\u{fe0f}\u{fe0f}".to_owned()),
+            "a\\u{202e}b\\u{fe0f}\\u{fe0f}"
+        );
+        assert_eq!(capped("plain".to_owned()), "plain");
+    }
 
     fn heard(hook: &str, value: Json, event: HookEvent) -> Heard {
         Heard {
