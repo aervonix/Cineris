@@ -85,6 +85,7 @@ mod unix {
     use std::os::unix::fs::{PermissionsExt, symlink};
     use std::path::Path;
 
+    use cineris_session::FileStatus;
     use cineris_session::entry::{Before, Body, Checkpoint, FileChange};
 
     use super::*;
@@ -256,6 +257,52 @@ mod unix {
             assert_eq!(mode(&world.file(path)), 0o644, "{path}");
         }
     }
+
+    /// A file whose content is as it will be put back but whose mode is
+    /// wider than the one kept is not already put back (the full review of
+    /// the step 25 fixes): the plan shows it as one to put back (here as
+    /// edited since, since the person put the content back by hand), and
+    /// putting it back narrows the mode. One with the content and the mode
+    /// both as kept is already put back.
+    #[test]
+    fn the_same_content_with_a_wider_mode_is_still_put_back() {
+        let world = World::new("put_back_wider");
+        world.write("private.txt", b"mine");
+        set(&world.file("private.txt"), 0o600);
+        world.write("same.txt", b"ours");
+        set(&world.file("same.txt"), 0o640);
+        let mut session = world.create("s_1");
+        a_turn(
+            &world,
+            &mut session,
+            &[
+                ("private.txt", Some(b"changed")),
+                ("same.txt", Some(b"changed")),
+            ],
+        );
+        // The person puts both back by hand; one comes back opened up.
+        world.write("private.txt", b"mine");
+        set(&world.file("private.txt"), 0o644);
+        world.write("same.txt", b"ours");
+        let plan = session.plan_undo().unwrap().unwrap();
+        let status = |path: &str| {
+            plan.files
+                .iter()
+                .find(|file| file.path == path)
+                .unwrap()
+                .status
+        };
+        assert_eq!(status("private.txt"), FileStatus::EditedSince, "{plan:?}");
+        assert_eq!(status("same.txt"), FileStatus::AlreadyRestored, "{plan:?}");
+
+        let done = undo(&mut session);
+        // A file already as it is put back is listed as put back too.
+        assert_eq!(done.restored, ["private.txt", "same.txt"], "{done:?}");
+        assert!(done.not_restored.is_empty(), "{done:?}");
+        assert_eq!(fs::read(world.file("private.txt")).unwrap(), b"mine");
+        assert_eq!(mode(&world.file("private.txt")), 0o600);
+        assert_eq!(mode(&world.file("same.txt")), 0o640);
+    }
 }
 
 /// On Windows a file kept from everyone but its user (its own access
@@ -296,4 +343,33 @@ fn a_private_file_made_again_on_windows_is_owner_only() {
     let plain = access_list(&world.file("plain.txt")).unwrap();
     assert!(plain.inherits, "{plain:?}");
     assert!(!plain.is_kept_from_others(), "{plain:?}");
+}
+
+/// On Windows a file the person made private after the harness left it,
+/// with no mode kept (an ordinary file when the turn began), stays private
+/// when a rewind writes over it (the full review of the step 25 fixes: the
+/// file took its folder's rules). Runs only on a Windows machine.
+#[cfg(windows)]
+#[test]
+fn a_file_made_private_since_stays_private_when_it_is_put_back_on_windows() {
+    use std::io::Write;
+
+    use cineris_base::private::{access_list, create_new};
+
+    let world = World::new("put_back_windows_since");
+    world.write("notes.txt", b"ours");
+    let mut session = world.create("s_1");
+    a_turn(&world, &mut session, &[("notes.txt", Some(b"changed"))]);
+    assert!(!log_of(&session).contains(r#""mode""#));
+    // The person makes it private: the same content, in a file of their own.
+    let notes = world.file("notes.txt");
+    fs::remove_file(&notes).unwrap();
+    create_new(&notes).unwrap().write_all(b"changed").unwrap();
+    assert!(access_list(&notes).unwrap().is_owner_only());
+
+    let done = undo(&mut session);
+    assert_eq!(done.restored, ["notes.txt"], "{done:?}");
+    assert_eq!(fs::read(&notes).unwrap(), b"ours");
+    let list = access_list(&notes).unwrap();
+    assert!(list.is_kept_from_others(), "{list:?}");
 }
