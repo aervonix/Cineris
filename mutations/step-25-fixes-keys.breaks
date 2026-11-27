@@ -33,6 +33,15 @@ replace: if true {
 caught-by:
     cineris-knowledge detect::tests::a_script_is_offered_with_what_npm_runs_before_and_after_it
 
+[break] the-joined-npm-row-has-no-cap
+rule: The row naming a script with its `pre<name>` and `post<name>` is held to the cap a script's text is held to.
+file: crates/cineris-knowledge/src/detect.rs
+in: npm_runs
+find: (shown.chars().count() <= MAX_RUNS).then_some(shown)
+replace: Some(shown)
+caught-by:
+    cineris-knowledge detect::tests::a_script_is_offered_with_what_npm_runs_before_and_after_it
+
 [break] an-unreadable-pre-script-is-left-out
 rule: A `pre<name>` or `post<name>` that cannot be read whole, or is not text, keeps its script from being offered.
 file: crates/cineris-knowledge/src/detect.rs
