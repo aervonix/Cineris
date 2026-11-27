@@ -96,7 +96,7 @@ An independent reviewer read the first commit of this part cold. Each point, wha
 
 ## Breaks
 
-In [`mutations/step-25-fixes-secrets.breaks`](../../../../mutations/step-25-fixes-secrets.breaks). VERDICTS
+In [`mutations/step-25-fixes-secrets.breaks`](../../../../mutations/step-25-fixes-secrets.breaks): 32 breaks, one for each rule above, each naming the test that must catch it; and step 25's fifteen breaks and step 9's one whose code these changes moved, re-pointed. `cargo xtask mutate --check --tests` passes (every break applies, every `caught-by` names a test). **Their verdicts are not recorded here yet:** the run was queued behind other work when this part was handed back, and the session records them.
 
 ## What was run
 
