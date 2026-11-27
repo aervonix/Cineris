@@ -41,6 +41,9 @@ cineris-tools = { path = "crates/cineris-tools" }
 cineris-tui = { path = "crates/cineris-tui" }
 
 # Third-party crates. Default features off; opt in to what is used.
+# The approvals key (the signed approvals step): Argon2id of the person's
+# password. `alloc` for its own memory blocks, `zeroize` to wipe them.
+argon2 = { version = "0.6.0", default-features = false, features = ["alloc", "zeroize"] }
 futures-core = { version = "0.3.34", default-features = false, features = ["std"] }
 globset = { version = "0.4.21", default-features = false }
 grep-matcher = { version = "0.1.9", default-features = false }
@@ -65,6 +68,9 @@ reqwest = { version = "0.13.5", default-features = false, features = ["http2", "
 # `scripts` feature. `std`, and `loader` for the trait a module loader of our
 # own implements (imports resolve only inside the extension's snapshot). No
 # futures runtime, no macros.
+# Ed25519 and HKDF for the approvals key (the signed approvals step). It is
+# in every shipped build already, as `rustls`'s crypto provider.
+ring = { version = "0.17.14", default-features = false }
 rquickjs = { version = "0.14.0", default-features = false, features = ["std", "loader"] }
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 # The system's root certificates for extensions' fetch client, read from the
@@ -101,6 +107,9 @@ unicode-width = { version = "0.2.3", default-features = false }
 windows-native-keyring-store = { version = "1.1.0", default-features = false }
 # No features here: each crate that uses it names the API families it calls.
 windows-sys = { version = "0.61.2", default-features = false }
+# Wiping the approvals key's secrets when they are dropped (the signed
+# approvals step); in every shipped build already, through `rustls`.
+zeroize = { version = "1.9.1", default-features = false }
 
 # The nightly unused-dependency check (`cargo xtask unused`, cargo-machete)
 # looks at third-party crates only, for now. The skeleton declares the edges

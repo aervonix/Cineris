@@ -4,7 +4,7 @@ This work is not a numbered step of the build plan. It makes the harness's appro
 
 ## The design, before building
 
-Written before any code. The calls marked **Owner's call** are the owner's; nothing below is built until they are answered.
+Written before any code, then reviewed by an independent reviewer who had not seen the reasoning; the owner's and the maintainers' answers are in [The answers](#the-answers), and what the review changed is in [The review of the design](#the-review-of-the-design). Where the two disagree with the sections in between, they win.
 
 ### The threat note
 
@@ -12,7 +12,7 @@ Written before any code. The calls marked **Owner's call** are the owner's; noth
 
 **What it must not do.** Make an approval count that the person did not give, in any session, at any level, in either build: by writing a store, copying an entry from another project, putting back an entry from before, replacing what sessions check signatures against, or running Cineris's approving subcommands by any route. Today each of these is a write of a text file, or a command line the guards may miss. The review of step 28 found five lines past guard B: `cineris project`, which has no B; Windows' walk, which gives up at 64 interpreters; the socket, which answers another harness's command; a harness that is process 1; and a pid namespace of the command's own.
 
-**What changes.** An approval counts only with a signature made by a key that only the person's password makes. The model's code can still run every approving subcommand, write every store, and answer every question over the socket. Without the password, nothing it writes counts. None of the review's five lines gets a signature, so they stop mattering for approvals. Guards A, B and C stay as defence in depth: they keep the model from putting a real Cineris prompt in front of the person for something the model chose.
+**What changes.** An approval counts only with a signature made by a key that only the person's password makes. The model's code can still run every approving subcommand, write every store, and answer every question over the socket. Without the password, nothing it writes counts. None of the review's five lines gets a signature by itself. Guards A, B and C stay as defence in depth: they keep the model from putting a real Cineris prompt in front of the person for something the model chose, which on Windows matters more than it seemed (the review's finding 1: a command shared the harness's console until this step).
 
 ### The trust anchor
 
@@ -41,8 +41,8 @@ A signature helps only if the model's code can neither sign without the person n
 | `serve` and `attach` | `attach` gives the server the password once, to open it; a server nobody opened uses no approvals | Uses the approvals; `attach` signs at the yes on its own side and sends only signatures |
 | CI | Runs without approvals | Uses what the machine has stored (nothing, on a fresh runner) |
 | A forgotten password | A reset drops every approval | A reset drops every approval, and needs `sudo` or UAC again |
-| Linux under WSL, interop on | Holds | Does not hold |
-| A Windows administrator's account, UAC at its default | Holds | Does not hold |
+| Linux under WSL, interop on | Holds against writes to the stores; interop gives the model's commands `powershell.exe` (a keyboard hook, `AttachConsole`) and `wsl.exe -u root` (the harness's memory) | Does not hold |
+| A Windows administrator's account, UAC at its default | Holds against writes to the stores; the console and the keyboard are the residual below | Does not hold |
 | A user with no administrator's rights | Holds | Cannot be set up |
 
 Both use one format, one key made from the password, and one way of signing at the yes. They differ only in where a session's checking key comes from, so A can be added to P later as an option for the machines it holds on, sparing them the prompt when a session opens.
@@ -54,12 +54,12 @@ Both use one format, one key made from the password, and one way of signing at t
 Each item below is something a process with the user's rights can still do. Each needs a deliberate attack on the person's own programs or input, rather than a write to the harness's stores.
 
 - **A replaced or wrapped `cineris`.** It may be a binary in a folder the user can write (`~/.cargo/bin`, `~/.local/bin`, a per-user Windows install), a script of the same name earlier on `PATH`, or an alias in the shell's start-up file. It runs the next time the person types `cin`, with the person there. It can record what they type (`script` does it in one line), and then sign with the password. **Narrowed by:** an install to a folder only an administrator can write. That is step 34's to choose, and this step recommends it. The guards see only a session's commands, so they do not narrow this.
-- **A keylogger, or a fake prompt.** On Windows, any program of the user's can read the keyboard (a low-level keyboard hook); so can any program on X11. Any program can also write a prompt to the person's terminal device and read the answer. A password typed there is the attacker's. This does not hold on Wayland or a plain console, where one program of the user's cannot read another's keys. Not narrowed. Where Hello is chosen, its prompt is drawn by the system, not the terminal.
+- **A keylogger, or a fake prompt.** On Windows any program of the user's can read the keyboard (a low-level keyboard hook) and attach to a console of the user's (`AttachConsole`) and read or write its input; so can any program on X11 with the keyboard. On Linux any program of the user's can open the person's terminal device and race the harness for its keys, or write a prompt there and read the answer: Wayland and the plain console narrow the keyboard, not the terminal device. A password typed where another program reads is that program's. **Narrowed by:** commands no longer share the harness's console on Windows (this step); while the password row is open the terminal device is opened exclusively on Linux (`TIOCEXCL`, which stops new opens, not ones already open); and the prompt refuses while a debugger is attached.
 - **A debugger, or a read or write of the harness's memory.** On Linux a process of the user's can attach to the harness where Yama's `ptrace_scope` is 0. Ubuntu sets 1, which forbids it; other distributions differ. On Windows any process of the user's can open the harness and read or write its memory. With the password typed at each yes, the signing key is in memory only while a signature is made. Under P the checking key is in memory for the session, and a write to it would make that session accept forged entries. **Narrowed by:** the harness closing its own process (Owner's call 8).
 - **An elevated process.** An administrator or root can do anything. Under A, the table above shows how close that is on WSL and on an administrator's Windows account.
 - **A rollback of the stores.** No store can tell its latest state from an earlier signed one without storage the user cannot roll back. A TPM's monotonic counter would serve, but neither system opens one to a user's programs. A process that kept a copy of a store can put back an approval the person later took away. It can put back only an approval the person gave, and only for exactly what they saw then. **Narrowed by:**
   - every entry is bound to its project;
-  - a project trusted again gets a new generation, so an old pin cannot be mixed into a new trust;
+  - each unit (a project's trust, the user's pins) is signed whole with a revision, so an old pin comes back only with the whole unit it was signed in;
   - a reset makes a new key, after which nothing from before counts.
 
   **Owner's call 9.**
@@ -72,15 +72,15 @@ Everything that approves or answers for the person, in the stores a session read
 
 | Store | What each signature covers | Signed at |
 |---|---|---|
-| `pins.toml` | Each pin: kind, name, hash | `cineris ext add`, the application's approval of an extension, step 30's approvals of the user's MCP servers and tools |
-| `trust.toml` | Each project's trust: its key, its generation (16 random bytes, made when it was trusted), and whether git is trusted. Each pin: the project's key and generation, kind, name, hash. A project's rules hash is one of these pins | The trust question, `cineris permissions trust`, approving what is new, step 30's approvals of a project's MCP servers |
+| `pins.toml` | Every pin together: the revision, and each pin's kind, name, hash and registration | `cineris ext add`, the application's approval of an extension, step 30's approvals of the user's MCP servers and tools |
+| `trust.toml` | Each project's trust, whole: its key, its revision, its root, whether git is trusted, and every pin's kind, name, hash and registration. A project's rules hash is one of these pins | The trust question, `cineris permissions trust`, approving what is new, step 30's approvals of a project's MCP servers |
 | `approvals/<key>.toml` | Each stored approval: the project's key, its id, the rule | "Always allow in this project" |
 | `projects/<key>/knowledge.toml` | Each entry accepted, and each decision on a shared entry for its hash. These make a learned command run unasked, a check run at a turn's end, or a fact reach the prompt. The review of step 28 wrote one through `cineris project add`, with no guard (its finding 1) | `cineris project add`, `accept`, `edit` and `promote`, and the application's accept |
 | `extensions/registered.json` | What an approved extension registered: its tools, commands, hooks, prompt text, and which gates it holds. A session uses it in place of starting the engine, so a forged entry could add prompt text or drop a gate | To settle while building: bind each registration to its pin's signature where the registration is known at the yes (`ext add` evaluates before it asks), and otherwise evaluate again rather than use an unsigned registration |
 
-**Taking an approval away is not signed.** This covers `unpin`, `revoke`, `forget`, refusing a project, keeping its trust without what is new, and step 28's fixes' `drop_pins`. Each can only make something ask again, which is safe; a program of the user's can delete a store anyway. The doc of `drop_pins` calls a drop an approval change, and it is one, but in the direction that needs no person (Owner's call 4). An unsigned entry counts for nothing, not even as `Changed`: its hash is the writer's word. All a session says of it is that it asks again.
+**Superseded by the answer to call 4:** each unit of a store (a project's trust, the user's pins) is signed whole, with a revision, so taking a pin away is a signed change made at the person's yes; and what restricts counts unsigned (below, "The review of the design").
 
-**Not covered by the stores: the user's own configuration.** Its permission rules, its level, its sandbox settings and its hooks grant with no approval, and the model's code can write the file. Signing the stores leaves that open. Closing it means pinning the configuration's widening parts as a project's are pinned, and asking after a hand edit, with the password, at the next start. The user's MCP servers are pinned already, by step 30. **Owner's call 3.**
+**Not covered by the stores: the user's own configuration.** Its permission rules, its level, its sandbox settings and its hooks grant with no approval, and the model's code can write the file. Signing the stores leaves that open. Closing it means pinning the configuration's permission-relevant parts whole, as a project's rules are pinned (dropping a deny is a widening), and asking after a hand edit, with the password, at the next start. **Answered:** the third pull request, merged before step 29.
 
 ### The formats
 
@@ -101,7 +101,7 @@ Under P a session never trusts `public_key`. It checks with the key the typed pa
 
 **What is signed** is a statement's bytes: a domain label (`cineris approval v1`), the statement's kind (`user pin`, `project`, `project pin`, `stored approval`, `knowledge`), and each field with its length before it, as `Definition::of` hashes its parts.
 
-**`pins.toml` version 2** gives each `[[pin]]` a `signature`. **`trust.toml` version 3** gives each `[[project]]` a `generation` and a `signature`, and each `[[project.pinned]]` a `signature`. **`approvals/<key>.toml` version 2** and **`knowledge.toml`'s next version** give each signed entry a `signature`. The signature is Ed25519, 64 bytes in base64.
+**`pins.toml` version 2** has one `revision` and one `signature`, over every pin. **`trust.toml` version 3** gives each `[[project]]` a `revision` and a `signature`, over the project's key, revision, root, whether git is trusted, and every pin. **`approvals/<key>.toml` version 2** and **`knowledge.toml`'s next version** (the second pull request) sign each file's whole set the same way. The signature is Ed25519, 64 bytes written as 128 lowercase hexadecimal digits. (As built after the review: one signature for each unit, not each entry.)
 
 What carries no signature keeps its present form and meaning: `refused`, `declined_rules`, `git = "declined"`, `root`, the times.
 
@@ -134,8 +134,8 @@ What carries no signature keeps its present form and meaning: `refused`, `declin
 As recommended under P (A's differences are in the table above):
 
 - **`-p`** asks at its terminal when it has one and the session has approvals to use. With none, it runs without them, and standard error says so once. A new approval in a headless run is refused, and the message names the command that asks for one (`cineris permissions trust`, `cineris ext add`). `--trust-project` stays what it is: trust for the run alone, stored nowhere, signing nothing.
-- **`serve`** uses no approvals until a `user` client opens them with a new method, `approvals/unlock`. `attach` asks the person when it starts, as the application does. The method's password is a type no log records, and it is wiped after the key is made.
-- **A yes in `attach`** is signed in the `attach` process. The server checks the signatures with the key the unlock made, then stores them, so the password does not cross the socket again. A program that stands a server of its own at the socket's path can show `attach` anything; that is the fake prompt above. A raw client that answers `trust/request` (the review's finding 3) has no signature to give: its yes is refused, and the question stays open.
+- **`serve`** asks at its own terminal when it has one; with none it uses no approvals, and holds their gates. **No password ever crosses the socket** (answer C): a program that took over the socket's name would get it. An editor that uses `serve` with no terminal gets no project trust until an administrator's anchor (the third pull request) is set up where it holds.
+- **A yes in `attach`** is signed in the `attach` process, which reads the stores itself and checks that what it signs is the stores as they are plus the change it shows, so that a server answering at a taken-over socket cannot slip in more. A raw client that answers `trust/request` (step 28's review, finding 3) has no signature to give: its yes is refused, and the question stays open.
 - **CI** runs without approvals. What a CI run needs, it states on its own command line (`--allow`, `--permission-mode`). That is the CI file's statement, not an approval of the project's files. **No mode for "this machine has no person" is proposed**, since it would widen what runs (Owner's call 5).
 - **A nested run** (a session's command running `cin -p`) has no person and no approvals. It is capped at `read-only` already.
 
@@ -160,40 +160,31 @@ Measured on the second machine, release build:
 
 ### The interface for step 30
 
-Step 30 stores its approvals in these stores and calls `PinStore::pin`/`unpin`, `TrustStore::approve`, `ProjectTrust::standing`/`pinned_of` and `drop_pins`. After this step:
+As agreed after the review (it replaces the sketch first sent). Step 30 stores its approvals in these stores, calling them at a person's yes:
 
 ```rust
-// cineris_policy::signed
-pub struct Verifier;      // the person's public key: what a session checks with
-pub struct Generation;    // a trusted project's 16 random bytes
-pub enum Statement {      // one approval, as signed
-    UserPin { kind: TrustResourceKind, name: String, hash: ContentHash },
-    ProjectPin { project: ProjectKey, generation: Generation, kind: TrustResourceKind, name: String, hash: ContentHash },
-    // Project, StoredApproval, Knowledge …
-}
-impl Statement { pub fn bytes(&self) -> Vec<u8>; }
-pub struct Signatures;    // what a person's yes carries: a signature for each statement
-
-// Reads take the session's verifier; with none, nothing is approved.
-// `UserPins::standing`, `ProjectTrust::standing` and `pinned_of` keep their signatures,
-// and count only what verified.
+// cineris_policy: reads take the session's key; with none, nothing counts.
 PinStore::pins(&self, verifier: Option<&Verifier>) -> Result<UserPins, PinError>;
 TrustStore::project(&self, key: &ProjectKey, verifier: Option<&Verifier>) -> Result<ProjectTrust, TrustError>;
+// `standing`, `pinned_of` and `get` count only what is signed by that key;
+// `held` gives every pin, signed or not: what restricts.
 
-// A write that approves takes the person's signatures for exactly what it writes. The
-// store makes each statement itself, finds its signature, checks it, and writes nothing
-// if any is missing or wrong.
-PinStore::pin(&self, definition: &Definition, signed: &Signatures, verifier: &Verifier) -> Result<UserPins, PinError>;
-TrustStore::approve(&self, key: &ProjectKey, definitions: &[Definition], git_shown: bool,
-                    signed: &Signatures, verifier: &Verifier) -> Result<ProjectTrust, TrustError>;
-ProjectTrust::generation(&self) -> Option<&Generation>;  // what a project pin's statement names
+// Writes, removals included, are proposed, signed by the person, committed.
+PinStore::propose(&self, changes: &[PinChange], verifier: &Verifier) -> Result<Option<PinProposal>, PinError>;
+PinStore::commit(&self, proposal: &PinProposal, signature: &Signature, verifier: &Verifier) -> Result<UserPins, PinError>;
+TrustStore::propose(&self, key: &ProjectKey, change: TrustChange, verifier: &Verifier) -> Result<Option<TrustProposal>, TrustError>;
+TrustStore::commit(&self, proposal: &TrustProposal, signature: &Signature, verifier: &Verifier) -> Result<ProjectTrust, TrustError>;
+// PinChange::{Pin(Approved), Unpin { kind, name }}
+// TrustChange::{Trust { root, approved, git_shown, lift_refusal }, Approve { approved, git_shown }, Drop { pins }}
+// Approved { definition, registration: Option<ContentHash> }: the registration hash for an extension, none for an MCP tool
+// A proposal's `statement()` is what the person signs, and `summary()` what they read.
+// `commit` writes nothing when the unit moved since the proposal (`Moved`: ask again)
+// or the signature is not the key's over the proposal (`NotSigned`).
 
-// Taking away is unchanged: no signature.
-PinStore::unpin(&self, kind: &TrustResourceKind, name: &str) -> Result<bool, PinError>;
-TrustStore::drop_pins(/* as step 28's fixes give it */);
+// cineris_policy::signed: a `Verifier` is made only by `PersonKey::verifier`.
 ```
 
-**In the protocol**, a question whose yes is stored carries the statements its yes signs. Its answer carries `signatures`, one for each statement, in order. The front end builds each statement's bytes with the same library, checks that every statement is something it shows, asks the password, and signs. Step 30's approval questions follow the same pattern. The application, in process, does exactly what `attach` does. The core never sees the password at a yes.
+In the protocol, a question whose yes is stored carries the proposal in structured form, and its answer one signature. The front end that asked the person rebuilds the statement itself and signs it; the core never holds a key.
 
 ### The pull requests
 
@@ -245,5 +236,50 @@ Each pull request carries its own docs: `docs/security.md` sections 1 and 3 and 
 | 6 | A minimum length for the password | **8 characters,** with nothing else required. |
 | 7 | Windows Hello, as an extra on Windows: wanted? Is Hello (a PIN at least) set up on the reference machine's Windows? | Hello in the third pull request if it is set up and wanted. **No TPM path.** |
 | 8 | The harness closes its own process to the user's other programs: not dumpable on Linux (`PR_SET_DUMPABLE`, which also keeps a crash's core from holding a secret); on Windows an access list that denies the user reading, writing and threads, as the step 32 item recommends | **In this step,** since it narrows the residual that matters most to a key in memory. |
-| 9 | A rollback of the stores (a withdrawn approval put back, exactly as it was given) | **Accept as the residual,** narrowed by generations and by reset. |
+| 9 | A rollback of the stores (a withdrawn approval put back, exactly as it was given) | **Accept as the residual,** narrowed by whole-unit signatures and by reset. |
 | 10 | Argon2id (+44 KB) or `ring`'s PBKDF2 (nothing added) | **Argon2id.** |
+
+## The answers
+
+| # | Call | Answered |
+|---|---|---|
+| 1 | Where a session's checking key comes from | **The password, now; an administrator's anchor later** (the owner, 2026-11-27): the first two pull requests are password-anchored; the third adds a public key only an administrator can write, as an option offered at set-up where it holds (native Linux with `sudo`), and refused or warned of on WSL with interop on and on an administrator's account at UAC's default, so that those sessions skip the prompt. |
+| 2 | When the password is typed for a yes | **At each stored yes,** with no signing key held in the session (the owner). |
+| 3 | The user's own configuration | **Pinned whole** in the third pull request, before step 29: a change that widens rules (a deny dropped included), the level or the sandbox, or adds a hook, takes effect only after the password; a narrowing applies at once (the owner, and the maintainers on its timing). |
+| 4 | Taking an approval away | **Signed, as a change of the whole unit** (the maintainers, with the reviewer): a pin can hold a gate, so its removal is a widening. See below. |
+| 5 | A mode for a machine with no person | **None** (the maintainers). |
+| 6 | The password's minimum length | **12 characters,** nothing else required (the maintainers, after the reviewer's finding that 8 is weak against offline guessing). |
+| 7 | Windows Hello, a TPM | **Neither** (the owner). |
+| 8 | The harness closes its own process | **In this step** (the maintainers): not dumpable on Linux; on Windows an access list, on the process and through the token's default list on its threads, that leaves the user only `SYNCHRONIZE`, `PROCESS_QUERY_LIMITED_INFORMATION` and `PROCESS_TERMINATE`. |
+| 9 | A rollback of the stores | **The stated residual** (the maintainers), with the review's list of ways below. |
+| 10 | Argon2id or PBKDF2 | **Argon2id** (the maintainers). |
+| A | Commands on the harness's console (Windows) | **Started without it, in this step** (the owner), measured against `main` on a runner. |
+| B | The managed configuration | **Its folder read through the system's known folder, and a managed file the user can write refused,** on both systems, in this step (the maintainers). |
+| C | A password over the socket | **Never** (the maintainers): `serve` asks at its own terminal or runs without approvals; `attach` signs on its own side. |
+| E | When the administrator's anchor comes | **The third pull request, straight after the second** (the maintainers). |
+
+**The pull requests** (re-cut after the review, agreed by the maintainers; all three merge before step 29):
+
+1. The signed module and the key file; `pins.toml` and `trust.toml` signed whole, with the restriction side; the CLI's approving subcommands signing at a terminal (`ext add` and `remove`, `permissions trust`, `approvals setup|reset|status`); the application asking for the password when a session opens and signing at its trust question and its approval of an extension; guards A and B for the new subcommands; the harness's process closed, commands off its console, and the managed file the administrator's. **Until the second, the stored approvals and the accepted entries of what was learned are as unsigned as before:** that pull request's record says so.
+2. Stored approvals, and accepted entries of what was learned (signed by the core, since `cineris-knowledge` cannot see the policy crate); the registration cache bound to the hash in its pin; headless at a terminal, `serve` and `attach`; the protocol's additions.
+3. The user's configuration pinned whole, and the administrator's anchor where it holds.
+
+## The review of the design
+
+An independent review read the note against the code before anything was built (6 high, 6 medium and 7 low findings). Each, and what was done:
+
+| Finding | What it found | Done |
+|---|---|---|
+| 1, high | Every command shared the harness's console on Windows (`CREATE_NEW_PROCESS_GROUP \| CREATE_SUSPENDED` only): it could read the password as it was typed, press keys into any question, or draw a real prompt for the model's choice | Commands start without the harness's console (answer A); the `AttachConsole` residual is stated and on the reference machine's checklist |
+| 2, high | WSL was listed as holding, and the keyboard residual as Windows and X11 only | The rows say what holds against what; interop and the terminal device are in the residual |
+| 3, high | The user's and the managed configuration grant unsigned; the managed folder came from a variable | The user's configuration pinned whole (answer 3); the managed folder from the known folder, and a managed file the user can write refused (answer B) |
+| 4, high | Unsigned removals widen where a pin holds a gate, and a session with no key dropped every extension gate | Whole units signed with a revision (answer 4); what restricts counts unsigned, so a session opened without the person's approvals, and a headless run, keep every gate |
+| 5, high | An unlock over the socket would send the password to whatever answers there | No password crosses the socket (answer C) |
+| 6, medium | A raw client can still answer questions that are not stored | From the first pull request an unsigned yes trusts nothing, not even for its session; refusing another harness's command at the socket is step 28's fixes' |
+| 7, medium | Facts the harness observed reach the prompt unsigned; flags outside the hash | Observed facts are said to be prompt text as a repository's own files are; what is signed of an accepted entry includes its status and expiry, and a disable takes its signature away (the second pull request) |
+| 8, medium | The registration cache was left open | The hash of what an extension registered is in its pin's signed statement; an extension is evaluated before it is asked about; a registration not known, and a build without the engine, hold both gates and add no prompt text |
+| 9, medium | Rollback understated; one pin could be put back alone | Whole units: a pin comes back only with the whole unit it was signed in. Rollback needs no copy made by the model: `knowledge.toml.good`, a hard link to a store file, Windows's Previous Versions and File History, file-system snapshots (btrfs, ZFS). `approvals password` is dropped: re-signing would sign a rolled-back entry; a reset makes a new key |
+| 10, medium | Nothing kept a session from checking with a key read from a file | `Verifier` can be made only from the key a typed password makes: no constructor from bytes, text or a file |
+| 11, medium | The hardening's own interactions: nested runs, `hidepid`, a tracer attached first, thread access lists, the creator's handle | Each handled in the hardening part or stated; the prompt refuses while a debugger is attached |
+| 12, medium | Under the password anchor, one approved extension makes every session ask, and a prompt at every start makes a fake one look normal | Accepted as the cost of the password anchor until the administrator's anchor (answer E) |
+| Low | The password typed into the message box; wiping with `ring`; the cost's floor; 8 characters; status wording; reset blocked; the note and the draft disagreeing | The message box and wiping: residual, under the memory protection of answer 8; set-up and reset always write the standard cost; 12 characters; status says "carries a signature, not checked"; reset moves aside what blocks it; the note is corrected here (signatures are hexadecimal; whole units) |

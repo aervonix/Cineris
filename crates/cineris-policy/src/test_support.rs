@@ -225,6 +225,229 @@ impl TestParts {
     }
 }
 
+/// The password of [`Person::new`].
+pub const PASSWORD: &str = "the person's own password";
+
+/// A person who approves, for a test (the signed approvals step): their key
+/// made from a password at a cost small enough for an unoptimised build
+/// ([`Person::cost`]), and the propose, sign and commit a yes does, in one
+/// call. Tests that check what a session refuses use a second person
+/// ([`Person::with_password`]) as the other program's key.
+pub struct Person {
+    file: crate::signed::KeyFile,
+    key: crate::signed::PersonKey,
+}
+
+impl std::fmt::Debug for Person {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Person")
+            .field("verifier", &self.key.verifier())
+            .finish_non_exhaustive()
+    }
+}
+
+impl Default for Person {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Person {
+    /// The person whose password is [`PASSWORD`].
+    #[must_use]
+    pub fn new() -> Self {
+        Self::with_password(PASSWORD)
+    }
+
+    /// A person whose password is `password`, with a salt made from it, so
+    /// that the same password makes the same person in every test.
+    ///
+    /// # Panics
+    ///
+    /// When `password` has fewer than eight characters.
+    #[must_use]
+    pub fn with_password(password: &str) -> Self {
+        let salt = cineris_base::ContentHash::of(password.as_bytes());
+        let mut bytes = [0; crate::signed::Salt::LEN];
+        bytes.copy_from_slice(&salt.as_bytes()[..crate::signed::Salt::LEN]);
+        let (file, key) = crate::signed::KeyFile::make(
+            password.as_bytes(),
+            crate::signed::Salt::from_bytes(bytes),
+            Self::cost(),
+            cineris_protocol::ids::Timestamp::new(START),
+        )
+        .expect("a test's key is made");
+        Self { file, key }
+    }
+
+    /// The cost a test's key is made at: 64 KiB and one pass.
+    ///
+    /// # Panics
+    ///
+    /// Never: the cost is within the caps.
+    #[must_use]
+    pub fn cost() -> crate::signed::Cost {
+        crate::signed::Cost::new(64, 1, 1).expect("within the caps")
+    }
+
+    /// The key file the person's key is made with, as set-up writes it.
+    #[must_use]
+    pub fn key_file(&self) -> &crate::signed::KeyFile {
+        &self.file
+    }
+
+    /// What a session that the person opened checks with.
+    #[must_use]
+    pub fn verifier(&self) -> crate::signed::Verifier {
+        self.key.verifier()
+    }
+
+    /// The person's signature over `statement`.
+    #[must_use]
+    pub fn sign(&self, statement: &crate::signed::Statement) -> crate::signed::Signature {
+        self.key.sign(statement)
+    }
+
+    /// Pins `definitions` in `store` as the person's yes does: proposed,
+    /// signed and committed. Gives what is pinned after.
+    ///
+    /// # Panics
+    ///
+    /// When the store refuses.
+    pub fn pin_all(
+        &self,
+        store: &crate::trust::PinStore,
+        definitions: &[crate::trust::Definition],
+    ) -> crate::trust::UserPins {
+        let changes: Vec<crate::trust::PinChange> = definitions
+            .iter()
+            .map(|definition| crate::trust::PinChange::Pin(definition.clone().into()))
+            .collect();
+        self.change_pins(store, &changes).expect("the pins change")
+    }
+
+    /// Pins one definition: [`pin_all`](Self::pin_all).
+    ///
+    /// # Panics
+    ///
+    /// When the store refuses.
+    pub fn pin(
+        &self,
+        store: &crate::trust::PinStore,
+        definition: &crate::trust::Definition,
+    ) -> crate::trust::UserPins {
+        self.pin_all(store, std::slice::from_ref(definition))
+    }
+
+    /// Takes the pin of this kind and name away, as the person's yes does.
+    /// Says whether there was one.
+    ///
+    /// # Panics
+    ///
+    /// When the store refuses.
+    pub fn unpin(
+        &self,
+        store: &crate::trust::PinStore,
+        kind: &cineris_protocol::methods::TrustResourceKind,
+        name: &str,
+    ) -> bool {
+        let change = crate::trust::PinChange::Unpin {
+            kind: kind.clone(),
+            name: name.to_owned(),
+        };
+        let before = store
+            .pins(Some(&self.verifier()))
+            .expect("the pins are read")
+            .revision();
+        let after = self.change_pins(store, &[change]).expect("the pins change");
+        after.revision() != before
+    }
+
+    /// Trusts the project `key` for exactly `definitions`, as the person's
+    /// yes to the trust question does: proposed, signed and committed, a
+    /// never said of it lifted.
+    ///
+    /// # Panics
+    ///
+    /// When the store refuses.
+    pub fn trust(
+        &self,
+        store: &crate::trust::TrustStore,
+        key: &cineris_protocol::ids::ProjectKey,
+        root: &str,
+        definitions: &[crate::trust::Definition],
+        git_shown: bool,
+    ) -> crate::trust::ProjectTrust {
+        let change = crate::trust::TrustChange::Trust {
+            root: root.to_owned(),
+            approved: definitions.iter().cloned().map(Into::into).collect(),
+            git_shown,
+            lift_refusal: true,
+        };
+        self.change_trust(store, key, change)
+            .expect("the project is trusted")
+    }
+
+    /// Approves `definitions` of the trusted project `key`, as the person's
+    /// yes to what is new does.
+    ///
+    /// # Panics
+    ///
+    /// When the store refuses.
+    pub fn approve(
+        &self,
+        store: &crate::trust::TrustStore,
+        key: &cineris_protocol::ids::ProjectKey,
+        definitions: &[crate::trust::Definition],
+        git_shown: bool,
+    ) -> crate::trust::ProjectTrust {
+        let change = crate::trust::TrustChange::Approve {
+            approved: definitions.iter().cloned().map(Into::into).collect(),
+            git_shown,
+        };
+        self.change_trust(store, key, change)
+            .expect("the definitions are approved")
+    }
+
+    /// Makes `change` to the project `key` in `store`, as the person's yes
+    /// does: proposed, signed and committed. With nothing to change, the
+    /// project's trust as it is.
+    ///
+    /// # Errors
+    ///
+    /// What the store refused with.
+    pub fn change_trust(
+        &self,
+        store: &crate::trust::TrustStore,
+        key: &cineris_protocol::ids::ProjectKey,
+        change: crate::trust::TrustChange,
+    ) -> Result<crate::trust::ProjectTrust, crate::trust::TrustError> {
+        let verifier = self.verifier();
+        match store.propose(key, change, &verifier)? {
+            Some(proposal) => store.commit(&proposal, &self.sign(proposal.statement()), &verifier),
+            None => store.project(key, Some(&verifier)),
+        }
+    }
+
+    /// Makes `changes` in `store`, as the person's yes does: proposed,
+    /// signed and committed. With nothing to change, the pins as they are.
+    ///
+    /// # Errors
+    ///
+    /// What the store refused with.
+    pub fn change_pins(
+        &self,
+        store: &crate::trust::PinStore,
+        changes: &[crate::trust::PinChange],
+    ) -> Result<crate::trust::UserPins, crate::trust::PinError> {
+        let verifier = self.verifier();
+        match store.propose(changes, &verifier)? {
+            Some(proposal) => store.commit(&proposal, &self.sign(proposal.statement()), &verifier),
+            None => store.pins(Some(&verifier)),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use cineris_base::PathStyle;

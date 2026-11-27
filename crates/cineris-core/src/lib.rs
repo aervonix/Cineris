@@ -42,6 +42,7 @@ mod instructions;
 mod knowledge;
 mod manage;
 mod paging;
+mod person;
 mod policy;
 // An extension's programs and a hook command's: found, quoted and started
 // alike.
@@ -94,6 +95,7 @@ pub use cineris_ext::source::Source as ExtensionSource;
 pub use cineris_llm::TokioTimer;
 /// The harness's own approving commands, as the permission engine refuses
 /// them: what a front end gives its grammar to (`CoreOptions::own_commands`).
-pub use cineris_policy::approving;
+pub use cineris_policy::{approving, signed};
+pub use crate::person::{KeyRefusal, ResetReport};
 /// What `cineris stats` found where the aggregates file is.
 pub use cineris_stats::Found as AggregatesFound;

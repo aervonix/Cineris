@@ -18,6 +18,7 @@
 //! | [`secrets`] | The file names that look like secrets, which are asked about by default. |
 //! | [`command`] | Command analysis that fails closed, for POSIX shells and PowerShell, and the table of commands that only read. |
 //! | [`approvals`] | Approvals for a session and for a project, and the project's stored file. |
+//! | [`signed`] | Approvals signed with a key only the person's password makes: the statements signed, the signatures, the person's key and the key file (the signed approvals step). |
 //! | [`trust`] | Project trust, pinned to the hash of each definition the user saw; and the user's own pins, in a file of their own (`pins.toml`, since step 28). |
 //! | [`engine`] | [`Engine`]: one decision for one planned tool call. |
 //! | `test_support` | With the `test-support` feature, for tests only: `TestParts`, an engine's parts with sane defaults. |
@@ -59,6 +60,7 @@ pub mod lease;
 pub mod level;
 pub mod rules;
 pub mod secrets;
+pub mod signed;
 mod store_lock;
 #[cfg(feature = "test-support")]
 pub mod test_support;
@@ -74,6 +76,6 @@ pub use lease::{LeaseExt, NarrowError, StandingTerms, default_sandbox, standing_
 pub use level::{Decider, LevelError, Matter, NoSandbox, SandboxState, check_standing};
 pub use rules::{Protected, RuleContext, RuleError, RuleSet, RuleSource, SourcedRule};
 pub use trust::{
-    Definition, PinError, PinStore, ProjectRules, ProjectTrust, Standing, TrustError, TrustStore,
-    UserPin, UserPins,
+    Approved, Checked, Definition, PinChange, PinError, PinProposal, PinStore, ProjectRules,
+    ProjectTrust, Standing, TrustChange, TrustError, TrustProposal, TrustStore, UserPin, UserPins,
 };

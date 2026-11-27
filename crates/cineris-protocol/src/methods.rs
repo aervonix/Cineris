@@ -1485,6 +1485,68 @@ pub struct TrustRequest {
     /// an extension is kept by the core for its run alone.
     #[serde(default, skip_serializing_if = "is_false")]
     pub trusted: bool,
+    /// What a yes would write, which the person signs (since the signed
+    /// approvals step): the project's whole entry as it would then be. A
+    /// front end that answers yes rebuilds the bytes signed from it, checks
+    /// that it holds what it shows, asks the person for their password,
+    /// and answers with the signature. Absent when nothing a yes would
+    /// write can be kept (no state directory): a yes then holds for the
+    /// session alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proposal: Option<ApprovalProposal>,
+    /// What a yes changes, one line each, for the person to read before
+    /// they sign.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub summary: Vec<String>,
+}
+
+/// A unit of a store of approvals as a yes would write it, which the
+/// person signs whole (since the signed approvals step;
+/// `docs/architecture/06-permissions-and-sandbox.md`, "Signed approvals").
+/// Hashes are lowercase hexadecimal. The bytes signed are made from it by
+/// `cineris_policy::signed`, in one way only, so that a front end and the
+/// store agree on them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(tag = "unit", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ApprovalProposal {
+    /// One project's trust and everything pinned with it.
+    Project {
+        /// The project's key.
+        key: ProjectKey,
+        /// The entry's revision after the change.
+        revision: u64,
+        /// The root, as it is shown to a person.
+        root: String,
+        /// Whether git may read the repository's own configuration.
+        git_trusted: bool,
+        /// Every pin of the entry after the change.
+        pins: Vec<ProposedPin>,
+    },
+    /// The user's own pins, all of them.
+    UserPins {
+        /// The revision after the change.
+        revision: u64,
+        /// Every pin after the change.
+        pins: Vec<ProposedPin>,
+    },
+}
+
+/// One pin of an [`ApprovalProposal`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct ProposedPin {
+    /// What kind of thing it is.
+    pub kind: TrustResourceKind,
+    /// Its name.
+    pub name: String,
+    /// The hash of what is approved.
+    pub hash: String,
+    /// The hash of what it registered, for an extension evaluated before
+    /// the question.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registration: Option<String>,
 }
 
 /// The answer to `trust/request`.
@@ -1509,6 +1571,13 @@ pub struct TrustResponse {
     /// trusted, or `never` to one trusted, is refused (`invalid_answer`).
     #[serde(default, skip_serializing_if = "is_false")]
     pub keep: bool,
+    /// With `trusted`, to a request with a `proposal`: the person's
+    /// signature over it, 128 lowercase hexadecimal digits (since the
+    /// signed approvals step). A yes without one, or with one that is not
+    /// the person's key's over the proposal, trusts nothing, not even for
+    /// the session, and the question stays open.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
 }
 
 // ------------------------------------------------------- the method tables

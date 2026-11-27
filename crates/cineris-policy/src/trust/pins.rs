@@ -1,7 +1,7 @@
 //! The user's own pins (since step 28): the hash of each thing of the
 //! user's own that runs code and that the user approved, in `pins.toml` in
 //! the state directory (`docs/architecture/06-permissions-and-sandbox.md`,
-//! "Project trust", "As built in step 28").
+//! "Project trust", "As built in step 28", and "Signed approvals").
 //!
 //! A project's definitions are pinned with its trust, in `trust.toml`. The
 //! user's own extensions, in the configuration directory's `extensions/`,
@@ -13,32 +13,61 @@
 //! # The stored file
 //!
 //! ```toml
-//! version = 1
+//! version = 2
+//! revision = 4
+//! signature = "1f0c…"       # over the revision and every pin
 //!
 //! [[pin]]
 //! kind = "extension"
 //! name = "tracker"
 //! hash = "5e884898da28…"
+//! registration = "a3b1…"    # what it registered when it was approved
 //! at = "2026-11-20T10:15:02Z"
 //! ```
 //!
-//! - **A file of its own, not a version 3 of `trust.toml`.** A build that
-//!   reads `trust.toml` up to version 2 refuses a version 3 whole, and so
-//!   would trust no project at all for the sake of pins it has no use for.
-//!   A build from before step 28 does not read `pins.toml`.
+//! - **The pins are signed together** (since the signed approvals step):
+//!   one Ed25519 signature, by the key the person's password makes, over
+//!   the revision and every pin's kind, name, hash and registration, in the
+//!   order of kind and name ([`crate::signed`]). A pin counts toward a
+//!   [`Standing`] only while the whole set checks with the session's
+//!   [`Verifier`]: an unsigned pin, one written by another program, a set
+//!   with a pin taken out or put back, and a file of an older version count
+//!   for nothing.
+//! - **Every change is the person's.** Adding a pin and taking one away
+//!   both change the signed set, so each is proposed
+//!   ([`PinStore::propose`]), signed by the person at their yes, and
+//!   committed ([`PinStore::commit`]), which writes nothing unless the
+//!   signature is over exactly what the file would then hold. Taking an
+//!   approval away is signed too: a pin can hold a gate, and a gate
+//!   dropped quietly is a widening (the maintainers' answer to the design's
+//!   call 4).
+//! - **What a pin restricts counts whether or not it is signed.** Every pin
+//!   in the file, signed or not, is in [`UserPins::held`]: the session
+//!   holds the gates of what it names, as it does for one changed or gone.
+//!   Only what a pin allows waits for a signature.
+//! - **The revision** goes up by one at each change, so that a set signed
+//!   once is never the same bytes as a later one. An earlier set, signed
+//!   whole, still checks: putting a whole earlier file back is the stated
+//!   rollback (`docs/security.md`, section 3).
 //! - **One pin for each kind and name.** Pinning a definition again
-//!   replaces its pin, in its place; `at` is when it was last pinned.
+//!   replaces its pin, in its place; `at` is when it was last pinned, and is
+//!   not signed.
 //! - **Written owner-only, atomically, on every write,** under a lock held
 //!   from the read to the write (`pins.toml.lock`, `crate::store_lock`), as
-//!   `trust.toml` is: two sessions that pin at once both keep their pin.
+//!   `trust.toml` is.
 //! - **Read strictly.** A key this build does not know, a value of the
-//!   wrong type, a `version` other than 1, a hash that is not one, or two
-//!   pins of one kind and name refuse the whole file, and then **nothing is
-//!   taken as pinned**: a file that cannot be read in full is not read in
-//!   part (decision 0028's rule,
+//!   wrong type, a `version` other than 1 or 2, a hash that is not one, or
+//!   two pins of one kind and name refuse the whole file, and then
+//!   **nothing is taken as pinned**: a file that cannot be read in full is
+//!   not read in part (decision 0028's rule,
 //!   `docs/decisions/0028-enforced-values-fail-closed.md`). The error says
 //!   why, and the file is left as it is: a change through the store fails
 //!   rather than write over it.
+//! - **Version 1** (step 28's, never signed) is read as unsigned: its pins
+//!   hold their gates, and approve nothing. The person's next change writes
+//!   version 2 with only what they sign; an unsigned pin is never signed in
+//!   bulk, since one written by the model before the upgrade would be
+//!   laundered.
 //! - **A kind this build does not know** is kept as it was written, and
 //!   written back: a later build's pin, which approves nothing this build
 //!   asks about.
@@ -67,24 +96,29 @@ use cineris_protocol::ids::Timestamp;
 use cineris_protocol::methods::TrustResourceKind;
 use serde::{Deserialize, Serialize};
 
-use super::{Definition, Standing};
+use super::{Approved, Checked, Definition, Standing};
+use cineris_protocol::methods::{ApprovalProposal, ProposedPin};
+
+use crate::signed::{Signature, SignedPin, Statement, Verifier, user_pins_statement};
 use crate::store_lock;
 
-/// The version of the file's format: the only one this build reads, and
-/// the one it writes.
-const VERSION: u32 = 1;
+/// The version of the file's form this build writes.
+const VERSION: u32 = 2;
+
+/// Step 28's version, never signed: read as unsigned.
+const UNSIGNED_VERSION: u32 = 1;
 
 /// The largest file read.
 const MAX_BYTES: u64 = 4 * 1024 * 1024;
 
 /// A point of the store's (`cineris_base::hook`): a change has read the
-/// file and changed it, under the lock, and is about to write it. A test
+/// file and checked it, under the lock, and is about to write it. A test
 /// holds it to bring a second writer in between a read and its write.
 pub const BEFORE_THE_PINS_ARE_WRITTEN: &str =
     "pins: the file is read and changed, and is about to be written";
 
 /// One thing of the user's own that the user approved: what kind of thing,
-/// its name, the hash of what was approved, and when.
+/// its name, the hash of what was approved, what it registered, and when.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UserPin {
@@ -94,7 +128,13 @@ pub struct UserPin {
     pub name: String,
     /// The hash of what the user approved ([`Definition::hash`]).
     pub hash: ContentHash,
-    /// When it was pinned.
+    /// The hash of what it registered when the person approved it, for an
+    /// extension evaluated before the question (the registration cache's
+    /// entry is used only while its hash is this one); `None` where it was
+    /// not known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registration: Option<ContentHash>,
+    /// When it was pinned. Not signed: it only says when.
     pub at: Timestamp,
 }
 
@@ -120,22 +160,50 @@ impl UserPin {
 /// What the user has pinned, read once: a value to ask about each
 /// definition as it is met, as [`ProjectTrust`](super::ProjectTrust) is of a
 /// project's.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UserPins {
+    /// Every pin in the file, signed or not.
     pins: Vec<UserPin>,
+    checked: Checked,
+    revision: u64,
+}
+
+impl Default for UserPins {
+    fn default() -> Self {
+        Self {
+            pins: Vec::new(),
+            checked: Checked::Empty,
+            revision: 0,
+        }
+    }
 }
 
 impl UserPins {
-    /// The pin of the thing of this kind and name, if there is one.
+    /// Whether the pins count: the set is signed by the session's key, or
+    /// there is none.
+    #[must_use]
+    pub fn counts(&self) -> bool {
+        matches!(self.checked, Checked::Signed | Checked::Empty)
+    }
+
+    /// How the pins stand with the session's key.
+    #[must_use]
+    pub fn checked(&self) -> Checked {
+        self.checked
+    }
+
+    /// The pin of the thing of this kind and name, if there is one and it
+    /// counts.
     #[must_use]
     pub fn get(&self, kind: &TrustResourceKind, name: &str) -> Option<&UserPin> {
-        self.pins.iter().find(|pin| pin.is_of(kind, name))
+        self.list().iter().find(|pin| pin.is_of(kind, name))
     }
 
     /// How a definition of the user's own stands: `Approved` when its hash
     /// is the pinned one, `Changed` when a pin of its kind and name holds
-    /// another hash, and `New` when nothing of its kind and name is pinned.
-    /// Never `Untrusted`: the user's own things belong to no project.
+    /// another hash, and `New` when nothing of its kind and name is pinned,
+    /// or the pins do not count. Never `Untrusted`: the user's own things
+    /// belong to no project.
     #[must_use]
     pub fn standing(&self, definition: &Definition) -> Standing {
         match self.get(&definition.kind, &definition.name) {
@@ -145,16 +213,31 @@ impl UserPins {
         }
     }
 
-    /// Every pin, in the order each was first pinned.
+    /// Every pin that counts, in the order each was first pinned: none
+    /// unless the set is signed by the session's key.
     #[must_use]
     pub fn list(&self) -> &[UserPin] {
+        if self.counts() { &self.pins } else { &[] }
+    }
+
+    /// Every pin in the file, signed or not: what restricts. A session holds
+    /// the gates of each as it holds those of an approved thing that is not
+    /// loaded (changed, unreadable or gone), whatever its signature.
+    #[must_use]
+    pub fn held(&self) -> &[UserPin] {
         &self.pins
     }
 
-    /// Whether nothing is pinned.
+    /// Whether nothing counts as pinned.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.pins.is_empty()
+        self.list().is_empty()
+    }
+
+    /// The revision of the set read: 0 for none.
+    #[must_use]
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 }
 
@@ -181,6 +264,25 @@ pub enum PinError {
         /// What is wrong with it.
         problem: String,
     },
+    /// The file changed between the question and the answer: nothing was
+    /// written, and the person is asked again about what it holds now.
+    #[error(
+        "the pin store `{path}` changed while you were asked, so nothing was written: asked again"
+    )]
+    Moved {
+        /// The file.
+        path: String,
+    },
+    /// The signature given is not the session's key's over what would be
+    /// written: nothing was written.
+    #[error(
+        "the approval for the pin store `{path}` is not signed by your key over what it would \
+         hold, so nothing was written"
+    )]
+    NotSigned {
+        /// The file.
+        path: String,
+    },
     /// The file could not be written.
     #[error(transparent)]
     Write(#[from] AtomicWriteError),
@@ -190,8 +292,120 @@ pub enum PinError {
 #[serde(deny_unknown_fields)]
 struct File {
     version: u32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    revision: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    signature: Option<Signature>,
     #[serde(default, rename = "pin", skip_serializing_if = "Vec::is_empty")]
     pins: Vec<UserPin>,
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
+}
+
+impl File {
+    fn empty() -> Self {
+        Self {
+            version: VERSION,
+            revision: 0,
+            signature: None,
+            pins: Vec::new(),
+        }
+    }
+
+    /// What the file's signature must be over.
+    fn statement(&self) -> Statement {
+        statement(self.revision, &self.pins)
+    }
+
+    /// How the file stands with `verifier`.
+    fn checked(&self, verifier: Option<&Verifier>) -> Checked {
+        if self.pins.is_empty() && self.signature.is_none() {
+            return Checked::Empty;
+        }
+        Checked::of(self.signature.as_ref(), &self.statement(), verifier)
+    }
+}
+
+/// The statement a set of pins is signed as: the revision, then each pin's
+/// kind, name, hash and registration, in the order of kind and name.
+fn statement(revision: u64, pins: &[UserPin]) -> Statement {
+    let mut signed: Vec<SignedPin<'_>> = pins
+        .iter()
+        .map(|pin| SignedPin {
+            kind: pin.kind.as_str(),
+            name: &pin.name,
+            hash: *pin.hash.as_bytes(),
+            registration: pin.registration.map(|hash| *hash.as_bytes()),
+        })
+        .collect();
+    user_pins_statement(revision, &mut signed)
+}
+
+/// One change to the user's pins, as the person is asked to sign it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PinChange {
+    /// Pin a definition as it is now, with what it registered where that is
+    /// known: adds its pin, or replaces the pin of the same kind and name.
+    Pin(Approved),
+    /// Take away the pin of the thing of this kind and name.
+    Unpin {
+        /// Its kind.
+        kind: TrustResourceKind,
+        /// Its name.
+        name: String,
+    },
+}
+
+/// A change to the user's pins, worked out before the person is asked
+/// ([`PinStore::propose`]): what the file would then hold, the statement the
+/// person signs, and what changes, for them to read.
+#[derive(Debug, Clone)]
+pub struct PinProposal {
+    /// What the file held when the change was worked out: committed only
+    /// while it still holds that.
+    base: Option<ContentHash>,
+    next: File,
+    statement: Statement,
+    summary: Vec<String>,
+}
+
+impl PinProposal {
+    /// The statement the person signs.
+    #[must_use]
+    pub fn statement(&self) -> &Statement {
+        &self.statement
+    }
+
+    /// What changes, one line each, for the person to read before they
+    /// sign: each pin added or taken away, and the pins not signed by their
+    /// key that the change drops.
+    #[must_use]
+    pub fn summary(&self) -> &[String] {
+        &self.summary
+    }
+
+    /// What the person signs, as the protocol carries it to a front end:
+    /// [`crate::signed::statement_of`] makes this proposal's statement from
+    /// it.
+    #[must_use]
+    pub fn view(&self) -> ApprovalProposal {
+        ApprovalProposal::UserPins {
+            revision: self.next.revision,
+            pins: self
+                .next
+                .pins
+                .iter()
+                .map(|pin| ProposedPin {
+                    kind: pin.kind.clone(),
+                    name: pin.name.clone(),
+                    hash: pin.hash.to_hex(),
+                    registration: pin.registration.map(|hash| hash.to_hex()),
+                })
+                .collect(),
+        }
+    }
 }
 
 /// The user's pin store: the hashes of what the user approved of their own.
@@ -217,83 +431,191 @@ impl PinStore {
         &self.file
     }
 
-    /// What the user has pinned. A missing file pins nothing, and reading
-    /// it creates nothing.
+    /// What the user has pinned, as it stands with `verifier`, the
+    /// session's key: with none, the pins hold their gates and approve
+    /// nothing ([`UserPins::held`]). A missing file pins nothing, and
+    /// reading it creates nothing.
     ///
     /// # Errors
     ///
     /// When the file cannot be read or is not understood in full. The
     /// caller takes nothing as pinned, and shows the error.
-    pub fn pins(&self) -> Result<UserPins, PinError> {
+    pub fn pins(&self, verifier: Option<&Verifier>) -> Result<UserPins, PinError> {
+        let (file, _) = self.read()?;
         Ok(UserPins {
-            pins: self.read()?.pins,
+            checked: file.checked(verifier),
+            revision: file.revision,
+            pins: file.pins,
         })
     }
 
-    /// Pins a definition as it is now: adds its pin, or replaces the pin of
-    /// the same kind and name, in its place. Gives what is pinned after.
+    /// Works out `changes`, in order, against the pins as they stand with
+    /// `verifier`, the key the person's password just made: what the file
+    /// would then hold, and the statement the person signs for it. Only what counts is carried over: pins not
+    /// signed by the session's key are dropped, and the summary says so.
+    /// `None` when the changes change nothing (an unpin of what is not
+    /// pinned), so that nobody is asked.
     ///
     /// # Errors
     ///
-    /// When the file cannot be read, is not understood (it is then not
-    /// overwritten), or cannot be written.
-    pub fn pin(&self, definition: &Definition) -> Result<UserPins, PinError> {
-        self.update(|file| {
-            let pin = UserPin {
-                kind: definition.kind.clone(),
-                name: definition.name.clone(),
-                hash: definition.hash,
-                at: self.clock.now().to_timestamp(),
-            };
-            match file
-                .pins
-                .iter()
-                .position(|old| old.is_of(&pin.kind, &pin.name))
-            {
-                Some(index) => file.pins[index] = pin,
-                None => file.pins.push(pin),
-            }
-            (
-                UserPins {
-                    pins: file.pins.clone(),
+    /// When the file cannot be read or is not understood.
+    pub fn propose(
+        &self,
+        changes: &[PinChange],
+        verifier: &Verifier,
+    ) -> Result<Option<PinProposal>, PinError> {
+        let (file, base) = self.read()?;
+        let checked = file.checked(Some(verifier));
+        let counts = matches!(checked, Checked::Signed | Checked::Empty);
+        let mut pins = if counts {
+            file.pins.clone()
+        } else {
+            Vec::new()
+        };
+        let mut summary = Vec::new();
+        if !counts && !file.pins.is_empty() {
+            summary.push(format!(
+                "{} earlier {} not signed by your key {} dropped: {} asked about again",
+                file.pins.len(),
+                if file.pins.len() == 1 {
+                    "approval"
+                } else {
+                    "approvals"
                 },
-                true,
-            )
-        })
+                if file.pins.len() == 1 { "is" } else { "are" },
+                if file.pins.len() == 1 {
+                    "it is"
+                } else {
+                    "they are"
+                },
+            ));
+        }
+        let mut changed = !counts && !file.pins.is_empty();
+        let at = self.clock.now().to_timestamp();
+        for change in changes {
+            match change {
+                PinChange::Pin(approved) => {
+                    let pin = UserPin {
+                        kind: approved.definition.kind.clone(),
+                        name: approved.definition.name.clone(),
+                        hash: approved.definition.hash,
+                        registration: approved.registration,
+                        at: at.clone(),
+                    };
+                    summary.push(format!(
+                        "approve the {} `{}` ({})",
+                        pin.kind,
+                        pin.name.escape_debug(),
+                        short(&pin.hash)
+                    ));
+                    match pins.iter().position(|old| old.is_of(&pin.kind, &pin.name)) {
+                        Some(index) => pins[index] = pin,
+                        None => pins.push(pin),
+                    }
+                    changed = true;
+                }
+                PinChange::Unpin { kind, name } => {
+                    let before = pins.len();
+                    pins.retain(|pin| !pin.is_of(kind, name));
+                    if pins.len() != before {
+                        summary.push(format!(
+                            "take away the approval of the {kind} `{}`",
+                            name.escape_debug()
+                        ));
+                        changed = true;
+                    }
+                }
+            }
+        }
+        if !changed {
+            return Ok(None);
+        }
+        let next = File {
+            version: VERSION,
+            revision: file.revision.saturating_add(1),
+            signature: None,
+            pins,
+        };
+        Ok(Some(PinProposal {
+            base,
+            statement: next.statement(),
+            next,
+            summary,
+        }))
     }
 
-    /// Takes away the pin of the thing of this kind and name. Says whether
-    /// there was one; when there was not, nothing is written.
+    /// Writes what `proposal` worked out, signed with `signature`, when the
+    /// signature is `verifier`'s over exactly that and the file still holds
+    /// what it held when the proposal was made. Gives what is pinned after.
     ///
     /// # Errors
     ///
-    /// When the file cannot be read, is not understood, or cannot be
-    /// written.
-    pub fn unpin(&self, kind: &TrustResourceKind, name: &str) -> Result<bool, PinError> {
-        self.update(|file| {
-            let before = file.pins.len();
-            file.pins.retain(|pin| !pin.is_of(kind, name));
-            let removed = file.pins.len() != before;
-            (removed, removed)
-        })
-    }
-
-    /// Reads the file, changes it and writes it if `change` says it changed
-    /// (the second of what it returns), with the lock held throughout. Every
-    /// change to the file goes through here.
-    fn update<T>(&self, change: impl FnOnce(&mut File) -> (T, bool)) -> Result<T, PinError> {
+    /// [`PinError::Moved`] when the file changed since the proposal (ask
+    /// again); [`PinError::NotSigned`] when the signature is not
+    /// `verifier`'s over the proposal; otherwise when the file cannot be
+    /// read, is not understood, or cannot be written. Nothing is written in
+    /// any of these.
+    pub fn commit(
+        &self,
+        proposal: &PinProposal,
+        signature: &Signature,
+        verifier: &Verifier,
+    ) -> Result<UserPins, PinError> {
+        if !verifier.verify(&proposal.statement, signature) {
+            return Err(PinError::NotSigned {
+                path: self.file.display().to_string(),
+            });
+        }
         let _lock = store_lock::hold(&self.file).map_err(|source| AtomicWriteError::Io {
             path: self.file.display().to_string(),
             step: "lock",
             source,
         })?;
-        let mut file = self.read()?;
-        let (answer, changed) = change(&mut file);
-        if changed {
-            cineris_base::hook::point(BEFORE_THE_PINS_ARE_WRITTEN);
-            self.write(&file)?;
+        let (_, base) = self.read()?;
+        if base != proposal.base {
+            return Err(PinError::Moved {
+                path: self.file.display().to_string(),
+            });
         }
-        Ok(answer)
+        let next = File {
+            signature: Some(*signature),
+            ..proposal.next.clone()
+        };
+        cineris_base::hook::point(BEFORE_THE_PINS_ARE_WRITTEN);
+        self.write(&next)?;
+        Ok(UserPins {
+            checked: next.checked(Some(verifier)),
+            revision: next.revision,
+            pins: next.pins,
+        })
+    }
+
+    /// Takes the signature off the pins, at a reset of the person's key:
+    /// every pin stays, unsigned, so that it approves nothing and asks
+    /// again, and still holds its gates ([`UserPins::held`]) until the
+    /// person's next yes over the pins drops it. Deletes nothing, so that a
+    /// reset run by something other than the person lifts no gate. Gives
+    /// how many pins there are.
+    ///
+    /// # Errors
+    ///
+    /// When the file cannot be read, is not understood, or cannot be
+    /// written.
+    pub fn strip_signature(&self) -> Result<usize, PinError> {
+        let _lock = store_lock::hold(&self.file).map_err(|source| AtomicWriteError::Io {
+            path: self.file.display().to_string(),
+            step: "lock",
+            source,
+        })?;
+        let (mut file, base) = self.read()?;
+        let count = file.pins.len();
+        if base.is_none() || file.signature.is_none() {
+            return Ok(count);
+        }
+        file.version = VERSION;
+        file.signature = None;
+        self.write(&file)?;
+        Ok(count)
     }
 
     fn not_understood(&self, problem: String) -> PinError {
@@ -303,7 +625,9 @@ impl PinStore {
         }
     }
 
-    fn read(&self) -> Result<File, PinError> {
+    /// The file, and the hash of its bytes (`None` for no file): what a
+    /// proposal is committed against.
+    fn read(&self) -> Result<(File, Option<ContentHash>), PinError> {
         let read_error = |source| PinError::Read {
             path: self.file.display().to_string(),
             source,
@@ -312,12 +636,7 @@ impl PinStore {
         // the user's pins, and it is refused, as a folder there is.
         let (opened, found) = match cineris_base::open_regular(&self.file) {
             Ok(opened) => opened,
-            Err(OpenError::NotFound) => {
-                return Ok(File {
-                    version: VERSION,
-                    pins: Vec::new(),
-                });
-            }
+            Err(OpenError::NotFound) => return Ok((File::empty(), None)),
             Err(OpenError::Io(error)) => return Err(read_error(error)),
             Err(other) => return Err(read_error(io::Error::other(other.to_string()))),
         };
@@ -330,14 +649,28 @@ impl PinStore {
         let mut text = String::new();
         io::Read::read_to_string(&mut io::Read::take(opened, MAX_BYTES), &mut text)
             .map_err(read_error)?;
+        let base = ContentHash::of(text.as_bytes());
         let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
         let file: File = toml::from_str(text)
             .map_err(|error| self.not_understood(error.message().to_owned()))?;
-        if file.version != VERSION {
+        if !(UNSIGNED_VERSION..=VERSION).contains(&file.version) {
             return Err(self.not_understood(format!(
-                "its version is {}, and this version of Cineris reads version {VERSION}",
+                "its version is {}, and this version of Cineris reads versions \
+                 {UNSIGNED_VERSION} and {VERSION}",
                 file.version
             )));
+        }
+        // Version 1 had no revision, signature or registration: one that
+        // says it has is not one a build wrote.
+        if file.version == UNSIGNED_VERSION
+            && (file.revision != 0
+                || file.signature.is_some()
+                || file.pins.iter().any(|pin| pin.registration.is_some()))
+        {
+            return Err(self.not_understood(
+                "it is version 1, which has no `revision`, `signature` or `registration`"
+                    .to_owned(),
+            ));
         }
         // A file this build wrote has one pin for each kind and name: one
         // with two would leave it to the order which of them stands.
@@ -353,7 +686,7 @@ impl PinStore {
                 )));
             }
         }
-        Ok(file)
+        Ok((file, Some(base)))
     }
 
     fn write(&self, file: &File) -> Result<(), PinError> {
@@ -373,6 +706,12 @@ impl PinStore {
     }
 }
 
+/// The first twelve digits of a hash: enough for a person to match it
+/// with what they were shown.
+fn short(hash: &ContentHash) -> String {
+    hash.to_hex().chars().take(12).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -380,29 +719,77 @@ mod tests {
     use cineris_base::FakeClock;
 
     use super::*;
+    use crate::signed::Unit;
     use crate::store_lock::tests::{Scratch, is_held};
+    use crate::test_support::Person;
+
+    fn store(scratch: &Scratch) -> PinStore {
+        let clock: SharedClock = Arc::new(FakeClock::starting_at("2026-11-20T10:00:00Z").unwrap());
+        PinStore::new(scratch.0.join("pins.toml"), clock)
+    }
+
+    fn tracker(text: &str) -> Definition {
+        Definition::of(TrustResourceKind::Extension, "tracker", [text])
+    }
 
     #[test]
-    fn every_change_to_the_pins_is_made_under_their_lock() {
+    fn a_commit_holds_the_lock_and_checks_the_file_did_not_move() {
         let scratch = Scratch::new();
-        let file = scratch.0.join("pins.toml");
-        let clock: SharedClock = Arc::new(FakeClock::starting_at("2026-11-20T10:00:00Z").unwrap());
-        let store = PinStore::new(&file, clock);
-        // Every public change goes through `update`, and `update` holds the
-        // lock from the read to the write.
-        let held = store.update(|_| (is_held(&file), false)).unwrap();
-        assert!(held, "the lock is held while the file is changed");
-        assert!(!is_held(&file), "and let go after");
-        let tracker = Definition::of(TrustResourceKind::Extension, "tracker", ["v1"]);
-        store.pin(&tracker).unwrap();
-        assert!(!is_held(&file));
-        assert!(
-            store
-                .unpin(&TrustResourceKind::Extension, "tracker")
-                .unwrap()
+        let store = store(&scratch);
+        let person = Person::new();
+        let proposal = store
+            .propose(&[PinChange::Pin(tracker("v1").into())], &person.verifier())
+            .unwrap()
+            .unwrap();
+        // Another change lands between the question and the answer.
+        person.pin(
+            &store,
+            &Definition::of(TrustResourceKind::Extension, "other", ["x"]),
         );
-        assert!(!is_held(&file));
-        assert!(store.pins().unwrap().is_empty());
+        let moved = store.commit(
+            &proposal,
+            &person.sign(proposal.statement()),
+            &person.verifier(),
+        );
+        assert!(matches!(moved, Err(PinError::Moved { .. })), "{moved:?}");
+        assert_eq!(
+            store
+                .pins(Some(&person.verifier()))
+                .unwrap()
+                .standing(&tracker("v1")),
+            Standing::New,
+            "nothing of the moved proposal was written"
+        );
+        // Asked again, it lands; and the lock is let go after.
+        let pins = person.pin(&store, &tracker("v1"));
+        assert_eq!(pins.standing(&tracker("v1")), Standing::Approved);
+        assert!(!is_held(store.path()));
+    }
+
+    #[test]
+    fn a_signature_over_anything_else_writes_nothing() {
+        let scratch = Scratch::new();
+        let store = store(&scratch);
+        let person = Person::new();
+        let stranger = Person::with_password("someone else's password");
+        let proposal = store
+            .propose(&[PinChange::Pin(tracker("v1").into())], &person.verifier())
+            .unwrap()
+            .unwrap();
+        // Signed by another key, checked with that key: refused all the same,
+        // since the session checks with its own.
+        let theirs = stranger.sign(proposal.statement());
+        assert!(matches!(
+            store.commit(&proposal, &theirs, &person.verifier()),
+            Err(PinError::NotSigned { .. })
+        ));
+        // Signed by the person, over another statement.
+        let other = person.sign(&Statement::build(Unit::UserPins).finish());
+        assert!(matches!(
+            store.commit(&proposal, &other, &person.verifier()),
+            Err(PinError::NotSigned { .. })
+        ));
+        assert!(!store.path().exists(), "nothing was written");
     }
 
     /// A link put at the store's name after it was read, before it is
@@ -412,34 +799,68 @@ mod tests {
     fn a_link_put_at_the_stores_name_after_its_read_is_not_written_through() {
         let scratch = Scratch::new();
         std::fs::create_dir_all(&scratch.0).unwrap();
-        let file = scratch.0.join("pins.toml");
+        let store = store(&scratch);
         let named = scratch.0.join("elsewhere.toml");
         std::fs::write(&named, "the user's own file").unwrap();
-        let clock: SharedClock = Arc::new(FakeClock::starting_at("2026-11-21T10:00:00Z").unwrap());
-        let store = PinStore::new(&file, clock);
-        let mut put = false;
-        let written = store.update(|pins| {
-            #[cfg(unix)]
-            let made = std::os::unix::fs::symlink(&named, &file);
-            #[cfg(windows)]
-            let made = std::os::windows::fs::symlink_file(&named, &file);
-            match made {
-                Ok(()) => put = true,
-                Err(error) if std::env::var_os("GITHUB_ACTIONS").is_some() => {
-                    panic!("the CI runner cannot make a link: {error}")
-                }
-                Err(error) => println!("skipped: cannot make a link here ({error})"),
+        let person = Person::new();
+        let proposal = store
+            .propose(&[PinChange::Pin(tracker("v1").into())], &person.verifier())
+            .unwrap()
+            .unwrap();
+        #[cfg(unix)]
+        let made = std::os::unix::fs::symlink(&named, store.path());
+        #[cfg(windows)]
+        let made = std::os::windows::fs::symlink_file(&named, store.path());
+        match made {
+            Ok(()) => {}
+            Err(error) if std::env::var_os("GITHUB_ACTIONS").is_some() => {
+                panic!("the CI runner cannot make a link: {error}")
             }
-            pins.pins.clear();
-            ((), true)
-        });
-        if !put {
-            return;
+            Err(error) => {
+                println!("skipped: cannot make a link here ({error})");
+                return;
+            }
         }
+        let written = store.commit(
+            &proposal,
+            &person.sign(proposal.statement()),
+            &person.verifier(),
+        );
         assert!(written.is_err(), "{written:?}");
         assert_eq!(
             std::fs::read_to_string(&named).unwrap(),
             "the user's own file"
         );
+    }
+
+    #[test]
+    fn a_proposal_shown_to_a_front_end_is_signed_as_the_store_checks_it() {
+        let scratch = Scratch::new();
+        let store = store(&scratch);
+        let person = Person::new();
+        person.pin(&store, &tracker("v1"));
+        let proposal = store
+            .propose(
+                &[
+                    PinChange::Pin(Approved {
+                        definition: Definition::of(TrustResourceKind::Extension, "a", ["x"]),
+                        registration: Some(ContentHash::of(b"registered")),
+                    }),
+                    PinChange::Unpin {
+                        kind: TrustResourceKind::Extension,
+                        name: "tracker".to_owned(),
+                    },
+                ],
+                &person.verifier(),
+            )
+            .unwrap()
+            .unwrap();
+        let rebuilt = crate::signed::statement_of(&proposal.view()).unwrap();
+        assert_eq!(&rebuilt, proposal.statement());
+        let pins = store
+            .commit(&proposal, &person.sign(&rebuilt), &person.verifier())
+            .unwrap();
+        assert!(pins.counts() && pins.list().len() == 1);
+        assert_eq!(pins.revision(), 2);
     }
 }

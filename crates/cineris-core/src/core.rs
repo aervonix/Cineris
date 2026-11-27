@@ -598,6 +598,10 @@ pub(crate) struct Inner {
     /// The projects a person answered "not now" to: not asked about again
     /// in this core's life, and nothing stored (since step 23).
     pub(crate) not_now: Mutex<std::collections::HashSet<cineris_protocol::ProjectKey>>,
+    /// The key every session of the core checks the stores' signatures
+    /// with, once the person opened their approvals (the signed approvals
+    /// step, `crate::person`).
+    pub(crate) person: crate::person::Opened,
 }
 
 /// What a shell was looked for with: `shell.program` and `shell.args`.
@@ -712,6 +716,7 @@ impl Core {
                 stats,
                 day: Mutex::new(None),
                 not_now: Mutex::new(std::collections::HashSet::new()),
+                person: crate::person::Opened::default(),
             }),
         })
     }

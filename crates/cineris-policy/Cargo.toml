@@ -17,6 +17,12 @@ thiserror.workspace = true
 # The stored approvals, the trust store and the user's pins are TOML files
 # in the state directory (docs/architecture/08-configuration.md, "Other state").
 toml = { workspace = true, features = ["display"] }
+# The approvals key (the signed approvals step, docs/dependencies.md):
+# Argon2id of the person's password, Ed25519 and HKDF from `ring`, and
+# `zeroize` to wipe what is made from the password.
+argon2.workspace = true
+ring.workspace = true
+zeroize.workspace = true
 
 [features]
 # Code for tests only: `test_support::TestParts`, an engine's parts with
