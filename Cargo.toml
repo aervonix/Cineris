@@ -222,6 +222,15 @@ opt-level = 2
 [profile.ci.package.sha2]
 opt-level = 2
 
+# And Argon2id with its hash, which makes the approvals key: a test that
+# sets up or resets the person's key pays the standard cost (64 MiB, three
+# passes) once, which takes seconds unoptimised (the signed approvals step).
+[profile.ci.package.argon2]
+opt-level = 2
+
+[profile.ci.package.blake2]
+opt-level = 2
+
 # And syntect, with what it loads its grammars with: each highlighter test
 # and the golden screens load them once a process, which takes 0.09 s
 # unoptimised and 0.02 s optimised on the desktop (step 22).
