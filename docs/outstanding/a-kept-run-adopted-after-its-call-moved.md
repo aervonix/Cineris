@@ -1,8 +1,0 @@
-A read kept from a response sent again is used for its call even when the call was planned again onto another path: a stale result. Since step 28 no extension tool can reach it (an extension's tool always runs alone and is never started early); an MCP server's tool still could.
-
-- Area: cineris-agent
-- Owner: step 30, or the next change to the round's cache
-
-| Item | Who | When |
-|---|---|---|
-| **A run kept from a response that was sent again is adopted by its call's key, not by its plan.** When a response fails part-way and is sent again, a read that already ran is kept and used for the same call of the new response ([architecture/03-agent-loop.md](../architecture/03-agent-loop.md), "The cache of early results"). The kept run carries the plan it ran with. If the new response's call was planned again after an earlier call made a link (the re-decide step of step 12), its new plan names another path, and the kept result is of the old one: a stale result, under the call's name, not a read of anything the engine did not judge. Found by the full review of the re-decide step. With the built-in tools it is hard to reach: every shell call declares a write of the workspace, so planning one discards every kept run inside the workspace, and only a tool that is not a command can make a link. **What would close it:** do not adopt a kept run for a call whose plan moved (`Call::moved`), and let the call run again; with a test that sends a response again around a tool that makes a link. | The next step that changes the round's cache, or step 28 (the first tools that can make links without being commands) | Before step 28's tools are enabled |

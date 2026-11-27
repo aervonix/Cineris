@@ -17,9 +17,11 @@
 use cineris_agent::{Decision, PlannedCall, Verdict};
 use cineris_protocol::event::TurnOutcome;
 use cineris_protocol::item::{ToolOutcome, ToolResultItem};
-use cineris_protocol::{Item, Part};
+use cineris_protocol::{Item, Part, StopReason};
+use cineris_testkit::{Gate, Response};
 use serde_json::json;
 
+use crate::transitions::{retry, start};
 use crate::{Rig, Setup, World, assert_valid_history, calls, last_request, says};
 
 fn results(rig: &Rig) -> Vec<ToolResultItem> {
@@ -534,4 +536,64 @@ fn a_command_found_to_only_read_does_not_make_a_second_decision() {
     let at = |line: &str| lines.iter().position(|seen| seen == line).unwrap();
     assert!(at("end shell cat") < at("start write w"), "{lines:?}");
     assert_eq!(count(&rig.policy.decided(), "write w"), 1);
+}
+
+/// A read kept from a response that was sent again is not used for its
+/// call once the call was planned again onto another path: the run read
+/// where the old path led (the open item
+/// `a-kept-run-adopted-after-its-call-moved`, fixed in step 30). Here the
+/// response sent again first calls a tool from outside that declares no
+/// path and makes `d` a link into `guarded`, as an MCP server's tool can;
+/// the read of `d/x` after it is planned again into `guarded`, and runs
+/// again there.
+#[test]
+fn a_kept_read_is_not_used_for_a_call_planned_again_onto_another_path() {
+    let fails = Gate::new();
+    let response = Response::new()
+        .tool_call("c1", "read", &json!({"path": "d/x"}))
+        .wait(&fails)
+        .event(retry(2))
+        .event(start())
+        .tool_call("c2", "solo", &json!({"id": "ln", "link": ["guarded", "d"]}))
+        .tool_call("c3", "read", &json!({"path": "d/x"}))
+        .end(StopReason::ToolCalls);
+    let world = World::new("redecide_kept_moved", [response, says("Done.")]);
+    let rig = with_guarded(&world);
+    world.run(async {
+        rig.prompt("go");
+        // The read ran early, for the response that then failed.
+        rig.events.seen("result:read:success", 1).await;
+        fails.open();
+        rig.events.turns(1).await;
+    });
+    assert_eq!(
+        world.log.lines(),
+        [
+            "start read d/x",
+            "end read d/x",
+            "start solo ln",
+            "end solo ln",
+            "start read d/x",
+            "end read d/x"
+        ],
+        "the read runs again, after the link: planned {} times, decided {:?}",
+        world.log.plans("read d/x"),
+        rig.policy.decided()
+    );
+    assert_eq!(
+        world.log.plans("read d/x"),
+        3,
+        "once a response, and again after the link"
+    );
+    let results = results(&rig);
+    assert_eq!(
+        results
+            .iter()
+            .map(|result| result.call_id.to_string())
+            .collect::<Vec<_>>(),
+        ["c2", "c3"]
+    );
+    assert_eq!(results[1].outcome, ToolOutcome::Success);
+    assert_eq!(rig.events.ends()[0].outcome, TurnOutcome::Completed);
+    assert_valid_history(&last_request(&world.provider).messages);
 }

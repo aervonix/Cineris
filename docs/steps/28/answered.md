@@ -368,8 +368,8 @@ The items in [outstanding/](../../outstanding/README.md) whose text names step 2
   - [the-binary-near-its-size-budget](../../outstanding/the-binary-near-its-size-budget.md): the size budgets and their outlook, open until a build of step 34 passes on both systems.
   - [a-workspace-build-has-the-test-hooks](../../outstanding/a-workspace-build-has-the-test-hooks.md) (step 34, its release built through `xtask`): a `cargo build` at the root builds the binary with the test hooks on, `CINERIS_TEST_MARK_FAILS` among them.
 - **Step 30:**
-  - [a-tool-that-makes-links-beside-other-calls](../../outstanding/a-tool-that-makes-links-beside-other-calls.md): an MCP tool that makes links runs beside later calls; closed for extensions by step 28, whose tools always run alone.
-  - [a-kept-run-adopted-after-its-call-moved](../../outstanding/a-kept-run-adopted-after-its-call-moved.md) (step 30, or the next change to the round's cache): a kept read used for a call planned again onto another path; out of an extension tool's reach since step 28.
+  - `a-tool-that-makes-links-beside-other-calls` ([settled in step 30](../30/answered.md)): an MCP tool that makes links runs beside later calls; closed for extensions by step 28, whose tools always run alone.
+  - `a-kept-run-adopted-after-its-call-moved` ([fixed in step 30](../30/answered.md)): a kept read used for a call planned again onto another path; out of an extension tool's reach since step 28.
 - **Step 50:** [a-nested-run-under-a-session-is-capped-at-read-only](../../outstanding/a-nested-run-under-a-session-is-capped-at-read-only.md): a headless run started by a session's command runs at `read-only`.
 - **A step before step 34, the maintainers:** [approvals-signed-with-a-key-that-needs-a-person](../../outstanding/approvals-signed-with-a-key-that-needs-a-person.md): where nothing confines commands, only approvals signed with a key that needs a person present keep the model from approving for itself.
 - **A later step, the maintainers:** [a-commands-settings-profile-for-its-turn](../../outstanding/a-commands-settings-profile-for-its-turn.md): a command that names a settings profile is judged and not sent.

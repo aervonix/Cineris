@@ -935,10 +935,20 @@ impl Round {
         // A kept run of another call that touched the same files is not what
         // the model was shown: it goes before this call can meet what it
         // left behind. A kept run of this same call stays, to be used when
-        // the call's turn comes.
+        // the call's turn comes; unless this plan names other paths than
+        // the run's did (a link was made since the run was planned, by a
+        // call of this response): the run is of where the old ones led, so
+        // it goes, and the call runs again. It is held against the run's
+        // own plan, not the call's first: the call may have been planned
+        // first after the link was made, and its second plan then names
+        // what its first did.
         let key = call.key.clone();
         self.discard_where(|cached| {
-            cached.key != key && overlap(&cached.footprint.paths, &footprint.paths)
+            if cached.key == key {
+                cached.footprint.paths != footprint.paths
+            } else {
+                overlap(&cached.footprint.paths, &footprint.paths)
+            }
         });
         self.calls[position].footprint = Some(footprint);
         if self.cancel.is_cancelled() {
