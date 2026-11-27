@@ -57,10 +57,12 @@ With the maintainers' leave: `crates/cineris-core/src/manage.rs`, `lib.rs` (the 
 
 On the reference machine, rebased onto the core part:
 
-- `cargo xtask clippy -p cineris-cli -p cineris-tui -p cineris-sandbox -p cineris-core`: clean. `cargo xwin clippy --target x86_64-pc-windows-msvc --workspace --all-targets --locked -- -D warnings`: clean (before the rebase; the Windows code did not change after it).
+- `cargo xtask clippy -p cineris-cli -p cineris-tui -p cineris-sandbox -p cineris-core`: clean. `cargo xwin clippy --target x86_64-pc-windows-msvc --workspace --all-targets --locked -- -D warnings`: clean, before the rebase and again on the rebased head.
 - `cargo xtask test --dependents -p cineris-policy -p cineris-tui -p cineris-sandbox` (with `cineris-agent`, `cineris-cli`, `cineris-core`, `cineris-ext`, `cineris-mcp`, `cineris-rpc` and `cineris-tools`): 3,415 passed.
 - The new system tests' times there: the application's debugger test 0.9 s, the subcommands' 0.2 s, the y/N typed early 0.3 s, the headless run's (two runs more) 1.1 s, the trust test 1.7 s, the real tracer 3 ms.
-- `cargo xtask mutate --check` and `cargo xtask check`: see the report.
+- `cargo xtask check` (formatting, rules, the break lists, of which every one of the 5,111 applies, the generated files, clippy, the build without the script engine, the licences) and `cargo xtask links`: clean, once the core part's record said its second copy in public words (the repository's rules refused one of its words; fixed here in a commit of its own).
+- `cargo xtask mutate --check --tests`: every break applies, and every `caught-by` names a test that exists (6,086 names).
+- `xtask`'s `shipped::` tests, the one of the test variables' names among them: 11 passed.
 - **Not run:** Windows (every Windows test here, the access lists of the real binary and the debugger's events among them, runs on the runners); `stress` and `mutate` (no long run on the shared machine): the breaks' verdicts are for a run on the runners (`gh workflow run try --ref <branch> -f command="mutate signed-approvals-full-review-fronts"`, and `-f os=windows` for `windows-asks-where-the-process-is-open` and the Windows test of the binary).
 
 ## Left open
