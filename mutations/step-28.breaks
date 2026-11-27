@@ -10515,8 +10515,8 @@ caught-by:
 rule: What `ext add` shows holds the whole text the extension adds to the system prompt.
 file: crates/cineris-core/src/ext/manage.rs
 in: Core::extension_to_add
-find: .map(|bytes| quoted_shown(&String::from_utf8_lossy(bytes)));
-replace: .map(|_| String::new());
+find: let prompt = prompt_shown(&manifest, &snapshot);
+replace: let prompt = None::<String>;
 packages: cineris-cli
 caught-by:
     cineris-cli::bin/cineris ext::tests::ext_add_shows_what_it_registers_and_its_prompt_before_the_question
