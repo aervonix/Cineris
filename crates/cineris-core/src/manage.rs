@@ -26,7 +26,7 @@ use cineris_config::{
 };
 use cineris_policy::{ApprovalStore, Definition, TrustStore};
 use cineris_protocol::lease::Rule;
-use cineris_protocol::methods::{ProjectEntriesResult, StoredApproval};
+use cineris_protocol::methods::{ProjectEntriesResult, StoredApproval, TrustResourceKind};
 use cineris_protocol::project::{EntryChange, NewEntry};
 use cineris_protocol::{ApprovalId, ErrorKind, ProjectKey};
 
@@ -166,6 +166,22 @@ impl ProjectHookCommand {
     pub fn hash(&self) -> ContentHash {
         self.definition.hash
     }
+}
+
+/// One of a trusted project's extensions or hooks that was approved and is
+/// no longer in the project as approved (since the review of step 28,
+/// finding 4): `cineris permissions trust` shows it as removed, and a yes
+/// takes its approval away, as it was pinned when it was shown.
+#[derive(Debug, Clone)]
+pub struct ProjectRemoved {
+    /// Whether it is an extension or a hook.
+    pub kind: TrustResourceKind,
+    /// Its name.
+    pub name: String,
+    /// What the trust question shows of it: that it is removed, what it
+    /// gated where that is known, and that a yes takes its approval away.
+    pub detail: String,
+    definition: Definition,
 }
 
 impl Core {
@@ -625,6 +641,89 @@ impl Core {
                 .collect(),
             hooks: hooks.iter().map(|hook| hook.name.clone()).collect(),
         })
+    }
+
+    /// What of a trusted project was approved and is no longer in it as
+    /// approved, each as the trust question lists it as removed: its
+    /// extensions gone from its folder, and its hooks with no entry that
+    /// runs as approved (taken out, turned off, or no longer compiling).
+    /// Nothing is taken away.
+    ///
+    /// # Errors
+    ///
+    /// When the workspace cannot be resolved, its configuration loaded, or
+    /// the trust store read.
+    pub fn project_removed(&self, project: &Project) -> Result<Vec<ProjectRemoved>, OpError> {
+        let stored = self
+            .trust_store()?
+            .project(&project.key)
+            .map_err(|failure| error(ErrorKind::Internal, "store_failed", failure.to_string()))?;
+        let mut removed = Vec::new();
+        if !stored
+            .pinned_of(&TrustResourceKind::Extension)
+            .is_empty()
+        {
+            let options = &self.inner.options;
+            let resolver = self.resolver(&project.root)?;
+            let (found, _) = crate::ext::found::in_project(&resolver, &options.clock);
+            let dirs = options
+                .dirs
+                .clone()
+                .unwrap_or_else(|| cineris_config::Dirs::from_env(&options.env));
+            let users = crate::ext::found::UserNames::listed(&resolver, dirs.config.as_deref());
+            let cache = self.state_dir().map(|state| {
+                cineris_ext::cache::RegistrationCache::new(state.registration_cache_file())
+                    .with_clock(Arc::clone(&options.clock))
+                    .load()
+                    .cache
+            });
+            let asked = crate::ext::found::removed(&found, &users, &stored, cache.as_ref());
+            removed.extend(asked.resources.into_iter().zip(asked.removed));
+        }
+        if !stored.pinned_of(&TrustResourceKind::Hook).is_empty() {
+            let loaded = self.load_trusted(project)?;
+            let configured = crate::ext::hooks::Configured::of(&loaded);
+            let asked = crate::ext::hooks::asked(&configured, &stored, false);
+            removed.extend(asked.resources.into_iter().skip(asked.pins.len()).zip(asked.removed));
+        }
+        Ok(removed
+            .into_iter()
+            .map(|(resource, definition)| ProjectRemoved {
+                kind: resource.kind,
+                name: resource.name,
+                detail: resource.detail,
+                definition,
+            })
+            .collect())
+    }
+
+    /// [`trust_project_with`](Self::trust_project_with), and then takes away
+    /// the approval of each of `removed` (from
+    /// [`project_removed`](Self::project_removed), which the person was
+    /// shown), as it was pinned when it was shown. Says how many approvals
+    /// went with the rest.
+    ///
+    /// # Errors
+    ///
+    /// As [`trust_project_with`](Self::trust_project_with), and when the
+    /// store cannot be written.
+    pub fn trust_project_dropping(
+        &self,
+        project: &Project,
+        extensions: &[ProjectExtension],
+        hooks: &[ProjectHookCommand],
+        removed: &[ProjectRemoved],
+    ) -> Result<(Trusted, usize), OpError> {
+        let trusted = self.trust_project_with(project, extensions, hooks)?;
+        if removed.is_empty() || !trusted.was_trusted {
+            return Ok((trusted, 0));
+        }
+        let pins: Vec<Definition> = removed.iter().map(|one| one.definition.clone()).collect();
+        let dropped = self
+            .trust_store()?
+            .drop_pins(&project.key, &pins)
+            .map_err(|failure| error(ErrorKind::Internal, "store_failed", failure.to_string()))?;
+        Ok((trusted, dropped))
     }
 
     /// Takes trust away from a project. Says whether it was trusted.

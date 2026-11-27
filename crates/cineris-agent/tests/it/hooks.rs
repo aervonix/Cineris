@@ -74,6 +74,9 @@ struct FakeHook {
     replies: Mutex<VecDeque<Reply>>,
     /// What it was given, in order.
     inputs: Mutex<Vec<Json>>,
+    /// Whether each run was told the call's question was answered yes
+    /// (`HookInput::answered`), in order.
+    answered: Mutex<Vec<bool>>,
     wake: Notify,
 }
 
@@ -87,6 +90,7 @@ impl FakeHook {
             timeout: None,
             replies: Mutex::default(),
             inputs: Mutex::default(),
+            answered: Mutex::default(),
             wake: Notify::new(),
         }
     }
@@ -124,6 +128,10 @@ impl FakeHook {
         lock(&self.inputs).clone()
     }
 
+    fn answered(&self) -> Vec<bool> {
+        lock(&self.answered).clone()
+    }
+
     /// Waits until it has been run `count` times.
     async fn runs(&self, count: usize) {
         loop {
@@ -150,6 +158,7 @@ impl Hook for FakeHook {
 
     fn run<'a>(&'a self, input: &'a HookInput) -> BoxFuture<'a, HookOutcome> {
         lock(&self.inputs).push(input.to_json());
+        lock(&self.answered).push(input.answered);
         self.wake.notify_waiters();
         let reply = lock(&self.replies).pop_front().unwrap_or_else(nothing);
         Box::pin(async move {
@@ -793,6 +802,151 @@ fn tool_before_hooks_deny_or_ask_on_top_of_the_policy_and_run_together() {
 /// What the hooks said is dropped at once: interrupted while its hooks are
 /// asked the second time, the call's result says nothing of the
 /// replacement its hooks made the first time.
+/// A `tool.before` hook that may be given what it needs only after the
+/// person's yes to the call's question (`HookOutcome::AfterAnswer`: a
+/// command's `{path}` that would take a file that looks like it holds
+/// secrets; the review of step 28, finding 14, and the owner's choice) is
+/// no opinion as the call is decided, and is run again after the yes and
+/// before the call runs, told so (`HookInput::answered`):
+///
+/// - it is not run again while the question is open: it sees the call's
+///   file only after the answer, and the call runs after it;
+/// - its refusal after the yes refuses the call, which does not run;
+/// - so do an ask and a replacement after the yes, as the call is not asked
+///   about twice;
+/// - a no runs it no more, and the call does not run;
+/// - where nobody is asked (the rules allow the call), it is run again at
+///   once, before the call, and may refuse it.
+#[test]
+fn a_hook_that_waits_for_the_answer_runs_after_the_yes_and_before_the_call() {
+    let read = |id: &str, path: &str| calls(&[(id, "read", json!({"path": path}))]);
+    let h = hooked(
+        "hook_after_answer",
+        [
+            read("c1", "env"),
+            says("Fine."),
+            read("c2", "env2"),
+            says("Fine."),
+            read("c3", "env3"),
+            says("Fine."),
+            read("c4", "env4"),
+            says("Fine."),
+            read("c5", "env5"),
+            says("Fine."),
+            read("c6", "env6"),
+            says("Fine."),
+        ],
+    );
+    let (world, rig, hooks) = (&h.world, &h.rig, &h.hooks);
+    let waits = || Reply::Now(HookOutcome::AfterAnswer);
+
+    // A yes: the hook runs again after it, before the read.
+    let p = h.part();
+    rig.policy.decide_for("read", Decision::Ask);
+    rig.policy.wait_at(&world.gates);
+    rig.policy.answer_for("read", Verdict::Allow);
+    let hook = hooks.add(
+        FakeHook::on("scanner", HookEvent::ToolBefore)
+            .tool("read")
+            .replies([waits(), answer(json!({"decision": "allow"}))]),
+    );
+    world.run(async {
+        rig.prompt("go");
+        rig.policy.questions(p.asked + 1).await;
+        crate::settle().await;
+        assert_eq!(hook.answered(), [false], "not again while it is asked");
+        assert_eq!(p.count("start read env"), 0);
+        world.gates.open("ask read");
+        p.turns(1).await;
+    });
+    assert_eq!(hook.answered(), [false, true]);
+    assert_eq!(p.count("end read env"), 1);
+    let lines = p.lines();
+    assert!(
+        lines.iter().any(|line| line == "end read env"),
+        "{lines:?}"
+    );
+    assert_eq!(p.results()[0].outcome, ToolOutcome::Success);
+
+    // Its refusal after the yes refuses the call.
+    for (case, after, words) in [
+        (
+            "deny",
+            answer(json!({"decision": "deny", "reason": "it holds a key"})),
+            "the hook `scanner` refused it: it holds a key",
+        ),
+        (
+            "ask",
+            answer(json!({"decision": "ask", "reason": "look"})),
+            "asked after your answer",
+        ),
+        (
+            "replace",
+            answer(json!({"arguments": {"path": "other"}})),
+            "replaced its arguments after your answer",
+        ),
+    ] {
+        let p = h.part();
+        rig.policy.decide_for("read", Decision::Ask);
+        rig.policy.answer_for("read", Verdict::Allow);
+        let hook = hooks.add(
+            FakeHook::on("scanner", HookEvent::ToolBefore)
+                .tool("read")
+                .replies([waits(), after]),
+        );
+        world.run(async {
+            rig.prompt("go");
+            p.turns(1).await;
+        });
+        assert_eq!(hook.answered(), [false, true], "{case}");
+        assert_eq!(p.started("start read"), 0, "{case}: the read did not run");
+        let results = p.results();
+        assert_eq!(results[0].outcome, ToolOutcome::Denied, "{case}");
+        let said = text(&results[0]);
+        assert!(said.contains(words), "{case}: {said}");
+        assert_eq!(p.asked().len(), 1, "{case}: asked once");
+    }
+
+    // A no: the hook is not run again, and the call does not run.
+    let p = h.part();
+    rig.policy.decide_for("read", Decision::Ask);
+    rig.policy.answer_for("read", Verdict::Deny { note: None });
+    let hook = hooks.add(
+        FakeHook::on("scanner", HookEvent::ToolBefore)
+            .tool("read")
+            .replies([waits(), answer(json!({"decision": "allow"}))]),
+    );
+    world.run(async {
+        rig.prompt("go");
+        p.turns(1).await;
+    });
+    assert_eq!(hook.answered(), [false], "a no runs it no more");
+    assert_eq!(p.started("start read"), 0);
+    assert_eq!(p.results()[0].outcome, ToolOutcome::Denied);
+
+    // Nobody is asked: it is run again at once, before the call, and its
+    // refusal refuses it.
+    let p = h.part();
+    let hook = hooks.add(
+        FakeHook::on("scanner", HookEvent::ToolBefore)
+            .tool("read")
+            .replies([
+                waits(),
+                answer(json!({"decision": "deny", "reason": "not this one"})),
+            ]),
+    );
+    world.run(async {
+        rig.prompt("go");
+        p.turns(1).await;
+    });
+    assert_eq!(hook.answered(), [false, true]);
+    assert!(p.asked().is_empty(), "nobody was asked");
+    assert_eq!(p.started("start read"), 0);
+    let results = p.results();
+    assert_eq!(results[0].outcome, ToolOutcome::Denied);
+    assert!(text(&results[0]).contains("not this one"), "{}", text(&results[0]));
+}
+
 #[test]
 fn a_call_decided_again_is_shown_to_its_hooks_again_with_the_models_arguments() {
     let h = hooked(

@@ -592,6 +592,10 @@ async fn reload_session(
     let Some(judging) = judging else {
         return Ok((ConfigChanged::default(), false));
     };
+    // A project's hook commands leave with its trust, at once and whatever
+    // else of the reload is applied (the review of step 28, finding 5): as
+    // the store judged it, and as the load judged it again below.
+    withdraw_untrusted(live, &judging.judged.standing);
     // A test holds the reload here, to change the trust store between the
     // judgement and the load: the load uses the trust just judged.
     cineris_base::hook::await_point!(TRUST_JUDGED);
@@ -600,6 +604,7 @@ async fn reload_session(
     let Some(looked) = looked else {
         return Ok((ConfigChanged::default(), false));
     };
+    withdraw_untrusted(live, &looked.standing);
     let (waited, trusted) = {
         let config = lock(&live.config);
         let waited: BTreeSet<String> = config.waiting.keys().map(ToString::to_string).collect();
@@ -627,6 +632,21 @@ async fn reload_session(
         live.hooks.emit(Event::ConfigChanged(changed.clone()));
     }
     Ok((changed, news))
+}
+
+/// Takes the project's hook commands off the session's events when
+/// `standing` is one under which a session runs none of them (not trusted,
+/// or marked never): for the rest of the session, since the session's hooks
+/// are settled as it opens and trust given again is the next session's.
+/// The user is told once.
+fn withdraw_untrusted(live: &Live, standing: &TrustStanding) {
+    let runs_projects = matches!(
+        standing,
+        TrustStanding::Trusted | TrustStanding::RulesChanged | TrustStanding::ForTheRun
+    );
+    if !runs_projects && let Some(note) = live.command_hooks.withdraw_project() {
+        live.hooks.tell(note);
+    }
 }
 
 /// Looks at the session's files and the trust store and judges trust, from

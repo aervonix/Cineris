@@ -1,0 +1,8 @@
+A trusted project's approved hook command that is changed, taken out, turned off or broken holds a failing gate on every call and every prompt, since its pin keeps only a hash and what it gated is not known.
+
+- Area: cineris-core
+- Owner: step 32
+
+| Item | Who | When |
+|---|---|---|
+| **What is open.** Since the review of step 28 (finding 4), a hook of a trusted project that was approved and has no entry that runs as approved holds a failing gate on `tool.before` for every call and on `prompt.submit` (`ext::hooks::in_session`, `held_gates`), until the person approves it as it is now or takes its approval away (the trust question, or `cineris permissions trust`, lists it as removed) or the project's trust. The gate is that wide because the pin in `trust.toml` keeps only the definition's hash: the approved entry's event, tools and `observe` are not known, so a changed `turn.end` logger refuses every prompt as a changed `tool.before` gate does. An extension's held gate is narrower, made from the registration its pinned hash registered (the registration cache), and both gates only where that is known nowhere. **What would close it:** a cache of each approved hook command's event, tools and `observe`, keyed by the pinned hash, written with the pin, as the registration cache is for extensions (no change to `trust.toml`): a changed or removed hook then holds only the gate it was approved as holding (none for an observer or a hook on an event that only adds), and both gates only where the cache misses. The maintainers chose the wide gate and the removed listing for step 28's fixes, and left the cache to step 32. Step 30's MCP definitions need the same rule. | Step 32 | Before the first release |

@@ -214,6 +214,12 @@ pub struct HookInput {
     pub workspace: AbsPath,
     /// What the event is about.
     pub subject: HookSubject,
+    /// For `tool.before`: whether the person has answered yes to the
+    /// call's question already. It is set only for the run, after that yes
+    /// and before the call runs, of a hook that answered
+    /// [`HookOutcome::AfterAnswer`] when the call was decided (since the
+    /// review of step 28, finding 14). It is not in the hook's own input.
+    pub answered: bool,
 }
 
 /// What an event is about.
@@ -293,7 +299,16 @@ impl HookInput {
             turn,
             workspace,
             subject,
+            answered: false,
         }
+    }
+
+    /// The same input, for the run after the person's yes to the call's
+    /// question ([`HookOutcome::AfterAnswer`]).
+    #[must_use]
+    pub fn answered(mut self) -> Self {
+        self.answered = true;
+        self
     }
 
     /// The input as the contract gives it to a hook: one JSON object with
@@ -409,6 +424,15 @@ pub enum HookOutcome {
     /// loop cuts it at [`TEXT_CAP`] and writes what acts unseen in it as
     /// escapes before anyone is shown it.
     Failed(String),
+    /// It would be given what it may have only once the person has answered
+    /// yes to the call's question (a file that looks like it holds secrets,
+    /// or one a rule asks about, for a command's `{path}`; since the review
+    /// of step 28, finding 14): it did not run. For `tool.before`, the loop
+    /// counts it as no opinion now, and runs it again after the yes and
+    /// before the call runs ([`HookInput::answered`]), where it may still
+    /// refuse the call; a call nobody says yes to never runs it. On any
+    /// other event, and from an observer, it is nothing.
+    AfterAnswer,
 }
 
 /// One hook the implementation matched to an event.
@@ -717,6 +741,9 @@ fn read(event: HookEvent, value: Json) -> Result<Answer, String> {
 pub(crate) struct Heard {
     hook: String,
     answer: Result<Answer, String>,
+    /// It answered [`HookOutcome::AfterAnswer`]: no opinion now, and run
+    /// again after the person's yes.
+    later: bool,
 }
 
 impl Heard {
@@ -837,6 +864,7 @@ pub(crate) async fn ask_all(
             let timer = &set.timer;
             Box::pin(async move {
                 let limit = time_of(hook.as_ref());
+                let mut later = false;
                 let answer = match within(timer, limit, hook.run(input)).await {
                     None => Err(format!(
                         "it did not answer within {} s",
@@ -849,10 +877,16 @@ pub(crate) async fn ask_all(
                     Some(HookOutcome::Failed(why)) => Err(on_one_line(capped(why))),
                     Some(HookOutcome::Nothing) => Ok(Answer::default()),
                     Some(HookOutcome::Answer(value)) => read(event, value),
+                    // Run again after the yes (`tool.before`), or nothing.
+                    Some(HookOutcome::AfterAnswer) => {
+                        later = event == HookEvent::ToolBefore;
+                        Ok(Answer::default())
+                    }
                 };
                 Heard {
                     hook: hook.name().to_owned(),
                     answer,
+                    later,
                 }
             })
         })
@@ -955,6 +989,56 @@ pub(crate) enum Before {
         /// The other hooks that asked.
         asked: Vec<HookReason>,
     },
+}
+
+/// The names of the hooks of `heard` that answered
+/// [`HookOutcome::AfterAnswer`]: run again after the person's yes.
+pub(crate) fn later(heard: &[Heard]) -> Vec<String> {
+    heard
+        .iter()
+        .filter(|one| one.later)
+        .map(|one| one.hook.clone())
+        .collect()
+}
+
+/// What a call's `tool.before` hooks run after the person's yes said
+/// together (since the review of step 28, finding 14): `Err` with why for
+/// the model when the call may not run. A refusal, or a failure, refuses
+/// it, as before the question; so do a hook that asks and one that
+/// replaces the arguments, since the call is not asked about twice and
+/// the yes was to the call as it was shown; and one that would wait again.
+pub(crate) fn after_the_answer(heard: Vec<Heard>) -> Result<(), String> {
+    let again: Vec<String> = later(&heard)
+        .iter()
+        .map(|hook| {
+            format!(
+                "the hook `{}` could still not be run after your answer",
+                named(hook)
+            )
+        })
+        .collect();
+    if !again.is_empty() {
+        return Err(again.join("; "));
+    }
+    match before(heard) {
+        Before::Pass => Ok(()),
+        Before::Deny(why) => Err(why),
+        Before::Ask(asked) => Err(asked
+            .iter()
+            .map(|one| {
+                format!(
+                    "the hook `{}` asked after your answer, and a call is not asked about twice",
+                    named(&one.hook)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ")),
+        Before::Replace { hook, .. } => Err(format!(
+            "the hook `{}` replaced its arguments after your answer, which was to the call as it \
+             was shown",
+            named(&hook)
+        )),
+    }
 }
 
 /// Why a hook refused, in a clause of a sentence for the model.
@@ -1221,7 +1305,64 @@ mod tests {
         Heard {
             hook: hook.to_owned(),
             answer: read(event, value),
+            later: false,
         }
+    }
+
+    /// What the hooks run after the person's yes say together: a pass lets
+    /// the call run; a refusal or failure refuses it, as before the
+    /// question; and so do an ask and a replacement, since the call is not
+    /// asked about twice, and a hook that would wait again (the review of
+    /// step 28, finding 14).
+    #[test]
+    fn after_the_answer_only_a_pass_lets_the_call_run() {
+        let event = HookEvent::ToolBefore;
+        let allow = heard("allow", json!({"decision": "allow"}), event);
+        assert_eq!(after_the_answer(vec![allow.clone()]), Ok(()));
+        assert_eq!(after_the_answer(Vec::new()), Ok(()));
+        for (case, one, words) in [
+            (
+                "deny",
+                heard("gate", json!({"decision": "deny", "reason": "no"}), event),
+                "refused it: no",
+            ),
+            (
+                "ask",
+                heard("gate", json!({"decision": "ask"}), event),
+                "asked after your answer",
+            ),
+            (
+                "replace",
+                heard("gate", json!({"arguments": {"path": "b"}}), event),
+                "replaced its arguments after your answer",
+            ),
+            (
+                "again",
+                Heard {
+                    hook: "gate".to_owned(),
+                    answer: Ok(Answer::default()),
+                    later: true,
+                },
+                "could still not be run",
+            ),
+        ] {
+            let said = after_the_answer(vec![allow.clone(), one]);
+            assert!(
+                said.as_ref().is_err_and(|why| why.contains(words) && why.contains("`gate`")),
+                "{case}: {said:?}"
+            );
+        }
+        assert_eq!(
+            later(&[
+                allow,
+                Heard {
+                    hook: "scanner".to_owned(),
+                    answer: Ok(Answer::default()),
+                    later: true,
+                }
+            ]),
+            ["scanner"]
+        );
     }
 
     #[test]
@@ -1335,6 +1476,7 @@ mod tests {
         let failed = Heard {
             hook: "e-failed".to_owned(),
             answer: Err("it exited with 2".to_owned()),
+            later: false,
         };
         assert_eq!(before(vec![allow.clone()]), Before::Pass);
         assert_eq!(

@@ -646,6 +646,40 @@ impl TrustStore {
         })
     }
 
+    /// Takes away the approval of each of `pins`, definitions of a trusted
+    /// project that were pinned and are no longer in it as approved (a
+    /// removed hook or extension, shown to the person as removed): each pin
+    /// of its kind and name goes only while it is still at the hash given,
+    /// so that one approved again since it was listed stays. Everything
+    /// else pinned stays. Says how many went (since the review of step 28,
+    /// finding 4).
+    ///
+    /// Dropping a pin is a change of what is approved, as pinning is: once
+    /// approvals are signed, a drop needs the person's signature too.
+    ///
+    /// # Errors
+    ///
+    /// When the file cannot be read, is not understood, or cannot be
+    /// written; or when the project is not trusted.
+    pub fn drop_pins(&self, key: &ProjectKey, pins: &[Definition]) -> Result<usize, TrustError> {
+        self.update(|file| {
+            let Some(project) = file.projects.iter_mut().find(|project| project.key == *key) else {
+                return Err(self.not_understood(
+                    "the project is not trusted, so no approval of it can be taken away"
+                        .to_owned(),
+                ));
+            };
+            let before = project.pinned.len();
+            project.pinned.retain(|pin| {
+                !pins.iter().any(|gone| {
+                    pin.kind == gone.kind.as_str() && pin.name == gone.name && pin.hash == gone.hash
+                })
+            });
+            let dropped = before - project.pinned.len();
+            Ok((dropped, dropped > 0))
+        })
+    }
+
     /// Keeps trusting a project as it was trusted, without what is new in
     /// it (since the follow-ups of step 23, the owner's decision of
     /// 2026-11-16): `rules`, its rules as they are now, which stay held back
@@ -1192,5 +1226,45 @@ mod tests {
         refused(store.revoke(&key).map(drop));
         assert!(store.project(&key).unwrap().is_trusted());
         assert_eq!(store.list().unwrap().len(), 1);
+    }
+
+    /// A drop takes away the approvals listed, at the hash they were
+    /// listed at, and nothing else: one pinned again since at another hash
+    /// stays, as does every other pin; a project not trusted is refused
+    /// (the review of step 28, finding 4: a removed hook's pin is dropped
+    /// only by the person's yes).
+    #[test]
+    fn a_drop_takes_away_only_the_approvals_listed_as_they_were_read() {
+        use crate::store_lock::tests::Scratch;
+
+        let scratch = Scratch::new();
+        let clock: SharedClock = std::sync::Arc::new(
+            cineris_base::FakeClock::starting_at("2026-11-27T10:00:00Z").unwrap(),
+        );
+        let store = TrustStore::new(scratch.0.join("trust.toml"), clock);
+        let key = ProjectKey::new("k");
+        let (gate, lint, tracker) = (
+            hook("gate", &["deny"]),
+            hook("lint", &["lint"]),
+            Definition::of(TrustResourceKind::Extension, "tracker", ["one"]),
+        );
+        let untrusted = store.drop_pins(&key, std::slice::from_ref(&gate));
+        assert!(
+            matches!(&untrusted, Err(TrustError::NotUnderstood { .. })),
+            "{untrusted:?}"
+        );
+        store
+            .trust(&key, "~/app", &[gate.clone(), lint.clone(), tracker.clone()], false)
+            .unwrap();
+        assert_eq!(store.drop_pins(&key, &[gate.clone(), tracker.clone()]).unwrap(), 2);
+        let now = store.project(&key).unwrap();
+        assert_eq!(now.standing(&gate), Standing::New);
+        assert_eq!(now.standing(&tracker), Standing::New);
+        assert_eq!(now.standing(&lint), Standing::Approved);
+        // Approved again at another hash since it was listed: it stays.
+        let again = hook("lint", &["lint", "--fix"]);
+        store.approve(&key, std::slice::from_ref(&again), false).unwrap();
+        assert_eq!(store.drop_pins(&key, std::slice::from_ref(&lint)).unwrap(), 0);
+        assert_eq!(store.project(&key).unwrap().standing(&again), Standing::Approved);
     }
 }

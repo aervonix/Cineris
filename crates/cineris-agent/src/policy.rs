@@ -195,8 +195,10 @@ impl Policy for AllowAll {
 
     /// Allows what it is asked about, with nobody to ask: but for a call a
     /// hook put the question about (one it asked about, or whose arguments
-    /// it replaced), which is refused as any question nobody can answer is.
-    /// A hook's question is a person's to answer.
+    /// it replaced), which is refused as any question nobody can answer is:
+    /// this stand-in asks nobody. Elsewhere a replacement is a person's to
+    /// answer, and a hook's plain `ask` is whoever supervises the session's,
+    /// a supervisor's grant included (`docs/architecture/03-agent-loop.md`).
     fn ask<'a>(&'a self, call: PlannedCall<'a>) -> BoxFuture<'a, Verdict> {
         let verdict = match call.hooks {
             None => Verdict::Allow,

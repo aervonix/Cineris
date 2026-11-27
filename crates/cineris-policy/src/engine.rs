@@ -1293,6 +1293,35 @@ impl Engine {
         }
     }
 
+    /// Whether a call's read (`Effect::Read`) or write (`Effect::Write`)
+    /// of `path`, a real location, is asked about or refused for what the
+    /// file is: it looks like a file that holds secrets, it is a protected
+    /// path (a write), or a path rule that asks or denies names it. A hook
+    /// command is not handed such a file (`{path}`) before the call's
+    /// question is answered (the review of step 28, finding 14; the owner's
+    /// choice). An ordinary edit asked about at `supervised`, or a level
+    /// that refuses every write, is not of this kind; nor is a file a rule
+    /// allows, or one the level lets through unasked (`unrestricted`). It
+    /// changes no rule: it asks the same questions `judge_path` does.
+    #[must_use]
+    pub fn holds_back_from_hooks(&self, effect: &Effect, path: &AbsPath) -> bool {
+        let rules = self.read_rules();
+        let rules = &rules.compiled;
+        let writes = *effect == Effect::Write;
+        match rules.path(effect, path) {
+            Some(hit) => hit.action != RuleAction::Allow,
+            None => {
+                let sensitive = self.is_secret(path) || (writes && self.is_guarded(path));
+                let matter = if writes {
+                    Matter::WriteBeyond
+                } else {
+                    Matter::ReadBeyond
+                };
+                sensitive && level::decider(self.level(), matter) == Decider::Supervisor
+            }
+        }
+    }
+
     fn is_secret(&self, path: &AbsPath) -> bool {
         path.file_name().is_some_and(looks_secret)
     }

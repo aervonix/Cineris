@@ -5,11 +5,17 @@
 //!   opens (`super::hooks::in_session`), and a change of their
 //!   configuration takes effect in the next session: so `wants` and
 //!   `matching` read one set, and a reload never takes a gate away from a
-//!   session it held, nor gives one a hook nobody approved for it.
+//!   session it held, nor gives one a hook nobody approved for it. One
+//!   exception: **trust taken away takes the project's off** (the review of
+//!   step 28, finding 5): once a reload finds the project no longer trusted
+//!   (`HookCommands::withdraw_project`), no hook of the project's, nor a gate
+//!   its approved ones hold, is on its event, and its runs still going stop.
 //! - **Failing closed.** A hook that cannot run is on its event all the
-//!   same, as a hook whose run fails with why and what to do: an entry that
-//!   does not compile, a project's that takes a name of the user's, and a
-//!   project's that has changed since it was approved. `wants` is `false`
+//!   same, as a hook whose run fails with why and what to do: an entry of
+//!   the user's that does not compile, and the gates of a trusted project's
+//!   approved hook that has no entry that runs as approved (changed, taken
+//!   out, turned off or broken), on `tool.before` for every call and on
+//!   `prompt.submit` (the review of step 28, finding 4). `wants` is `false`
 //!   only when no hook, of any of these, is on the event for the target.
 //! - **A stop is never lost.** A hook whose look at the protected paths
 //!   stopped a turn is told to the user at once, and the next prompt is
@@ -61,6 +67,10 @@ pub(crate) fn loop_event(event: Event) -> Option<LoopEvent> {
 /// One hook on an event of the loop's, as `wants` and `matching` read it.
 struct OnEvent {
     event: LoopEvent,
+    /// Whether it is a project's hook command, or a gate one of them
+    /// holds: it leaves its event when the project's trust is taken away
+    /// (`HookCommands::withdraw_project`).
+    project: bool,
     /// The tools it is on: `None` for every tool.
     filter: Option<Filter>,
     run: Arc<dyn Hook>,
@@ -94,6 +104,7 @@ impl PointHooks {
             if let Some(event) = loop_event(hook.event) {
                 on.push(OnEvent {
                     event,
+                    project: hook.source == cineris_ext::source::Source::Project,
                     filter: Some(hook.filter.clone()),
                     run: Arc::new(CommandRun {
                         hook: hook.clone(),
@@ -116,6 +127,12 @@ impl PointHooks {
 }
 
 impl PointHooks {
+    /// Whether a project's hooks are the session's still: not once its
+    /// trust is taken away.
+    fn project_in_force(&self) -> bool {
+        self.commands.in_force(cineris_ext::source::Source::Project)
+    }
+
     /// Whether a hook of a loaded extension is on `event` for `target`.
     #[cfg(feature = "scripts")]
     fn scripts_want(&self, event: LoopEvent, target: Option<ToolTarget<'_>>) -> bool {
@@ -139,6 +156,7 @@ fn failing(refused: &[Refused], held: &[super::without_engine::Held]) -> Vec<OnE
         if let Some(event) = refused.event.and_then(loop_event) {
             on.push(OnEvent {
                 event,
+                project: refused.source == cineris_ext::source::Source::Project,
                 filter: refused.filter.clone(),
                 run: Arc::new(Failing::of(refused)),
             });
@@ -147,6 +165,9 @@ fn failing(refused: &[Refused], held: &[super::without_engine::Held]) -> Vec<OnE
     for held in held {
         on.push(OnEvent {
             event: held.event,
+            // Without the script engine what is held is settled as the
+            // session opens and kept for it (`super::without_engine`).
+            project: false,
             filter: held.filter.clone(),
             run: Arc::new(Failing {
                 name: held.hook.clone(),
@@ -160,13 +181,19 @@ fn failing(refused: &[Refused], held: &[super::without_engine::Held]) -> Vec<OnE
 
 /// The hooks of `on` that are on `event` for `target`: what `wants` and
 /// `matching` read of them.
+/// `project`: whether a project's are the session's still; once its trust
+/// is taken away they are off their events (`HookCommands::in_force`).
 fn on_now<'a>(
     on: &'a [OnEvent],
+    project: bool,
     event: LoopEvent,
     target: Option<ToolTarget<'a>>,
 ) -> impl Iterator<Item = &'a OnEvent> {
-    on.iter()
-        .filter(move |hook| hook.event == event && on_target(hook.filter.as_ref(), target))
+    on.iter().filter(move |hook| {
+        hook.event == event
+            && (project || !hook.project)
+            && on_target(hook.filter.as_ref(), target)
+    })
 }
 
 /// Whether a hook on `filter` (`None`: every tool) is on `target`.
@@ -184,12 +211,14 @@ fn on_target(filter: Option<&Filter>, target: Option<ToolTarget<'_>>) -> bool {
 impl Hooks for PointHooks {
     fn wants(&self, event: LoopEvent, target: Option<ToolTarget<'_>>) -> bool {
         (event == LoopEvent::PromptSubmit && self.commands.stop_pending())
-            || on_now(&self.on, event, target).next().is_some()
+            || on_now(&self.on, self.project_in_force(), event, target)
+                .next()
+                .is_some()
             || self.scripts_want(event, target)
     }
 
     fn matching(&self, event: LoopEvent, target: Option<ToolTarget<'_>>) -> Vec<Arc<dyn Hook>> {
-        let mut matched: Vec<Arc<dyn Hook>> = on_now(&self.on, event, target)
+        let mut matched: Vec<Arc<dyn Hook>> = on_now(&self.on, self.project_in_force(), event, target)
             .map(|hook| Arc::clone(&hook.run))
             .collect();
         #[cfg(feature = "scripts")]
@@ -318,7 +347,8 @@ impl Hook for CommandRun {
                 in_code(&self.hook.name)
             ))));
         }
-        let cancel = CancelToken::new();
+        // A project's run is stopped when its trust is taken away.
+        let cancel = self.commands.run_cancel(self.hook.source);
         let kill = CancelToken::new();
         // Made before the run is: a future let go before it is first
         // polled stops the run too (the review of the second pull request,
@@ -342,6 +372,7 @@ impl Hook for CommandRun {
                 input: json,
                 tool,
                 effects,
+                answered: input.answered,
             },
             cx,
             Box::new(Counted::new(&self.running)),
@@ -356,6 +387,7 @@ impl Hook for CommandRun {
             match outcome.await {
                 Ok(HookOutcome::Answered(answer)) => Heard::Answer(answer),
                 Ok(HookOutcome::Nothing | HookOutcome::Observed) => Heard::Nothing,
+                Ok(HookOutcome::AfterAnswer) => Heard::AfterAnswer,
                 Ok(HookOutcome::Failed(why) | HookOutcome::Stopped(why)) => Heard::Failed(why),
                 Err(_) => Heard::Failed(format!(
                     "The hook `{}` failed: its run ended before it could say how",
@@ -380,12 +412,18 @@ impl Failing {
             cineris_ext::source::Source::User => "Your hook",
             cineris_ext::source::Source::Project => "This project's hook",
         };
+        // A gate an approved project hook holds says its own way out:
+        // editing or turning off the project's entry lifts none of it.
+        let way_out = if refused.held {
+            ""
+        } else {
+            ". Correct its entry, or turn it off with `enabled = false`"
+        };
         Self {
             name: refused.name.clone(),
             observes: refused.observe,
             why: format!(
-                "{whose} `{}` cannot run: {}. Correct its entry, or turn it off with `enabled = \
-                 false`",
+                "{whose} `{}` cannot run: {}{way_out}",
                 in_code(&refused.name),
                 refused.reason
             ),
@@ -606,7 +644,7 @@ mod tests {
         let on = failing(&[], &gates);
         let names = |event: LoopEvent, tool: Option<&str>| -> Vec<String> {
             let target = tool.map(|tool| ToolTarget { tool, names: None });
-            on_now(&on, event, target)
+            on_now(&on, true, event, target)
                 .map(|hook| hook.run.name().to_owned())
                 .collect()
         };
