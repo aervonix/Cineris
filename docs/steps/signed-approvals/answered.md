@@ -114,15 +114,15 @@ What carries no signature keeps its present form and meaning: `refused`, `declin
 
 ### The password prompt
 
-**At a terminal** (the subcommands, `-p`):
+**At a terminal** (the subcommands, `-p`). *Amended in the full review of the signed approvals, to what is built (the password prompt's part); the design said the controlling terminal and a flush.*
 
-- It reads the controlling terminal, not standard input: `/dev/tty`, and `CONIN$` on Windows.
+- It reads standard input and writes standard output, and only when both are terminals (on Windows the console's standard input handle): never an argument, a variable, a file, or a standard input that is not a terminal. A subcommand or a run with either redirected asks nothing, and approves nothing; a `-p` run whose output is piped (`| jq`, `> out`) never asks, so never uses the approvals. It does not open the controlling terminal by name (`/dev/tty`, `CONIN$`), as this section first said.
 - Echo is off.
-- Whatever was typed before the prompt was drawn is thrown away (`tcflush`, `FlushConsoleInputBuffer`), so type-ahead is never taken as the password.
+- Whatever was typed before the prompt was drawn is read and thrown away, so type-ahead is never taken as the password. It is not flushed (`tcflush`, `FlushConsoleInputBuffer`, as this section first said): the replies to the terminal's capability queries share the input, and a flush could cut one in two and leave its tail to be typed.
 - A bracketed paste is taken without its markers.
-- Ctrl-C cancels. The terminal's mode is put back on every way out, a signal and a panic included.
+- Ctrl-C cancels; at a headless run's prompt it ends the run as interrupted (130). The terminal's mode is put back on every way out, a signal and a panic included.
 
-**In the application**, the prompt is a masked field in a dialog. While it is open, keys go to it alone: never to the input box, its history, the scrollback, the session log or a draft. Keys that were waiting when it opened are dropped, so a message being typed when it appears does not run on into it. The application enters raw mode before anything that can take time, so a password typed early is not echoed by the terminal's own line mode (the review of step 25's finding 1).
+**In the application**, the prompt is a masked field in a dialog. While it is open, keys go to it alone: never to the input box, its history, the scrollback, the session log or a draft. Keys that were waiting when it opened are dropped, so a message being typed when it appears does not run on into it. The application enters raw mode before anything that can take time, so a password typed early is not echoed by the terminal's own line mode (the review of step 25's finding 1; built in the full review of the signed approvals, before which it took the terminal only once its core had started).
 
 **Everywhere:**
 

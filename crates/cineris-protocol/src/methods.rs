@@ -1487,9 +1487,10 @@ pub struct TrustRequest {
     pub trusted: bool,
     /// What a yes would write, which the person signs (since the signed
     /// approvals step): the project's whole entry as it would then be. A
-    /// front end that answers yes rebuilds the bytes signed from it, checks
-    /// that it holds what it shows, asks the person for their password,
-    /// and answers with the signature. The core puts no trust question
+    /// front end that answers yes rebuilds the bytes signed from it, asks
+    /// the person for their password, and answers with the signature;
+    /// checking that it holds what the front end shows is the second pull
+    /// request's work, with `attach`. The core puts no trust question
     /// without one; a yes to a question that had none would trust nothing,
     /// not even for the session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
