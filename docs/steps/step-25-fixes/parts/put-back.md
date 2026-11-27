@@ -83,7 +83,7 @@ The other tests use the new API, and the breaks below show that each fails witho
 
 ## The breaks
 
-`mutations/step-25-fixes-put-back.breaks`:
+`mutations/step-25-fixes.breaks`:
 
 Run with `cargo xtask mutate step-25-fixes-put-back --jobs 2`: 13 breaks, 13 caught, 0 flagged.
 
@@ -145,3 +145,7 @@ All additive except one signature:
 ## Settled: a tracked file comes back owner-only
 
 For a file a command removed, git's entry mode is all there is, and git keeps only `100644` or `100755`. Taking a checkout's modes (`666` and `777`, less the umask) would bring back readable by others a tracked file the person had made `0600`, which git does not see. **Settled by the maintainers:** what git does not keep is not given, so from git a file comes back owner-only (`100755` is `0700`, `100644` is `0600`, less the umask), and without an execute bit where `core.fileMode=false`. **A restored tracked file loses its group's and others' read**, and the person may `chmod` it back. It is narrower than a checkout, it keeps "never wider", and a script still comes back better than on `main` (`0644`, not executable). Keeping a checkout's modes and "never wider" both would need the mode of every tracked file asked before every command. The three cases are tested: a `0755` script (`sys_an_undo_puts_back_a_removed_script_with_its_execute_bit`, `0700` less the umask), a tracked file made `0600` and a repository with `core.fileMode=false` (`sys_an_undo_never_makes_a_tracked_file_wider_than_git_can_vouch_for`).
+
+## The review's last read
+
+It found that git's owner-only mode was kept for every file a command changed, not only those it removed, so an undo of a command's edit (`sed -i`, a formatter) narrowed a tracked `0644` file to `0600`, and a `0755` script to `0700`; and the plan's new mode check then offered such a file again. Fixed in the session: git's mode is kept only for a file the command removed (`checkpoints.rs`, `Rounds::record_changes`), and a file still there keeps its own mode, as before. Test: `cineris-core::it put_back::sys_an_undo_of_a_commands_edit_keeps_the_files_own_mode` (a `0644` page and a `0755` script edited by a command, undone, each at its own mode); break `a-commands-edit-takes-gits-mode`. The reviewer agreed with owner-only from git for a file made again, the condition the maintainers set; taking the mode from the shell tool's look before would be exact, which needs the look to stat files git calls clean, left to step 32 with the put-back's other edges.

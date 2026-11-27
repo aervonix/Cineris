@@ -217,6 +217,38 @@ fn sys_an_undo_never_makes_a_tracked_file_wider_than_git_can_vouch_for() {
     );
 }
 
+/// A tracked file a command edited, still there, keeps its own mode when
+/// an undo puts its content back: git's mode, owner-only, is for a file the
+/// command removed (the last read of the step 25 fixes, which found every
+/// undo of a command's edit narrowing the file to its owner).
+#[test]
+fn sys_an_undo_of_a_commands_edit_keeps_the_files_own_mode() {
+    let world = a_world_running(
+        "put_back_edited_keeps_mode",
+        "printf 'b\\n' > page.html; printf 'echo b\\n' > run.sh",
+    );
+    world.put("page.html", "a\n");
+    world.put("run.sh", "echo a\n");
+    let page = world.workspace.join("page.html");
+    let script = world.workspace.join("run.sh");
+    set(&page, 0o644);
+    set(&script, 0o755);
+    commit_all(&world.workspace);
+    let core = trusting(&world);
+    undo_a_command(&world, &core);
+    assert_eq!(world.read("page.html").as_deref(), Some("a\n"));
+    assert_eq!(world.read("run.sh").as_deref(), Some("echo a\n"));
+    for (file, was) in [(&page, 0o644), (&script, 0o755)] {
+        let now = mode(file);
+        assert_eq!(
+            now,
+            was,
+            "{} came back at {now:o}, not its own {was:o}",
+            file.display()
+        );
+    }
+}
+
 /// A file only its owner and group may read (mode `0640`, which no umask
 /// gives a new file by accident) that the turn edited with `write` and the
 /// person removed after it, put back by a rewind the person said yes to:

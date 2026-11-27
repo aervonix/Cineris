@@ -372,9 +372,7 @@ mod tests {
         // Each within the cap, but the row naming them all past it: not
         // offered either.
         let half = "y".repeat(MAX_RUNS / 2);
-        let text = format!(
-            "{{\"scripts\": {{\"test\": \"{half}\", \"pretest\": \"{half}\"}}}}"
-        );
+        let text = format!("{{\"scripts\": {{\"test\": \"{half}\", \"pretest\": \"{half}\"}}}}");
         assert!(found(&[("package.json", &text)]).is_empty());
         // A `pre` past the cap keeps its script from being offered.
         let long = "x".repeat(MAX_RUNS + 1);
