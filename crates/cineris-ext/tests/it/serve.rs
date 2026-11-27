@@ -107,6 +107,17 @@ fn a_urls_host_is_read_without_its_port_user_or_brackets() {
     ] {
         assert!(url_host(refused).is_err(), "{refused}");
     }
+    // A user part is refused for itself, where nothing else would refuse
+    // it: a password after the `:` reads as a port's place, and the host
+    // before it is plain (the review of step 28's close, finding 19).
+    for named in [
+        "https://api.example.com:pw@evil.com/",
+        "https://user:pw@api.example.com/",
+        "https://api.example.com:@evil.com:443/x",
+    ] {
+        let refused = url_host(named).unwrap_err().to_string();
+        assert!(refused.contains("names a user"), "{named}: {refused}");
+    }
     for (plain, host) in [
         ("https://1.2.3.4/", "1.2.3.4"),
         ("https://[0:0:0:0:0:0:0:1]:8443/", "::1"),
