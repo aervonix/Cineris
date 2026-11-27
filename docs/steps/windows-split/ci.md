@@ -85,3 +85,5 @@ The split runs are within the one job's spread at 6 and 8 ms; at 7 ms one run re
 ## A test that fails on purpose
 
 Run 45951064742, this branch with a unit test of `cineris-config` and a system test of `cineris-cli` that panic: `test-windows-tiers` failed on the one (`cineris-config fails_on_purpose::a_unit_test_that_fails_on_purpose`) and `test-windows-system` on the other (`cineris-cli::system sys_a_system_test_that_fails_on_purpose`), each after the rest of its tests ran; `build-windows` passed, and `test-linux` failed on both.
+
+**A build that fails.** Run 45953479706, this branch with a line `cineris-stats` cannot compile on Windows: `build-windows` failed, and `test-windows-tiers` and `test-windows-system` ran and failed in 4 and 5 s at their first step ("The build job ended as 'failure'"), rather than be skipped, which would have read as passed to a required check.
