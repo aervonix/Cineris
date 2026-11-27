@@ -90,6 +90,19 @@ fn a_list_change_from_a_legacy_server_bumps_the_changes() {
 }
 
 #[test]
+fn a_legacy_server_is_never_asked_for_a_change_stream() {
+    run(async {
+        let timer = timer();
+        let server = FakeServer::legacy("2025-11-25").list_changed();
+        let client = connect(&server, &timer).await;
+        client.list_tools(&CancelToken::new()).await.unwrap();
+        settle().await;
+        assert!(server.of("subscriptions/listen").is_empty());
+        assert!(!client.listening());
+    });
+}
+
+#[test]
 fn a_burst_of_changes_wakes_a_receiver_that_was_not_looking_once() {
     run(async {
         let timer = timer();

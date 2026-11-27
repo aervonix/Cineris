@@ -145,8 +145,13 @@ pub enum ClientError {
 /// One connected server.
 ///
 /// Every method is bounded in time: a call by the definition's call limit,
-/// a listing by the client's own. Dropping the client shuts the server down
-/// as [`Client::shutdown`] does, without waiting.
+/// a listing by the client's own.
+///
+/// Dropping a client ends its connection without waiting for it. Inside a
+/// Tokio runtime that is what [`Client::shutdown`] does, its process ended
+/// in a task of its own. Outside one, no task can be started: only the
+/// server's input is closed, which a server should exit on, and its process
+/// is left to what dropping the [`crate::ServerProcess`] does.
 pub trait Client: Send + Sync {
     /// What the server said about itself.
     fn info(&self) -> &ServerInfo;

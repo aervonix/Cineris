@@ -256,7 +256,7 @@ fn only_so_many_requests_wait_for_their_answers_at_once() {
 }
 
 #[test]
-fn a_crash_during_calls_fails_every_one_in_flight_with_the_exit_and_closes_the_client() {
+fn a_crash_during_calls_says_each_one_written_may_have_run_and_closes_the_client() {
     for server in eras() {
         run(async {
             let timer = timer();
@@ -274,9 +274,11 @@ fn a_crash_during_calls_fails_every_one_in_flight_with_the_exit_and_closes_the_c
                 client.call("boom", json!({}), &cancel),
             )
             .await;
+            // Both were written: the server may have acted on them.
+            let may_have_run = ClientError::MayHaveRun("it crashed during a call".to_owned());
+            assert_eq!(held.unwrap_err(), may_have_run);
+            assert_eq!(boom.unwrap_err(), may_have_run);
             let stopped = ClientError::Stopped("it crashed during a call".to_owned());
-            assert_eq!(held.unwrap_err(), stopped);
-            assert_eq!(boom.unwrap_err(), stopped);
             assert_eq!(client.closed().await, stopped);
             assert_eq!(
                 client.call("after", json!({}), &cancel).await.unwrap_err(),
@@ -285,6 +287,170 @@ fn a_crash_during_calls_fails_every_one_in_flight_with_the_exit_and_closes_the_c
             );
         });
     }
+}
+
+#[test]
+fn a_call_still_waiting_for_room_when_the_server_crashes_never_ran() {
+    run(async {
+        let timer = timer();
+        let gate = Gate::new();
+        let server = FakeServer::legacy("2025-06-18")
+            .reply(
+                "held",
+                Reply::Gated(gate.clone(), Box::new(Reply::Result(text("held")))),
+            )
+            .reply("boom", Reply::Crash);
+        let options = ClientOptions {
+            max_in_flight: 1,
+            ..ClientOptions::default()
+        };
+        let client = connect_with(&server, &timer, options).await;
+        let cancel = CancelToken::new();
+        let calls = join(
+            client.call("held", json!({}), &cancel),
+            client.call("queued", json!({}), &cancel),
+        );
+        let ((held, queued), ()) = join(calls, async {
+            server.wait_for("tools/call", 1).await;
+            server.crash("killed");
+        })
+        .await;
+        assert_eq!(
+            held.unwrap_err(),
+            ClientError::MayHaveRun("killed".to_owned())
+        );
+        assert_eq!(
+            queued.unwrap_err(),
+            ClientError::Stopped("killed".to_owned()),
+            "never written, so it never ran"
+        );
+        assert_eq!(server.of("tools/call").len(), 1);
+    });
+}
+
+#[test]
+fn a_call_given_up_while_it_waits_for_room_is_not_cancelled_on_the_server() {
+    run(async {
+        let timer = timer();
+        let gate = Gate::new();
+        let server = FakeServer::legacy("2025-06-18").reply(
+            "held",
+            Reply::Gated(gate.clone(), Box::new(Reply::Result(text("held")))),
+        );
+        let options = ClientOptions {
+            max_in_flight: 1,
+            ..ClientOptions::default()
+        };
+        let client = connect_with(&server, &timer, options).await;
+        let (held_cancel, queued_cancel) = (CancelToken::new(), CancelToken::new());
+        let calls = join(
+            client.call("held", json!({}), &held_cancel),
+            client.call("queued", json!({}), &queued_cancel),
+        );
+        let ((held, queued), ()) = join(calls, async {
+            server.wait_for("tools/call", 1).await;
+            queued_cancel.cancel();
+            settle().await;
+            assert!(
+                server.of("notifications/cancelled").is_empty(),
+                "a request never sent is not cancelled"
+            );
+            gate.open();
+        })
+        .await;
+        assert_eq!(words(&held.unwrap()), "held");
+        assert_eq!(queued.unwrap_err(), ClientError::Cancelled);
+    });
+}
+
+#[test]
+fn an_answer_written_just_before_the_exit_reaches_its_call() {
+    run(async {
+        let timer = timer();
+        let server = FakeServer::legacy("2025-06-18").reply(
+            "finish",
+            Reply::ExitThenAnswer(Box::new(Reply::Result(text("done, and exiting")))),
+        );
+        let client = connect(&server, &timer).await;
+        let output = client
+            .call("finish", json!({}), &CancelToken::new())
+            .await
+            .unwrap();
+        assert_eq!(words(&output), "done, and exiting");
+        assert_eq!(
+            client.closed().await,
+            ClientError::Stopped("it exited after its answer".to_owned())
+        );
+    });
+}
+
+/// A legacy server that answers the handshake, then answers `tools/call`
+/// and exits; the last line is handed on a moment after the exit, as a
+/// thread reading a real pipe can hand it on after a thread waiting for the
+/// process has seen it exit. Written by the review of the client.
+async fn answers_then_exits(
+    mut input: tokio::sync::mpsc::Receiver<Vec<u8>>,
+    output: tokio::sync::mpsc::Sender<Result<Vec<u8>, cineris_mcp::LineError>>,
+    exited: Arc<tokio::sync::watch::Sender<Option<String>>>,
+) {
+    while let Some(text) = input.recv().await {
+        let message: Json = serde_json::from_slice(&text).unwrap();
+        let Some(id) = message.get("id").cloned() else {
+            continue;
+        };
+        let reply = match message["method"].as_str().unwrap_or_default() {
+            "initialize" => json!({"jsonrpc": "2.0", "id": id, "result": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "x", "version": "1"},
+            }}),
+            "tools/call" => {
+                let answer = json!({"jsonrpc": "2.0", "id": id, "result": {
+                    "content": [{"type": "text", "text": "done, and exiting"}],
+                }});
+                // It wrote its answer and exited; the exit is seen first.
+                exited.send_replace(Some("it exited with status 0".to_owned()));
+                tokio::task::yield_now().await;
+                let _sent = output.send(line(&answer)).await;
+                return;
+            }
+            _ => json!({"jsonrpc": "2.0", "id": id,
+                        "error": {"code": -32601, "message": "Method not found"}}),
+        };
+        if output.send(line(&reply)).await.is_err() {
+            return;
+        }
+    }
+}
+
+#[test]
+fn an_answer_a_pipe_hands_on_after_the_exit_reaches_its_call() {
+    run(async {
+        let timer = timer();
+        let (input, input_lines) = tokio::sync::mpsc::channel(64);
+        let (output, output_lines) = tokio::sync::mpsc::channel(64);
+        let exited = Arc::new(tokio::sync::watch::channel(None).0);
+        tokio::spawn(answers_then_exits(input_lines, output, Arc::clone(&exited)));
+        let pipes = cineris_mcp::ServerPipes {
+            input,
+            output: output_lines,
+            process: Box::new(HandProcess { exited }),
+        };
+        let client = StdioClient::connect(
+            &definition(),
+            pipes,
+            no_respawn(),
+            shared(&timer),
+            ClientOptions::default(),
+        )
+        .await
+        .unwrap();
+        let output = client
+            .call("finish", json!({}), &CancelToken::new())
+            .await
+            .unwrap();
+        assert_eq!(words(&output), "done, and exiting");
+    });
 }
 
 #[test]

@@ -113,14 +113,15 @@ impl StdioTransport {
         match jsonrpc::decode(line) {
             Decoded::One(message) => self.route(message, line.len(), budget, inbound),
             Decoded::Batch(messages) if self.batches.load(Ordering::Acquire) => {
-                let mut bytes = line.len();
+                // The line is counted once, with its bytes, whatever it
+                // holds (an empty batch included); then each message in it
+                // that answers nothing.
+                budget.spend(line.len()).map_err(misbehaving)?;
                 for message in messages {
                     match message {
-                        Some(message) => self.route(message, bytes, budget, inbound)?,
-                        None => budget.spend(bytes).map_err(misbehaving)?,
+                        Some(message) => self.route(message, 0, budget, inbound)?,
+                        None => budget.spend(0).map_err(misbehaving)?,
                     }
-                    // The line's bytes are counted once.
-                    bytes = 0;
                 }
                 Ok(())
             }
@@ -174,7 +175,12 @@ impl Transport for StdioTransport {
             if sent.is_err() {
                 return Err(ended());
             }
-            waiting.answer().await
+            waiting.answer().await.map_err(|lost| match lost {
+                // Written, and the connection ended before its answer: the
+                // server may have acted on it.
+                ClientError::Stopped(words) => ClientError::MayHaveRun(words),
+                other => other,
+            })
         })
     }
 
@@ -280,8 +286,18 @@ async fn read(
                 break ClientError::Stopped(words);
             }
             Event::Exited(words) => {
-                // What it wrote before it exited is read first.
-                while let Ok(Ok(line)) = output.try_recv() {
+                // What it wrote before it exited is read first, as the
+                // pipe's reader hands it on: until its output ends, or for
+                // the grace at most (a process it left may hold the pipe).
+                let mut limit = timer.sleep(grace);
+                while let Some(Ok(line)) = poll_fn(|context| {
+                    if let Poll::Ready(line) = output.poll_recv(context) {
+                        return Poll::Ready(line);
+                    }
+                    limit.as_mut().poll(context).map(|()| None)
+                })
+                .await
+                {
                     if transport.take(&line, &mut budget, &inbound).is_err() {
                         break;
                     }

@@ -127,26 +127,35 @@ caught-by:
 
 [break] the-probe-is-cancelled
 rule: The probe is never cancelled: a legacy server would not know the request it named.
-file: crates/cineris-mcp/src/session.rs
-in: discover
-find: Some(limit), None, false
-replace: Some(limit), None, true
+file: crates/cineris-mcp/src/connect.rs
+in: Start::probe
+find: Err(_) => self.legacy(link, Some(probe)).await
+replace: Err(_) => { transport.cancel(id, "silent"); self.legacy(link, Some(probe)).await }
 caught-by:
     cineris-mcp::it probe::a_silent_server_is_taken_as_legacy_after_the_probes_time_and_a_late_answer_is_ignored
 
 [break] the-fallback-is-keyed-to-one-error
 rule: Any error to the probe but the modern ones is a legacy server; the fallback is not keyed to one code.
 file: crates/cineris-mcp/src/session.rs
-in: discover
+in: probed
 find: _ => Probe::Legacy
 replace: -32601 => Probe::Legacy, _ => Probe::Refused(String::new())
 caught-by:
     cineris-mcp::it probe::a_legacy_server_that_refuses_the_probe_with_any_error_is_initialized_on_the_same_process
 
+[break] a-result-of-another-kind-to-the-probe-is-not-legacy
+rule: A result to the probe that is not a discovery result (no `supportedVersions`) is a legacy server answering what it does not know.
+file: crates/cineris-mcp/src/session.rs
+in: probed
+find: return Probe::Legacy;
+replace: return Probe::Refused(String::new());
+caught-by:
+    cineris-mcp::it probe::a_server_that_answers_the_probe_with_a_result_of_another_kind_is_legacy
+
 [break] a-modern-error-falls-back-to-initialize
 rule: `-32021` (and `-32020`, `-32022`) to the probe is a modern server, never sent `initialize`.
 file: crates/cineris-mcp/src/session.rs
-in: discover
+in: probed
 find: wire::MISSING_CLIENT_CAPABILITY =>
 replace: -1 =>
 caught-by:
@@ -155,29 +164,56 @@ caught-by:
 [break] an-unsupported-revision-is-not-asked-again
 rule: After `-32022`, the server is asked once more with a revision from its list.
 file: crates/cineris-mcp/src/connect.rs
-in: Start::agree
-find: Probe::Unsupported(supported) => return self.retry(link, &supported).await,
-replace: Probe::Unsupported(_) => return Err(ClientError::NotStarted(String::new())),
+in: Start::decided
+find: Probe::Unsupported(supported) => self.retry(link, &supported).await
+replace: Probe::Unsupported(_) => Err(ClientError::NotStarted(String::new()))
 caught-by:
     cineris-mcp::it probe::a_server_that_does_not_speak_the_revision_asked_for_is_asked_once_more_with_one_it_does
 
 [break] a-server-that-exits-on-the-probe-is-not-started-again
 rule: A server that exits during the probe is started again and sent `initialize` alone.
 file: crates/cineris-mcp/src/connect.rs
-in: Start::agree
-find: Probe::Exited(_) if !started_again => {
-replace: Probe::Exited(_) if false => {
+in: Start::probe
+find: Probe::Exited(_) => self.initialize_again(link).await
+replace: Probe::Exited(stopped) => Err(stopped)
 caught-by:
     cineris-mcp::it probe::a_server_that_exits_on_the_probe_is_started_again_and_only_initialized
 
 [break] a-server-that-exits-after-answering-the-probe-is-not-started-again
 rule: A server that answers the probe and then exits is started again once and sent `initialize`.
 file: crates/cineris-mcp/src/connect.rs
-in: Start::agree
-find: Err(Declined::Stopped(_)) if !started_again => {
-replace: Err(Declined::Stopped(_)) if false => {
+in: Start::legacy
+find: Ok(Err(Declined::Stopped(_))) => self.initialize_again(link).await
+replace: Ok(Err(Declined::Stopped(stopped))) => Err(stopped)
 caught-by:
     cineris-mcp::it probe::a_server_that_refuses_the_probe_and_then_exits_is_started_again
+
+[break] a-known-legacy-server-that-exits-is-not-started-again
+rule: A server known to be legacy that exits during `initialize` is started again and sent `initialize` alone.
+file: crates/cineris-mcp/src/connect.rs
+in: Start::agree
+find: Err(Declined::Stopped(_)) => return self.initialize_again(first).await
+replace: Err(Declined::Stopped(stopped)) => return Err(stopped)
+caught-by:
+    cineris-mcp::it probe::a_server_known_to_be_legacy_that_exits_on_initialize_is_started_again_and_only_initialized
+
+[break] a-late-discovery-is-not-heard
+rule: A modern server slower than the probe, whose discovery result comes while `initialize` waits, is taken as modern.
+file: crates/cineris-mcp/src/connect.rs
+in: Start::legacy
+find: if !probe_done && let Poll::Ready(answered) = probe.as_mut().poll(context) {
+replace: if false && let Poll::Ready(answered) = probe.as_mut().poll(context) {
+caught-by:
+    cineris-mcp::it probe::a_modern_server_slower_than_the_probe_to_start_is_found_by_its_late_answer
+
+[break] a-server-that-refuses-initialize-after-a-silent-probe-is-not-asked-again
+rule: A server silent on the probe that refuses `initialize` is asked once more what it speaks.
+file: crates/cineris-mcp/src/connect.rs
+in: Start::legacy
+find: Ok(Err(Declined::Answered(refusal))) if silent => self.reprobe(link, refusal).await,
+replace: Ok(Err(Declined::Answered(refusal))) if false => self.reprobe(link, refusal).await,
+caught-by:
+    cineris-mcp::it probe::a_modern_server_whose_first_answer_was_lost_is_asked_again_once_it_refuses_initialize
 
 [break] an-unknown-legacy-revision-is-accepted
 rule: A legacy server's answer to `initialize` is taken only if it is a revision the client speaks; else the start ends with why.
@@ -377,3 +413,98 @@ find: Poll::Ready(Ok(Err(_))) => return Poll::Ready(Listened::Declined)
 replace: Poll::Ready(Ok(Err(_))) => return Poll::Ready(Listened::Refused)
 caught-by:
     cineris-mcp::it modern::a_change_stream_answered_with_an_error_is_over_and_not_asked_again
+
+# The review of the client (docs/steps/30/parts/pr4-client.md, "The full
+# review").
+
+[break] an-empty-batch-is-not-counted
+rule: A line holding a batch is counted once with its bytes, whatever it holds: an empty batch included.
+file: crates/cineris-mcp/src/stdio.rs
+in: StdioTransport::take
+find: budget.spend(line.len()).map_err(misbehaving)?;
+replace:
+caught-by:
+    cineris-mcp::it flood::empty_batches_count_from_a_server_that_may_batch_and_from_one_that_may_not
+
+[break] a-call-lost-to-a-crash-is-said-not-to-have-run
+rule: A request written and then lost to the end of the connection may have run, and says so.
+file: crates/cineris-mcp/src/stdio.rs
+in: StdioTransport::request
+find: ClientError::Stopped(words) => ClientError::MayHaveRun(words),
+replace: ClientError::Stopped(words) => ClientError::Stopped(words),
+caught-by:
+    cineris-mcp::it calls::a_crash_during_calls_says_each_one_written_may_have_run_and_closes_the_client
+    cineris-mcp::it calls::a_call_still_waiting_for_room_when_the_server_crashes_never_ran
+
+[break] what-is-written-before-the-exit-is-lost
+rule: After the process exits, what it wrote is read until its output ends, for the grace at most.
+file: crates/cineris-mcp/src/stdio.rs
+in: read
+find: let mut limit = timer.sleep(grace);
+replace: let mut limit = timer.sleep(Duration::ZERO);
+caught-by:
+    cineris-mcp::it calls::an_answer_written_just_before_the_exit_reaches_its_call
+    cineris-mcp::it calls::an_answer_a_pipe_hands_on_after_the_exit_reaches_its_call
+
+[break] a-listing-of-any-size-is-taken
+rule: A listing is at most 16 MiB of tool definitions, every page counted.
+file: crates/cineris-mcp/src/session.rs
+in: Session::list_pages
+find: if bytes > MAX_LISTING_BYTES {
+replace: if false {
+caught-by:
+    cineris-mcp::it modern::a_listing_larger_than_sixteen_mib_is_refused
+
+[break] a-cancel-of-another-request-ends-the-change-stream
+rule: Only a `notifications/cancelled` naming the open change stream ends it.
+file: crates/cineris-mcp/src/session.rs
+in: Router::notified
+find: if listen.id != ended || listen.ended {
+replace: if listen.ended {
+caught-by:
+    cineris-mcp::it modern::a_cancel_naming_another_request_leaves_the_change_stream_open
+
+[break] an-acknowledgement-of-another-stream-is-taken
+rule: Only an acknowledgement naming the open change stream acknowledges or refuses it.
+file: crates/cineris-mcp/src/session.rs
+in: Router::notified
+find: if !self.on_stream(params) { return; }
+replace:
+caught-by:
+    cineris-mcp::it modern::an_acknowledgement_of_another_stream_neither_acknowledges_nor_refuses_the_open_one
+
+[break] a-legacy-server-is-asked-for-a-change-stream
+rule: Only a modern server is asked for a change stream.
+file: crates/cineris-mcp/src/connect.rs
+in: StdioClient::start
+find: (agreed.era == Era::Modern && agreed.list_changed)
+replace: (agreed.list_changed)
+caught-by:
+    cineris-mcp::it legacy::a_legacy_server_is_never_asked_for_a_change_stream
+
+[break] a-listings-old-lifetime-is-kept
+rule: A new listing's lifetime replaces the last one's.
+file: crates/cineris-mcp/src/session.rs
+in: Session::keep_for
+find: previous.abort();
+replace:
+caught-by:
+    cineris-mcp::it modern::a_new_listing_replaces_the_last_ones_lifetime
+
+[break] a-listings-lifetime-is-its-longest-pages
+rule: A listing's lifetime is its shortest page's.
+file: crates/cineris-mcp/src/session.rs
+in: Session::list_pages
+find: lifetime = lifetime.min(page.ttl_ms);
+replace: lifetime = lifetime.max(page.ttl_ms).min(10_000);
+caught-by:
+    cineris-mcp::it modern::a_listings_lifetime_is_its_shortest_pages
+
+[break] a-request-never-sent-is-cancelled
+rule: Only a request that was sent is cancelled on the server; one given up while it waited for room is not.
+file: crates/cineris-mcp/src/session.rs
+in: Rpc::ask
+find: if cancels && sent.load(Ordering::Relaxed) {
+replace: if cancels {
+caught-by:
+    cineris-mcp::it calls::a_call_given_up_while_it_waits_for_room_is_not_cancelled_on_the_server

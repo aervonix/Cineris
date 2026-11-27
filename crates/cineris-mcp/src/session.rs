@@ -64,6 +64,10 @@ pub const MAX_PAGES: usize = 20;
 /// more (`input_required`).
 pub const MAX_ROUNDS: usize = 3;
 
+/// At most this many bytes of tool definitions in a listing, every page
+/// counted: 512 tools of 32 KiB.
+pub const MAX_LISTING_BYTES: usize = 16 * 1024 * 1024;
+
 /// How long the client waits before it opens a change stream again after
 /// the server ended it.
 pub const LISTEN_AGAIN: Duration = Duration::from_secs(1);
@@ -483,6 +487,7 @@ impl Session {
         let mut tools: Vec<ToolDefinition> = Vec::new();
         let mut cursor: Option<String> = None;
         let mut lifetime = u64::MAX;
+        let mut bytes = 0usize;
         for _ in 0..MAX_PAGES {
             let mut params = Map::new();
             if let Some(cursor) = cursor.take() {
@@ -497,7 +502,8 @@ impl Session {
                     Some(cancel),
                     true,
                 )
-                .await?
+                .await
+                .map_err(settled)?
                 .map_err(wire::server_error)?;
             if self.era == Era::Modern && wire::result_type(&result)? != ResultType::Complete {
                 return Err(ClientError::Protocol(
@@ -509,6 +515,13 @@ impl Session {
             if tools.len() + page.tools.len() > MAX_TOOLS {
                 return Err(ClientError::Protocol(format!(
                     "it offers more than {MAX_TOOLS} tools"
+                )));
+            }
+            bytes = bytes.saturating_add(page.bytes);
+            if bytes > MAX_LISTING_BYTES {
+                return Err(ClientError::Protocol(format!(
+                    "its list of tools is larger than {} MiB",
+                    MAX_LISTING_BYTES / 1024 / 1024
                 )));
             }
             tools.extend(page.tools);
@@ -728,20 +741,33 @@ pub(crate) struct Agreed {
 /// request, within `limit`. The probe is never cancelled: a legacy server
 /// would not know the request it named.
 pub(crate) async fn discover(rpc: &Rpc, version: &str, limit: &mut Limit) -> Probe {
-    let mut params = Map::new();
-    params.insert("_meta".to_owned(), wire::request_meta(version));
-    match rpc
+    let answered = rpc
         .ask(
             "server/discover",
-            Json::Object(params),
+            discover_params(version),
             Some(limit),
             None,
             false,
         )
-        .await
-    {
+        .await;
+    probed(answered, version)
+}
+
+/// The parameters of `server/discover` asked with `version`.
+pub(crate) fn discover_params(version: &str) -> Json {
+    let mut params = Map::new();
+    params.insert("_meta".to_owned(), wire::request_meta(version));
+    Json::Object(params)
+}
+
+/// What a server's answer to `server/discover`, asked with `version`, says
+/// it speaks.
+pub(crate) fn probed(answered: Result<Answer, ClientError>, version: &str) -> Probe {
+    match answered {
         Err(ClientError::TimedOut { .. }) => Probe::Legacy,
-        Err(stopped @ ClientError::Stopped(_)) => Probe::Exited(stopped),
+        Err(stopped @ (ClientError::Stopped(_) | ClientError::MayHaveRun(_))) => {
+            Probe::Exited(settled(stopped))
+        }
         Err(other) => Probe::Failed(other),
         Ok(Ok(result)) => {
             let Some(supported) = result.get("supportedVersions").and_then(Json::as_array) else {
@@ -812,7 +838,9 @@ pub(crate) async fn initialize(rpc: &Rpc) -> Result<Agreed, Declined> {
     let result = match rpc.ask("initialize", params, None, None, false).await {
         Ok(Ok(result)) => result,
         Ok(Err(error)) => return Err(Declined::Answered(wire::server_error(error))),
-        Err(stopped @ ClientError::Stopped(_)) => return Err(Declined::Stopped(stopped)),
+        Err(stopped @ (ClientError::Stopped(_) | ClientError::MayHaveRun(_))) => {
+            return Err(Declined::Stopped(settled(stopped)));
+        }
         Err(other) => return Err(Declined::Failed(other)),
     };
     let version = result
@@ -834,6 +862,15 @@ pub(crate) async fn initialize(rpc: &Rpc) -> Result<Agreed, Declined> {
         name,
         list_changed,
     })
+}
+
+/// A request lost to the end of the connection, for a request that changes
+/// nothing on the server: it stopped, and nothing "may have run".
+pub(crate) fn settled(error: ClientError) -> ClientError {
+    match error {
+        ClientError::MayHaveRun(words) => ClientError::Stopped(words),
+        other => other,
+    }
 }
 
 /// Revisions a server named, as a message shows them: quoted, at most

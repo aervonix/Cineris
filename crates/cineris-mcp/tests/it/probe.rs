@@ -3,8 +3,10 @@
 
 use cineris_base::CancelToken;
 use cineris_mcp::fake::{Discover, Gate};
-use cineris_mcp::{Client, ClientError, Era, ServerInfo};
+use cineris_mcp::{Client, ClientError, Era, LineError, ServerInfo, ServerPipes};
 use cineris_testkit::join;
+use std::sync::Mutex;
+use tokio::sync::{mpsc, watch};
 
 use super::*;
 
@@ -346,5 +348,193 @@ fn a_server_known_to_be_legacy_that_refuses_initialize_is_probed() {
         assert_eq!(client.info().era, Era::Modern);
         assert_eq!(server.methods(), ["initialize", "server/discover"]);
         assert_eq!(server.spawns(), 1);
+    });
+}
+
+/// A modern-only server that reads nothing until `started`, then answers
+/// what it read in order: `server/discover` with its discovery result, and
+/// anything else (`initialize`) with an error, as a modern-only server does.
+/// Written by the review of the client.
+async fn modern_only(
+    mut input: mpsc::Receiver<Vec<u8>>,
+    output: mpsc::Sender<Result<Vec<u8>, LineError>>,
+    mut started: watch::Receiver<bool>,
+    received: Arc<Mutex<Vec<String>>>,
+) {
+    let _started = started.wait_for(|started| *started).await.is_ok();
+    while let Some(text) = input.recv().await {
+        let message: Json = serde_json::from_slice(&text).unwrap();
+        let method = message["method"].as_str().unwrap_or_default().to_owned();
+        received.lock().unwrap().push(method.clone());
+        let Some(id) = message.get("id").cloned() else {
+            continue;
+        };
+        let reply = match method.as_str() {
+            "server/discover" => json!({"jsonrpc": "2.0", "id": id, "result": {
+                "resultType": "complete",
+                "supportedVersions": ["2026-07-28"],
+                "capabilities": {"tools": {}},
+                "ttlMs": 0,
+                "cacheScope": "public",
+            }}),
+            _ => json!({"jsonrpc": "2.0", "id": id,
+                        "error": {"code": -32601, "message": "Method not found"}}),
+        };
+        if output.send(line(&reply)).await.is_err() {
+            return;
+        }
+    }
+}
+
+#[test]
+fn a_modern_server_slower_than_the_probe_to_start_is_found_by_its_late_answer() {
+    run(async {
+        let timer = timer();
+        let (input, input_lines) = mpsc::channel(64);
+        let (output, output_lines) = mpsc::channel(64);
+        let (started, started_receiver) = watch::channel(false);
+        let received = Arc::new(Mutex::new(Vec::new()));
+        tokio::spawn(modern_only(
+            input_lines,
+            output,
+            started_receiver,
+            Arc::clone(&received),
+        ));
+        let pipes = ServerPipes {
+            input,
+            output: output_lines,
+            process: Box::new(HandProcess {
+                exited: Arc::new(watch::channel(None).0),
+            }),
+        };
+        let server_definition = definition();
+        let connecting = StdioClient::connect(
+            &server_definition,
+            pipes,
+            no_respawn(),
+            shared(&timer),
+            ClientOptions::default(),
+        );
+        let (result, ()) = join(connecting, async {
+            // Still starting (a cold `npx`, `uvx` or `docker run`) when the
+            // probe's 3 s run out; then it starts, 4 s into a 10 s start.
+            timer.sleeping_for(PROBE).await;
+            timer.advance(PROBE);
+            settle().await;
+            timer.advance(Duration::from_secs(1));
+            started.send_replace(true);
+        })
+        .await;
+        let client = result.expect("a modern server that answered the probe late connects");
+        assert_eq!(client.info().era, Era::Modern);
+        settle().await;
+        let discovers = received
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|method| *method == "server/discover")
+            .count();
+        assert_eq!(
+            discovers, 1,
+            "its late answer was heard, not asked for again"
+        );
+    });
+}
+
+#[test]
+fn a_modern_server_whose_first_answer_was_lost_is_asked_again_once_it_refuses_initialize() {
+    for known in [None, Some(Era::Modern)] {
+        run(async {
+            let timer = timer();
+            let server = FakeServer::modern().on_discover(Discover::SilentFirst);
+            let server_definition = definition();
+            let connecting = async {
+                match known {
+                    None => {
+                        StdioClient::connect(
+                            &server_definition,
+                            server.spawn(),
+                            server.respawn(),
+                            shared(&timer),
+                            ClientOptions::default(),
+                        )
+                        .await
+                    }
+                    Some(era) => {
+                        StdioClient::connect_known(
+                            era,
+                            &server_definition,
+                            server.spawn(),
+                            server.respawn(),
+                            shared(&timer),
+                            ClientOptions::default(),
+                        )
+                        .await
+                    }
+                }
+            };
+            let (result, ()) = join(connecting, async {
+                timer.sleeping_for(PROBE).await;
+                timer.advance(PROBE);
+            })
+            .await;
+            let client = result.unwrap();
+            assert_eq!(client.info().era, Era::Modern, "{known:?}");
+            assert_eq!(
+                server.methods(),
+                ["server/discover", "initialize", "server/discover"],
+                "{known:?}"
+            );
+            assert_eq!(server.spawns(), 1);
+        });
+    }
+}
+
+#[test]
+fn a_server_that_answers_the_probe_with_a_result_of_another_kind_is_legacy() {
+    run(async {
+        let timer = timer();
+        let server = FakeServer::legacy("2025-06-18").on_discover(Discover::Result(json!({})));
+        let client = connect(&server, &timer).await;
+        assert_eq!(client.info().era, Era::Legacy);
+        server.wait_for("notifications/initialized", 1).await;
+        assert_eq!(
+            server.methods(),
+            ["server/discover", "initialize", "notifications/initialized"]
+        );
+    });
+}
+
+#[test]
+fn a_server_known_to_be_legacy_that_exits_on_initialize_is_started_again_and_only_initialized() {
+    run(async {
+        let timer = timer();
+        let server = FakeServer::legacy("2025-06-18").exits_on_first_initialize();
+        let client = StdioClient::connect_known(
+            Era::Legacy,
+            &definition(),
+            server.spawn(),
+            server.respawn(),
+            shared(&timer),
+            ClientOptions::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(client.info().era, Era::Legacy);
+        assert_eq!(server.spawns(), 2);
+        server.wait_for("notifications/initialized", 1).await;
+        let methods = |number| -> Vec<Json> {
+            server
+                .received_by(number)
+                .iter()
+                .map(|message| message["method"].clone())
+                .collect()
+        };
+        assert_eq!(methods(1), ["initialize"]);
+        assert_eq!(
+            methods(2),
+            ["initialize", "notifications/initialized"],
+            "not probed"
+        );
     });
 }

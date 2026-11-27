@@ -75,6 +75,12 @@ pub enum Discover {
     Error(i64),
     /// With an error of this code, and then by exiting.
     ErrorThenExit(i64),
+    /// With this result, as sent: a legacy server answering a method it
+    /// does not know with an empty result, say.
+    Result(Json),
+    /// Not the first time it is asked, and as [`Discover::Answer`] after: a
+    /// modern server whose first answer was lost.
+    SilentFirst,
     /// With `-32022` naming these revisions, the first `times` it is asked,
     /// and as [`Discover::Answer`] after.
     Unsupported {
@@ -101,6 +107,9 @@ pub enum Reply {
     AlwaysInput(Json),
     /// Twice, the second a duplicate.
     Twice(Box<Reply>),
+    /// By exiting, then writing the inner reply: a last line a pipe's
+    /// reader hands on after the exit is seen.
+    ExitThenAnswer(Box<Reply>),
     /// By exiting, the call unanswered.
     Crash,
     /// Never.
@@ -132,6 +141,8 @@ struct Script {
     page_size: usize,
     list_changed: bool,
     ttl_ms: Option<i64>,
+    /// The `ttlMs` of each page in turn, in place of `ttl_ms`.
+    ttl_pages: Vec<i64>,
     honours_listen: bool,
     /// The error it answers a change stream with, if it does.
     listen_error: Option<i64>,
@@ -139,6 +150,10 @@ struct Script {
     stderr: String,
     /// What `initialize` waits for before it is answered.
     initialize_gate: Option<Gate>,
+    /// Whether its first process exits on `initialize`.
+    exits_on_first_initialize: bool,
+    /// What the acknowledgement of a change stream waits for.
+    ack_gate: Option<Gate>,
     /// What each page of `tools/list` waits for before it is answered.
     list_gate: Option<Gate>,
 }
@@ -176,6 +191,12 @@ impl Process {
 
     /// Exits with `words`: the exit is seen before the output ends.
     fn exit(&self, words: &str) {
+        self.exit_keeping_output(words);
+        lock(&self.output).take();
+    }
+
+    /// Exits with `words`, its output not yet ended.
+    fn exit_keeping_output(&self, words: &str) {
         self.exited.send_if_modified(|exited| {
             if exited.is_some() {
                 return false;
@@ -183,7 +204,6 @@ impl Process {
             *exited = Some(words.to_owned());
             true
         });
-        lock(&self.output).take();
     }
 
     fn has_exited(&self) -> bool {
@@ -227,11 +247,14 @@ impl FakeServer {
             page_size: 100,
             list_changed: false,
             ttl_ms: None,
+            ttl_pages: Vec::new(),
             honours_listen: true,
             listen_error: None,
             replies: HashMap::new(),
             stderr: String::new(),
             initialize_gate: None,
+            exits_on_first_initialize: false,
+            ack_gate: None,
             list_gate: None,
         };
         Self {
@@ -355,6 +378,28 @@ impl FakeServer {
         self.script(|script| {
             script.replies.insert(tool.to_owned(), reply);
         });
+        self
+    }
+
+    /// That its first process exits on `initialize`, and the next answer
+    /// it.
+    #[must_use]
+    pub fn exits_on_first_initialize(self) -> Self {
+        self.script(|script| script.exits_on_first_initialize = true);
+        self
+    }
+
+    /// That it acknowledges a change stream only once `gate` is open.
+    #[must_use]
+    pub fn ack_gate(self, gate: &Gate) -> Self {
+        self.script(|script| script.ack_gate = Some(gate.clone()));
+        self
+    }
+
+    /// The `ttlMs` of each page of its list in turn (modern).
+    #[must_use]
+    pub fn ttl_pages(self, ttls: &[i64]) -> Self {
+        self.script(|script| script.ttl_pages = ttls.to_vec());
         self
     }
 
@@ -645,8 +690,11 @@ async fn serve(server: FakeServer, process: Arc<Process>, mut input: mpsc::Recei
         })
         .await;
         let Some(line) = line else {
-            // Its input closed (it exits, as a server should), or it exited.
-            process.exit("its input closed");
+            // Its input closed: it exits, as a server should. One that
+            // exited already may still be handing on its last line.
+            if !process.has_exited() {
+                process.exit("its input closed");
+            }
             return;
         };
         if process.has_exited() {
@@ -729,6 +777,9 @@ async fn respond(
     if !modern {
         let initialized = *lock(&process.initialized);
         if method == "initialize" {
+            if script.exits_on_first_initialize && process.number == 1 {
+                return process.exit("it exited on initialize");
+            }
             return initialize(script, process, &id).await;
         }
         if method == "ping" {
@@ -785,6 +836,9 @@ async fn respond(
         }
         "subscriptions/listen" if modern => {
             *lock(&process.listen) = Some(id.clone());
+            if let Some(gate) = &script.ack_gate {
+                gate.opened().await;
+            }
             process
                 .send(json!({
                     "jsonrpc": "2.0",
@@ -832,6 +886,8 @@ async fn discover(
         Discover::Silent => {}
         Discover::Exit => process.exit("it exited on a request before initialize"),
         Discover::Error(code) => process.send(error(id, *code, "method not found")).await,
+        Discover::Result(result) => process.send(answer(id, result.clone())).await,
+        Discover::SilentFirst if asked == 1 => {}
         Discover::ErrorThenExit(code) => {
             process.send(error(id, *code, "method not found")).await;
             process.exit("it exited after it refused a request before initialize");
@@ -843,7 +899,7 @@ async fn discover(
                 .unwrap_or_default();
             process.send(unsupported(id, supported, requested)).await;
         }
-        Discover::Answer | Discover::Unsupported { .. } => {
+        Discover::Answer | Discover::Unsupported { .. } | Discover::SilentFirst => {
             process
                 .send(answer(
                     id,
@@ -919,7 +975,7 @@ fn list(script: &Script, id: &Json, message: &Json) -> Json {
     if script.legacy.is_none() {
         result["resultType"] = Json::from("complete");
         result["cacheScope"] = Json::from("public");
-        if let Some(ttl) = script.ttl_ms {
+        if let Some(ttl) = script.ttl_pages.get(page).copied().or(script.ttl_ms) {
             result["ttlMs"] = Json::from(ttl);
         }
     }
@@ -980,6 +1036,12 @@ fn call<'a>(
                 call(process, id, message, *inner, modern).await;
             }
             Reply::Crash => process.exit("it crashed during a call"),
+            Reply::ExitThenAnswer(inner) => {
+                process.exit_keeping_output("it exited after its answer");
+                tokio::task::yield_now().await;
+                call(process, id, message, *inner, modern).await;
+                lock(&process.output).take();
+            }
             Reply::Silent => {}
         }
     })

@@ -2,7 +2,7 @@
 //! lifetime, and the change stream.
 
 use cineris_base::CancelToken;
-use cineris_mcp::fake::{EndListen, Reply};
+use cineris_mcp::fake::{EndListen, Gate, Reply};
 use cineris_mcp::{Client, ClientError, LISTEN_AGAIN};
 
 use super::*;
@@ -365,6 +365,126 @@ fn a_change_stream_answered_with_an_error_is_over_and_not_asked_again() {
         settle().await;
         assert!(!client.listening());
         assert_eq!(server.of("subscriptions/listen").len(), 1);
+    });
+}
+
+#[test]
+fn a_cancel_naming_another_request_leaves_the_change_stream_open() {
+    run(async {
+        let timer = timer();
+        let server = FakeServer::modern().list_changed();
+        let client = listening(&server, &timer).await;
+        let mut changes = client.changes();
+        server
+            .send(json!({
+                "jsonrpc": "2.0",
+                "method": "notifications/cancelled",
+                "params": {"requestId": 9_999, "reason": "not the stream"},
+            }))
+            .await;
+        server.notify_list_changed().await;
+        changes.changed().await.unwrap();
+        assert!(client.listening());
+        timer.advance(LISTEN_AGAIN);
+        settle().await;
+        assert_eq!(server.of("subscriptions/listen").len(), 1, "never ended");
+    });
+}
+
+#[test]
+fn an_acknowledgement_of_another_stream_neither_acknowledges_nor_refuses_the_open_one() {
+    run(async {
+        let timer = timer();
+        let gate = Gate::new();
+        let server = FakeServer::modern().list_changed().ack_gate(&gate);
+        let client = connect(&server, &timer).await;
+        server.wait_for("subscriptions/listen", 1).await;
+        // Another stream's, refusing the notices: not this one's.
+        server
+            .send(json!({
+                "jsonrpc": "2.0",
+                "method": "notifications/subscriptions/acknowledged",
+                "params": {
+                    "_meta": {"io.modelcontextprotocol/subscriptionId": 9_999},
+                    "notifications": {},
+                },
+            }))
+            .await;
+        settle().await;
+        assert!(!client.listening(), "not acknowledged by another's");
+        assert!(
+            server.of("notifications/cancelled").is_empty(),
+            "not refused by another's"
+        );
+        gate.open();
+        until(|| client.listening()).await;
+        settle().await;
+        assert!(server.of("notifications/cancelled").is_empty());
+    });
+}
+
+#[test]
+fn a_new_listing_replaces_the_last_ones_lifetime() {
+    run(async {
+        let timer = timer();
+        let server = FakeServer::modern().tools(vec![tool("a")]).ttl_ms(7_500);
+        let client = connect(&server, &timer).await;
+        let changes = client.changes();
+        let cancel = CancelToken::new();
+        client.list_tools(&cancel).await.unwrap();
+        timer.advance(Duration::from_secs(5));
+        client.list_tools(&cancel).await.unwrap();
+        // The first listing's lifetime would end now.
+        timer.advance(Duration::from_millis(2_500));
+        settle().await;
+        assert!(
+            !changes.has_changed().unwrap(),
+            "the first lifetime is gone"
+        );
+        assert_eq!(timer.running(), [Duration::from_millis(7_500)]);
+    });
+}
+
+#[test]
+fn a_listings_lifetime_is_its_shortest_pages() {
+    run(async {
+        let timer = timer();
+        let server = FakeServer::modern()
+            .tools(vec![tool("a"), tool("b")])
+            .page_size(1)
+            .ttl_pages(&[10_000, 5_000]);
+        let client = connect(&server, &timer).await;
+        client.list_tools(&CancelToken::new()).await.unwrap();
+        assert_eq!(timer.running(), [Duration::from_secs(5)]);
+    });
+}
+
+#[test]
+fn a_listing_larger_than_sixteen_mib_is_refused() {
+    run(async {
+        let timer = timer();
+        let description = "x".repeat(1024 * 1024);
+        let tools = (0..16)
+            .map(|number| {
+                json!({
+                    "name": format!("t{number}"),
+                    "description": description,
+                    "inputSchema": {"type": "object"},
+                })
+            })
+            .collect();
+        let server = FakeServer::modern().tools(tools).page_size(1);
+        let client = connect(&server, &timer).await;
+        let result = client.list_tools(&CancelToken::new()).await;
+        let Err(ClientError::Protocol(why)) = result else {
+            panic!("{result:?}");
+        };
+        assert!(why.contains("16 MiB"), "{why}");
+        assert_eq!(
+            server.of("tools/list").len(),
+            16,
+            "every page read until then"
+        );
     });
 }
 
