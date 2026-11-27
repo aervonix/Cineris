@@ -136,6 +136,8 @@ pub(crate) struct Page {
     /// How long the page may be kept, in milliseconds: absent or negative
     /// is 0.
     pub(crate) ttl_ms: u64,
+    /// The size of its tools' definitions, written as JSON.
+    pub(crate) bytes: usize,
 }
 
 /// Reads one page of `tools/list`.
@@ -154,7 +156,9 @@ pub(crate) fn tools_page(mut result: Json) -> Result<Page, ClientError> {
         return Err(broken("has no `tools` array"));
     };
     let mut tools = Vec::with_capacity(entries.len());
+    let mut bytes = 0usize;
     for (index, raw) in entries.into_iter().enumerate() {
+        bytes = bytes.saturating_add(written_size(&raw));
         let Some(name) = raw.get("name").and_then(Json::as_str) else {
             return Err(broken(&format!(
                 "has an entry ({}) with no name",
@@ -180,7 +184,26 @@ pub(crate) fn tools_page(mut result: Json) -> Result<Page, ClientError> {
         tools,
         next,
         ttl_ms,
+        bytes,
     })
+}
+
+/// How many bytes `value` is written as JSON, counted without writing it.
+fn written_size(value: &Json) -> usize {
+    struct Counter(usize);
+    impl std::io::Write for Counter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 = self.0.saturating_add(bytes.len());
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut counter = Counter(0);
+    // Writing to a counter cannot fail.
+    let _written = serde_json::to_writer(&mut counter, value);
+    counter.0
 }
 
 impl ToolDefinition {

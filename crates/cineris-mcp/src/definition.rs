@@ -93,14 +93,20 @@ pub enum Launch {
         program: String,
         /// Its arguments.
         args: Vec<String>,
-        /// The folder it starts in, as the entry gives it; the workspace when
-        /// absent.
+        /// The folder it starts in, as the entry gives it. When absent, the
+        /// workspace, and only in a trusted project: otherwise an empty
+        /// folder of the server's own, and an entry's folder that resolves
+        /// inside the workspace counts as the workspace
+        /// (`docs/steps/30/answered.md`, point 3.1).
         cwd: Option<String>,
         /// The variables the entry adds to the base environment.
         env: Vec<EnvEntry>,
         /// Whether its confinement allows the network.
         network: bool,
-        /// Whether its confinement allows writes to the workspace.
+        /// Never true in this step: a server has no write root but its
+        /// private temporary folder, and the spawner refuses a definition
+        /// with this set (`docs/steps/30/answered.md`, point 5). Kept for a
+        /// later step that gives servers a write root.
         write: bool,
     },
     /// A remote server, over Streamable HTTP.

@@ -7,14 +7,20 @@
 //! A discovery result, or one of the modern errors, is a modern server, and
 //! is never spoken to with `initialize`. Any other error, or silence for
 //! the probe's time, is a legacy server, and the handshake follows on the
-//! same process. Some legacy servers exit on any request before
-//! `initialize`: one that exits during the probe, or while it is answered
-//! after it, is started again by the caller's closure and spoken to with
-//! `initialize` alone. The whole start is held to the definition's start
-//! limit.
+//! same process. Silence may also be a modern server still starting (a cold
+//! `npx` or `docker run`): its answer to the probe, coming while
+//! `initialize` waits, makes it modern after all, and one that refuses
+//! `initialize` after a silent probe is asked once more what it speaks.
+//! Some legacy servers exit on any request before `initialize`: one that
+//! exits during the probe, or while it is answered after it, is started
+//! again by the caller's closure and spoken to with `initialize` alone. The
+//! whole start is held to the definition's start limit.
 
+use std::future::poll_fn;
+use std::pin::pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::task::Poll;
 use std::time::Duration;
 
 use cineris_base::{CancelToken, SharedTimer};
@@ -23,10 +29,11 @@ use tokio::task::AbortHandle;
 
 use crate::client::{CallOutput, Client, ClientError, Era, ServerInfo, ToolDefinition};
 use crate::definition::ServerDefinition;
+use crate::jsonrpc::{self, Answer};
 use crate::process::{ServerPipes, SpawnError};
 use crate::session::{
     Agreed, ClientOptions, Declined, Limit, Probe, Router, Rpc, Session, bounded, discover,
-    initialize,
+    discover_params, initialize, probed,
 };
 use crate::stdio::StdioTransport;
 use crate::transport::{Transport, lock};
@@ -106,51 +113,137 @@ impl Start<'_> {
     }
 
     /// Probes, falls back, and agrees a revision; `known` skips the probe
-    /// for a server known to be legacy, probing after all if the handshake
-    /// is refused.
+    /// for a server known to be legacy, probing after all if it refuses the
+    /// handshake.
     async fn agree(&self, first: Link, known: Option<Era>) -> Result<(Link, Agreed), ClientError> {
-        let mut link = first;
-        let mut started_again = false;
         if known == Some(Era::Legacy) {
-            match initialize(&link.rpc).await {
-                Ok(agreed) => return Ok((link, agreed)),
+            match initialize(&first.rpc).await {
+                Ok(agreed) => return Ok((first, agreed)),
                 // Refused: the server changed; what it speaks is asked.
                 Err(Declined::Answered(_)) => {}
-                Err(Declined::Stopped(_)) => {
-                    link = self.again(link)?;
-                    started_again = true;
-                }
+                // It exited: started again, and sent `initialize` alone.
+                Err(Declined::Stopped(_)) => return self.initialize_again(first).await,
                 Err(Declined::Failed(error)) => return Err(error),
             }
         }
+        self.probe(first).await
+    }
+
+    /// The server started again, and sent `initialize` alone.
+    async fn initialize_again(&self, old: Link) -> Result<(Link, Agreed), ClientError> {
+        let link = self.again(old)?;
+        let agreed = initialize(&link.rpc).await.map_err(declined)?;
+        Ok((link, agreed))
+    }
+
+    /// Asks the server what it speaks, and acts on its answer.
+    async fn probe(&self, link: Link) -> Result<(Link, Agreed), ClientError> {
+        let preferred = wire::MODERN_VERSIONS[0];
         let mut limit = Limit::new(
             self.timer,
             "answer server/discover",
             self.options.probe_timeout,
         );
-        let preferred = wire::MODERN_VERSIONS[0];
-        match discover(&link.rpc, preferred, &mut limit).await {
-            Probe::Modern(agreed) => return Ok((link, agreed)),
-            Probe::Unsupported(supported) => return self.retry(link, &supported).await,
-            Probe::Refused(why) => return Err(ClientError::NotStarted(why)),
-            Probe::Failed(error) => return Err(error),
-            Probe::Exited(_) if !started_again => {
-                link = self.again(link)?;
-                started_again = true;
+        // Sent by hand, not by `Rpc::ask`, so that an answer after the
+        // probe's time is still heard while `initialize` waits. Never
+        // cancelled: a legacy server would not know the request it named.
+        let transport = Arc::clone(link.rpc.transport());
+        let id = link.rpc.next_id();
+        let message = jsonrpc::request(id, "server/discover", discover_params(preferred));
+        let mut probe = transport.request(id, message);
+        match bounded(&mut probe, Some(&mut limit), None).await {
+            Ok(answered) => {
+                drop(probe);
+                match probed(answered, preferred) {
+                    // An error that is not a modern one: legacy.
+                    Probe::Legacy => self.legacy(link, None).await,
+                    Probe::Exited(_) => self.initialize_again(link).await,
+                    other => self.decided(link, other).await,
+                }
             }
-            Probe::Exited(stopped) => return Err(stopped),
-            Probe::Legacy => {}
+            // Silent: legacy, unless its answer comes while `initialize`
+            // waits.
+            Err(_) => self.legacy(link, Some(probe)).await,
         }
-        match initialize(&link.rpc).await {
-            Ok(agreed) => Ok((link, agreed)),
-            // A server that answered the probe and exits on it (rather than
-            // at once) is started again once.
-            Err(Declined::Stopped(_)) if !started_again => {
-                let link = self.again(link)?;
-                let agreed = initialize(&link.rpc).await.map_err(declined)?;
-                Ok((link, agreed))
+    }
+
+    /// A modern server's answer to a probe, acted on.
+    async fn decided(&self, link: Link, probe: Probe) -> Result<(Link, Agreed), ClientError> {
+        match probe {
+            Probe::Modern(agreed) => Ok((link, agreed)),
+            Probe::Unsupported(supported) => self.retry(link, &supported).await,
+            Probe::Refused(why) => Err(ClientError::NotStarted(why)),
+            Probe::Failed(error) | Probe::Exited(error) => Err(error),
+            Probe::Legacy => Err(ClientError::NotStarted(
+                "it gave no sign of the era it speaks".to_owned(),
+            )),
+        }
+    }
+
+    /// The legacy handshake on the probed process. After a silent probe,
+    /// `late` is the probe still waiting: a modern server slow to start
+    /// answers it while `initialize` waits, and is taken as modern
+    /// (`initialize`'s answer, when it comes, reaches nothing); and one that
+    /// refuses `initialize` is asked once more what it speaks. A server
+    /// that exits during the handshake is started again once.
+    async fn legacy(
+        &self,
+        link: Link,
+        late: Option<BoxFuture<'_, Result<Answer, ClientError>>>,
+    ) -> Result<(Link, Agreed), ClientError> {
+        let silent = late.is_some();
+        let outcome = {
+            let mut handshake = pin!(initialize(&link.rpc));
+            match late {
+                None => Ok(handshake.await),
+                Some(mut probe) => {
+                    let preferred = wire::MODERN_VERSIONS[0];
+                    let mut probe_done = false;
+                    poll_fn(|context| {
+                        if !probe_done && let Poll::Ready(answered) = probe.as_mut().poll(context) {
+                            probe_done = true;
+                            // A legacy server's late error, or an end that
+                            // the handshake meets too, is left.
+                            if let modern @ (Probe::Modern(_)
+                            | Probe::Unsupported(_)
+                            | Probe::Refused(_)) = probed(answered, preferred)
+                            {
+                                return Poll::Ready(Err(modern));
+                            }
+                        }
+                        handshake.as_mut().poll(context).map(Ok)
+                    })
+                    .await
+                }
             }
-            Err(declined_) => Err(declined(declined_)),
+        };
+        match outcome {
+            Err(modern) => self.decided(link, modern).await,
+            Ok(Ok(agreed)) => Ok((link, agreed)),
+            Ok(Err(Declined::Stopped(_))) => self.initialize_again(link).await,
+            Ok(Err(Declined::Answered(refusal))) if silent => self.reprobe(link, refusal).await,
+            Ok(Err(other)) => Err(declined(other)),
+        }
+    }
+
+    /// A server whose probe went unanswered and that refused `initialize`:
+    /// asked once more what it speaks, on the same process.
+    async fn reprobe(
+        &self,
+        link: Link,
+        refusal: ClientError,
+    ) -> Result<(Link, Agreed), ClientError> {
+        let mut limit = Limit::new(
+            self.timer,
+            "answer server/discover",
+            self.options.probe_timeout,
+        );
+        match discover(&link.rpc, wire::MODERN_VERSIONS[0], &mut limit).await {
+            probe @ (Probe::Modern(_)
+            | Probe::Unsupported(_)
+            | Probe::Refused(_)
+            | Probe::Failed(_)) => self.decided(link, probe).await,
+            Probe::Legacy | Probe::Exited(_) => Err(declined(Declined::Answered(refusal))),
         }
     }
 

@@ -127,3 +127,45 @@ async fn until(ready: impl Fn() -> bool) {
 fn id_of(server: &FakeServer, method: &str, index: usize) -> Json {
     server.of(method)[index]["id"].clone()
 }
+
+/// A process of a test's own, for a server the fake cannot play: it exits
+/// when the test says, or when it is shut down.
+struct HandProcess {
+    exited: Arc<tokio::sync::watch::Sender<Option<String>>>,
+}
+
+impl cineris_mcp::ServerProcess for HandProcess {
+    fn stderr_tail(&self) -> String {
+        String::new()
+    }
+
+    fn exited(&self) -> cineris_tools::BoxFuture<'_, String> {
+        Box::pin(async move {
+            let mut exited = self.exited.subscribe();
+            match exited.wait_for(Option::is_some).await {
+                Ok(words) => words.clone().unwrap_or_default(),
+                Err(_) => "gone".to_owned(),
+            }
+        })
+    }
+
+    fn shutdown(&self, _grace: Duration) -> cineris_tools::BoxFuture<'_, ()> {
+        Box::pin(async move {
+            self.exited.send_replace(Some("shut down".to_owned()));
+        })
+    }
+}
+
+/// A closure for a server that cannot be started again.
+fn no_respawn() -> cineris_mcp::Respawn {
+    Arc::new(|| {
+        Err(cineris_mcp::SpawnError::Failed(
+            "not in this test".to_owned(),
+        ))
+    })
+}
+
+/// One message as a line of a server's output.
+fn line(message: &Json) -> Result<Vec<u8>, cineris_mcp::LineError> {
+    Ok(message.to_string().into_bytes())
+}

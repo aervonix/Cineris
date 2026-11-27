@@ -70,6 +70,20 @@ fn every_kind_of_message_that_answers_nothing_counts() {
 }
 
 #[test]
+fn empty_batches_count_from_a_server_that_may_batch_and_from_one_that_may_not() {
+    for version in ["2025-03-26", "2025-06-18"] {
+        run(async {
+            let timer = timer();
+            let server = FakeServer::legacy(version);
+            let client = connect(&server, &timer).await;
+            server.flood(1001, json!([])).await;
+            let error = client.closed().await;
+            assert!(misbehaved(&error), "{version}: {error:?}");
+        });
+    }
+}
+
+#[test]
 fn the_allowance_is_a_minutes() {
     run(async {
         let timer = timer();

@@ -37,4 +37,6 @@ pub use client::{CallOutput, Client, ClientError, Content, Era, ServerInfo, Tool
 pub use connect::{Respawn, StdioClient};
 pub use definition::{EnvEntry, Expose, Launch, Origin, ServerDefinition, ValueSource};
 pub use process::{LineError, ServerPipes, ServerProcess, SpawnError, Spawner};
-pub use session::{ClientOptions, LISTEN_AGAIN, MAX_PAGES, MAX_ROUNDS, MAX_TOOLS};
+pub use session::{
+    ClientOptions, LISTEN_AGAIN, MAX_LISTING_BYTES, MAX_PAGES, MAX_ROUNDS, MAX_TOOLS,
+};
