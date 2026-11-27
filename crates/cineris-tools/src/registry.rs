@@ -20,20 +20,23 @@
 //!   the person approves it and nothing of its definition
 //!   ([`ToolError::NeedsApproval`], a denial), whatever the level and the
 //!   rules, since it fails before the policy is asked.
-//! - **Every view of a source's or a tool's text is cleaned:** a source's
-//!   description is made one line with what acts unseen taken out when it
-//!   is registered ([`cineris_base::one_line`]); a tool's description in a
-//!   search, and every string of a schema a search or an error shows, a
-//!   key or a value, has what acts unseen written as an escape
-//!   ([`cineris_base::visible_to_the_model`]) and is cut at 2 KiB
-//!   ([`shown_schema`]).
+//! - **A source's description is made one line,** with what acts unseen
+//!   taken out, when it is registered ([`cineris_base::one_line`]), for
+//!   every view of it: section 6, and a search that finds nothing.
+//! - **A tool's text is shown as its spec holds it,** cut at 2 KiB: what
+//!   a search shows of a description, and every string, a key or a value,
+//!   of a schema a search or an error shows ([`shown_schema`]). Cleaning
+//!   it is its source's part: an MCP server's tool writes what acts unseen
+//!   as an escape when it is made, and an extension's registration bounds
+//!   its text, which `tool_call` checks arguments against as written, so
+//!   that a value given back as it was shown fits.
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard};
 
+use cineris_base::one_line;
 use cineris_base::text::truncate_bytes;
-use cineris_base::{one_line, visible_to_the_model};
 use cineris_protocol::lease::RuleAction;
 use serde::Deserialize;
 use serde_json::json;
@@ -477,49 +480,37 @@ impl std::fmt::Debug for ToolRegistry {
 }
 
 /// `schema` as a search result or an error shows it: every string in it,
-/// a key or a value, with what acts unseen written as an escape
-/// ([`visible_to_the_model`]: every variation selector too), and cut at
-/// [`MAX_DESCRIPTION_BYTES`] and ended with `…`, as a description is cut.
-/// Borrowed when nothing in it changes.
+/// a key or a value, cut at [`MAX_DESCRIPTION_BYTES`] and ended with `…`,
+/// as a description is cut. Borrowed when nothing is that long.
 #[must_use]
 pub fn shown_schema(schema: &Json) -> Cow<'_, Json> {
-    if needs_showing(schema) {
+    if has_long_string(schema) {
         Cow::Owned(cut_strings(schema))
     } else {
         Cow::Borrowed(schema)
     }
 }
 
-/// Whether a string is shown otherwise than it is: too long, or holding
-/// what [`visible_to_the_model`] escapes.
-fn changes_when_shown(text: &str) -> bool {
-    text.len() > MAX_DESCRIPTION_BYTES || matches!(visible_to_the_model(text), Cow::Owned(_))
-}
-
-fn needs_showing(value: &Json) -> bool {
+fn has_long_string(value: &Json) -> bool {
     match value {
-        Json::String(text) => changes_when_shown(text),
-        Json::Array(items) => items.iter().any(needs_showing),
+        Json::String(text) => text.len() > MAX_DESCRIPTION_BYTES,
+        Json::Array(items) => items.iter().any(has_long_string),
         Json::Object(map) => map
             .iter()
-            .any(|(key, value)| changes_when_shown(key) || needs_showing(value)),
+            .any(|(key, value)| key.len() > MAX_DESCRIPTION_BYTES || has_long_string(value)),
         Json::Null | Json::Bool(_) | Json::Number(_) => false,
     }
 }
 
-/// A string of a tool's text as the model is shown it: escaped, then cut.
-fn shown_text(text: &str) -> String {
-    let escaped = visible_to_the_model(text);
-    let kept = truncate_bytes(&escaped, MAX_DESCRIPTION_BYTES);
-    if kept.len() < escaped.len() {
-        format!("{kept}…")
-    } else {
-        kept.to_owned()
-    }
-}
-
 fn cut_strings(value: &Json) -> Json {
-    let cut = shown_text;
+    let cut = |text: &str| -> String {
+        let kept = truncate_bytes(text, MAX_DESCRIPTION_BYTES);
+        if kept.len() < text.len() {
+            format!("{kept}…")
+        } else {
+            text.to_owned()
+        }
+    };
     match value {
         Json::String(text) => Json::String(cut(text)),
         Json::Array(items) => Json::Array(items.iter().map(cut_strings).collect()),
@@ -657,12 +648,9 @@ impl Tool for ToolSearch {
                 }
                 let description = tool.description.trim();
                 let shown = truncate_bytes(description, MAX_DESCRIPTION_BYTES);
-                // Each line with what acts unseen written as an escape: an
-                // MCP server's is cleaned already, an extension's is its
-                // author's text.
                 for line in shown.lines() {
                     text.push_str("\n  ");
-                    text.push_str(&visible_to_the_model(line));
+                    text.push_str(line);
                 }
                 if shown.len() < description.len() {
                     text.push_str("\n  [the description goes on]");
@@ -823,13 +811,8 @@ impl Tool for ToolCall {
         let schema = &tool.spec().parameters;
         schema::validate(schema, &arguments).map_err(|mismatch| {
             ToolError::invalid(format!(
-                "The arguments for `{name}` do not fit its schema:\n{}\nIts schema is:\n{}",
-                mismatch
-                    .problems()
-                    .iter()
-                    .map(|problem| visible_to_the_model(problem))
-                    .collect::<Vec<_>>()
-                    .join("\n"),
+                "The arguments for `{name}` do not fit its schema:\n{mismatch}\nIts schema \
+                 is:\n{}",
                 shown_schema(schema)
             ))
         })?;

@@ -494,22 +494,15 @@ impl Tool for McpTool {
                 Ok(arguments) => arguments,
                 Err(error) => return error.into_result(),
             };
-            // Against the server's own schema, before anything is sent:
-            // as given, then with the escapes the model was shown read back
-            // (a value shown as `\u{fe0f}` given back as shown), so that a
-            // value meant as it is written (a Windows path's `\n`) goes as
-            // it is whenever it fits.
-            let arguments = match cineris_tools::schema::validate(&self.schema, &arguments) {
-                Ok(()) => arguments,
-                Err(mismatch) => {
-                    let read_back = unescaped(&arguments);
-                    if cineris_tools::schema::validate(&self.schema, &read_back).is_ok() {
-                        read_back
-                    } else {
-                        return self.mismatch(&mismatch);
-                    }
-                }
-            };
+            // A value the model gave back as it was shown (`\u{fe0f}` for
+            // a selector) is read back where the server's schema lists it
+            // so; every other string goes as given, a Windows path's or a
+            // formula's backslashes among them. Then checked against the
+            // server's own schema, before anything is sent.
+            let arguments = read_back(&self.schema, arguments);
+            if let Err(mismatch) = cineris_tools::schema::validate(&self.schema, &arguments) {
+                return self.mismatch(&mismatch);
+            }
             match self
                 .caller
                 .call(&self.spec.name, arguments, &cx.cancel)
@@ -551,20 +544,70 @@ fn description_of(definition: &ToolDefinition) -> String {
     }
 }
 
-/// `value` with every string in it read back from the escapes
-/// [`visible_to_the_model`] writes ([`cineris_base::unescape`]): the
-/// arguments as meant, when the model gave back a value as it was shown.
-fn unescaped(value: &Json) -> Json {
+/// `value`, the arguments of a call, with a string read back from the
+/// escapes [`visible_to_the_model`] writes ([`cineris_base::unescape`])
+/// only where, read back, it is one of the strings the server's `schema`
+/// lists at its place (`enum`, `const`) and as given it is not: the value
+/// as the server wrote it, which the model was shown escaped. Every other
+/// string is left as given, so that one whose backslashes are its own is
+/// never changed. A place is found by `properties`, `additionalProperties`
+/// and `items`.
+fn read_back(schema: &Json, value: Json) -> Json {
     match value {
-        Json::String(text) => Json::String(unescape(text).into_owned()),
-        Json::Array(items) => Json::Array(items.iter().map(unescaped).collect()),
+        Json::String(text) => {
+            let listed = listed_strings(schema);
+            if listed.contains(&text.as_str()) {
+                return Json::String(text);
+            }
+            let back = unescape(&text);
+            if listed.contains(&back.as_ref()) {
+                Json::String(back.into_owned())
+            } else {
+                Json::String(text)
+            }
+        }
         Json::Object(map) => Json::Object(
-            map.iter()
-                .map(|(key, value)| (unescape(key).into_owned(), unescaped(value)))
+            map.into_iter()
+                .map(|(key, value)| {
+                    let place = schema
+                        .get("properties")
+                        .and_then(|properties| properties.get(&key))
+                        .or_else(|| {
+                            schema
+                                .get("additionalProperties")
+                                .filter(|more| more.is_object())
+                        })
+                        .unwrap_or(&Json::Null);
+                    let value = read_back(place, value);
+                    (key, value)
+                })
                 .collect(),
         ),
-        other => other.clone(),
+        Json::Array(items) => {
+            let place = schema.get("items").unwrap_or(&Json::Null);
+            Json::Array(
+                items
+                    .into_iter()
+                    .map(|item| read_back(place, item))
+                    .collect(),
+            )
+        }
+        other => other,
     }
+}
+
+/// The strings a schema lists as the only values at its place: its `enum`'s
+/// and its `const`.
+fn listed_strings(schema: &Json) -> Vec<&str> {
+    let mut listed: Vec<&str> = schema
+        .get("enum")
+        .and_then(Json::as_array)
+        .map(|values| values.iter().filter_map(Json::as_str).collect())
+        .unwrap_or_default();
+    if let Some(constant) = schema.get("const").and_then(Json::as_str) {
+        listed.push(constant);
+    }
+    listed
 }
 
 /// A string of a server's schema as the model is shown it: what acts

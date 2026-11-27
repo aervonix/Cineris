@@ -74,9 +74,9 @@ caught-by:
 [break] a-schema-string-is-cut-past-its-cap
 rule: A shown schema's string is cut at 2 KiB, not later.
 file: crates/cineris-tools/src/registry.rs
-in: changes_when_shown
-find: text.len() > MAX_DESCRIPTION_BYTES ||
-replace: text.len() > 2 * MAX_DESCRIPTION_BYTES ||
+in: has_long_string
+find: Json::String(text) => text.len() > MAX_DESCRIPTION_BYTES
+replace: Json::String(text) => text.len() > 2 * MAX_DESCRIPTION_BYTES
 caught-by:
     cineris-tools::it registry::every_string_of_a_shown_schema_is_cut_at_two_kib
 
@@ -497,32 +497,14 @@ caught-by:
     cineris-tools::it registry::a_sources_description_is_cleaned_where_it_is_registered
     cineris-mcp::it tool::a_search_that_finds_nothing_shows_each_sources_description_cleaned
 
-[break] a-tools-description-is-shown-raw-in-a-search
-rule: A search writes what acts unseen in a tool's description as an escape, an extension's too.
+[break] an-extensions-description-is-escaped-in-a-search
+rule: A search shows a tool's description as its spec holds it: an extension's as its registration accepted it, a selector, a tab and a line break included (an MCP server's is cleaned when the tool is made).
 file: crates/cineris-tools/src/registry.rs
 in: ToolSearch::run
-find: text.push_str(&visible_to_the_model(line));
-replace: text.push_str(line);
+find: text.push_str(line);
+replace: text.push_str(&cineris_base::visible_to_the_model(line));
 caught-by:
-    cineris-tools::it registry::what_acts_unseen_in_a_tools_text_is_escaped_where_it_is_shown
-
-[break] a-mismatchs-problems-are-quoted-raw
-rule: The problems `tool_call` quotes of arguments that do not fit have what acts unseen written as an escape.
-file: crates/cineris-tools/src/registry.rs
-in: ToolCall::plan
-find: .map(|problem| visible_to_the_model(problem))
-replace: .map(|problem| std::borrow::Cow::Borrowed(problem.as_str()))
-caught-by:
-    cineris-tools::it registry::what_acts_unseen_in_a_tools_text_is_escaped_where_it_is_shown
-
-[break] a-shown-schemas-strings-are-not-escaped
-rule: A shown schema has what acts unseen in every string written as an escape.
-file: crates/cineris-tools/src/registry.rs
-in: changes_when_shown
-find: text.len() > MAX_DESCRIPTION_BYTES || matches!(visible_to_the_model(text), Cow::Owned(_))
-replace: text.len() > MAX_DESCRIPTION_BYTES
-caught-by:
-    cineris-tools::it registry::what_acts_unseen_in_a_tools_text_is_escaped_where_it_is_shown
+    cineris-tools::it registry::an_extensions_tool_is_shown_as_written_and_its_values_can_be_given_back
 
 [break] a-shown-schemas-keys-are-not-cut
 rule: A shown schema's keys are cut at 2 KiB, as its values are.
@@ -537,19 +519,47 @@ caught-by:
 rule: A server tool checks the arguments against the server's own schema, not the one shown, before it sends them.
 file: crates/cineris-mcp/src/tool.rs
 in: McpTool::run
-find: let arguments = match cineris_tools::schema::validate(&self.schema, &arguments) {
-replace: let arguments = match cineris_tools::schema::validate(&self.spec.parameters, &arguments) {
+find: if let Err(mismatch) = cineris_tools::schema::validate(&self.schema, &arguments) {
+replace: if let Err(mismatch) = cineris_tools::schema::validate(&self.spec.parameters, &arguments) {
+caught-by:
+    cineris-mcp::it tool::a_value_shown_with_escapes_is_given_back_as_it_was_shown
+
+[break] a-value-is-read-back-against-the-shown-schema
+rule: A string is read back where the server's own schema lists it, not the one shown.
+file: crates/cineris-mcp/src/tool.rs
+in: McpTool::run
+find: let arguments = read_back(&self.schema, arguments);
+replace: let arguments = read_back(&self.spec.parameters, arguments);
 caught-by:
     cineris-mcp::it tool::a_value_shown_with_escapes_is_given_back_as_it_was_shown
 
 [break] escapes-are-not-read-back
-rule: Arguments that fit the server's schema only with the escapes the model was shown read back are sent so.
+rule: A value the model gave back as it was shown is read back where the server's schema lists it so.
 file: crates/cineris-mcp/src/tool.rs
 in: McpTool::run
-find: let read_back = unescaped(&arguments);
-replace: let read_back = if arguments.is_null() { unescaped(&arguments) } else { arguments.clone() };
+find: let arguments = read_back(&self.schema, arguments);
+replace: let arguments = if arguments.is_null() { read_back(&self.schema, arguments) } else { arguments };
 caught-by:
     cineris-mcp::it tool::a_value_shown_with_escapes_is_given_back_as_it_was_shown
+    cineris-mcp::it tool::a_string_is_read_back_only_where_the_schema_lists_it
+
+[break] every-string-is-read-back
+rule: A string is read back from its escapes only where, read back, it is a value the server's schema lists at its place: one whose backslashes are its own goes as given.
+file: crates/cineris-mcp/src/tool.rs
+in: read_back
+find: if listed.contains(&back.as_ref()) {
+replace: if true {
+caught-by:
+    cineris-mcp::it tool::a_string_is_read_back_only_where_the_schema_lists_it
+    cineris-mcp::it tool::a_value_shown_with_escapes_is_given_back_as_it_was_shown
+
+[break] a-held-tools-refusal-is-counted-as-invalid-arguments
+rule: The loop counts a call refused because its tool is held as a denial.
+file: crates/cineris-agent/src/round.rs
+find: ToolError::NeedsApproval(_) => ToolStatOutcome::Denied
+replace: ToolError::NeedsApproval(_) => ToolStatOutcome::InvalidArguments
+caught-by:
+    cineris-agent::it streaming::a_held_tools_refusal_is_a_denial_and_counted_as_one
 
 [break] a-mismatch-quotes-the-servers-schema
 rule: A server tool's mismatch quotes the schema as the model is shown it, every string cut at 2 KiB.

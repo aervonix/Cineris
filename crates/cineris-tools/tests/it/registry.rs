@@ -553,13 +553,17 @@ fn a_shown_schemas_keys_are_cut_too() {
     assert!(!text.contains(&key));
 }
 
-/// What acts unseen in a tool's text is written as an escape wherever the
-/// registry shows it, whoever wrote it (an extension's author too): its
-/// description in a search, every string of its schema, and what a
-/// mismatch quotes of it.
+/// An extension's tool is shown as its registration accepted it, a
+/// selector after a character, a tab and a line break included, and a
+/// value given back as a search showed it fits: `tool_call` checks an
+/// extension's arguments against its schema as written (the second round
+/// of the review of step 30's second part, M1, a regression of step 28's
+/// behaviour, `docs/architecture/12-extensions.md`).
 #[test]
-fn what_acts_unseen_in_a_tools_text_is_escaped_where_it_is_shown() {
-    let ws = Workspace::new("tool_text_escaped");
+fn an_extensions_tool_is_shown_as_written_and_its_values_can_be_given_back() {
+    let ws = Workspace::new("tool_text_as_written");
+    // U+2714 with its selector, which an extension's registration accepts.
+    let value = "\u{2714}\u{fe0f}";
     let registry = Arc::new(ToolRegistry::new());
     registry
         .set_source(
@@ -567,38 +571,39 @@ fn what_acts_unseen_in_a_tools_text_is_escaped_where_it_is_shown() {
             SourceKind::Extension,
             "",
             vec![Arc::new(Remote::new(
-                "pick",
-                "Picks\u{202e} one.\nThen \u{e0049}obeys.",
-                json!({
-                    "type": "object",
-                    "properties": {"mode": {"enum": ["x\u{200b}"], "description": "a\u{e0041}"}},
-                    "required": ["mode"]
-                }),
+                "mark",
+                "Marks \u{2714}\u{fe0f} a note.\nThen\tsaves it.",
+                json!({"type": "object", "properties": {"mark": {"enum": [value]}}, "required": ["mark"]}),
             ))],
         )
         .unwrap();
     let text = ok(&ws.call(
         &ToolSearch::new(Arc::clone(&registry)),
-        json!({"query": "pick"}),
+        json!({"query": "mark"}),
     ));
     assert!(
-        text.contains("\n  Picks\\u{202e} one.\n  Then \\u{e0049}obeys."),
-        "{text}"
+        text.contains("\n  Marks \u{2714}\u{fe0f} a note.\n  Then\tsaves it."),
+        "{text:?}"
     );
-    // In the schema's JSON a backslash is written twice.
     assert!(
-        text.contains("x\\\\u{200b}") && text.contains("a\\\\u{e0041}"),
-        "{text}"
+        text.contains(&format!("\"enum\":[\"{value}\"]")),
+        "{text:?}"
     );
-    for unseen in ['\u{202e}', '\u{e0049}', '\u{200b}', '\u{e0041}'] {
-        assert!(!text.contains(unseen), "{text:?}");
-    }
+    assert!(!text.contains("\\u{fe0f}"), "{text}");
+    // Given back as it was shown, it fits, and the tool runs.
+    assert_eq!(
+        ok(&ws.call(
+            &ToolCall::new(Arc::clone(&registry)),
+            json!({"tool": "notes/mark", "arguments": {"mark": value}}),
+        )),
+        format!("called with {{\"mark\":\"{value}\"}}")
+    );
+    // A mismatch quotes the schema as written too.
     let error = failed(&ws.call(
         &ToolCall::new(registry),
-        json!({"tool": "notes/pick", "arguments": {"mode": "y"}}),
+        json!({"tool": "notes/mark", "arguments": {"mark": "x"}}),
     ));
-    assert!(error.contains("x\\u{200b}"), "{error}");
-    assert!(!error.contains('\u{200b}'), "{error:?}");
+    assert!(error.contains(value), "{error:?}");
 }
 
 /// A source's description is made one line, with what acts unseen taken

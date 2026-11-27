@@ -867,3 +867,62 @@ fn a_schema_over_its_cap_once_escaped_is_left_out() {
         Some(WhyLeftOut::SchemaTooLarge)
     );
 }
+
+/// A string is read back from its escapes only where, read back, it is a
+/// value the server's schema lists at its place: beside a mark given back
+/// as it was shown, a path and a formula whose backslashes are their own
+/// reach the server as written (the second round of the review, M2).
+#[test]
+fn a_string_is_read_back_only_where_the_schema_lists_it() {
+    let ws = Workspace::new("read_back_where_listed");
+    let server = FakeClient::new(Vec::new());
+    let value = "\u{2714}\u{fe0f}";
+    let note = tool(
+        &server,
+        &definition(
+            "note",
+            "Notes.",
+            json!({"type": "object",
+                   "properties": {
+                       "mark": {"enum": [value]},
+                       "kind": {"const": "\u{2714}\u{fe0f}!"},
+                       "path": {"type": "string"},
+                       "tags": {"type": "array", "items": {"enum": [value, "plain"]}},
+                       "formula": {"type": "string"}
+                   },
+                   "required": ["mark", "path"]}),
+        ),
+    );
+    let pair = ToolCall::new(registered(vec![note]));
+    let cx = ws.cx();
+    let shown = "\u{2714}\\u{fe0f}";
+    let windows = "C:\\new\\temp";
+    let formula = "\\theta + \\nu";
+    let plan = pair
+        .plan(
+            &json!({"tool": "docs/note", "arguments": {
+                "mark": shown,
+                "kind": "\u{2714}\\u{fe0f}!",
+                "path": windows,
+                "tags": [shown, "plain"],
+                "formula": formula
+            }}),
+            &cx.plan_cx(),
+        )
+        .unwrap();
+    let result = block_on(cineris_tools::execute(&pair, plan, &cx, &mut NoOutput));
+    assert_eq!(result.outcome(), &ToolOutcome::Success, "{}", result.text());
+    assert_eq!(
+        server.calls(),
+        [(
+            "note".to_owned(),
+            json!({
+                "mark": value,
+                "kind": "\u{2714}\u{fe0f}!",
+                "path": windows,
+                "tags": [value, "plain"],
+                "formula": formula
+            })
+        )]
+    );
+}

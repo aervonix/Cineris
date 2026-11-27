@@ -626,3 +626,40 @@ fn a_second_call_with_the_id_of_the_first_is_not_a_call() {
     assert_eq!(results, 2);
     assert_valid_history(&last_request(&world.provider).messages);
 }
+
+/// A call refused when it is planned because its tool is held for the
+/// person's approval (`ToolError::NeedsApproval`) is a denial, recorded and
+/// counted as one, and never runs (the second round of the review of step
+/// 30's second part, L3).
+#[test]
+fn a_held_tools_refusal_is_a_denial_and_counted_as_one() {
+    let response = calls(&[("c1", "plain", json!({"id": "p", "held": true}))]);
+    let (world, rig) = Rig::one("held_refused", [response, says("I see.")]);
+    turn(&world, &rig, 1);
+    let results: Vec<_> = rig
+        .store
+        .items()
+        .into_iter()
+        .filter_map(|item| match item {
+            Item::ToolResult(result) => Some(result),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].outcome, ToolOutcome::Denied);
+    assert_eq!(
+        text_of_result(&results[0]),
+        "The tool needs the person's approval before it can be called."
+    );
+    assert!(world.log.lines().is_empty(), "{:?}", world.log.lines());
+    let outcomes: Vec<ToolStatOutcome> = rig
+        .stats
+        .all()
+        .iter()
+        .filter_map(|event| match event {
+            StatEvent::ToolCall(call) => Some(call.outcome),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(outcomes, [ToolStatOutcome::Denied]);
+}

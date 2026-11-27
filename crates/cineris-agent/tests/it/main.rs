@@ -471,6 +471,8 @@ pub enum Kind {
 /// - `link`: `[target, name]`: when it runs, make `name` in the workspace a
 ///   link to the directory `target`, as `ln -s target name` would;
 /// - `bad`: refuse the arguments when the call is planned;
+/// - `held`: refuse the call when it is planned, as a held tool's is
+///   (`ToolError::NeedsApproval`);
 /// - `payload`: the result's payload, as a tool's: `{"kind": "unchanged"}`
 ///   for a write that found its content there, `{"changes": …}` for a
 ///   command whose look found what it changed.
@@ -531,6 +533,11 @@ impl Tool for Probe {
         let text = |name: &str| args.get(name).and_then(Json::as_str).map(str::to_owned);
         if args.get("bad").is_some() {
             return Err(ToolError::invalid("`bad` is not an argument of this tool."));
+        }
+        if args.get("held").is_some() {
+            return Err(ToolError::NeedsApproval(
+                "The tool needs the person's approval before it can be called.".to_owned(),
+            ));
         }
         let path = text("path")
             .map(|path| cx.paths.resolve(&path))
