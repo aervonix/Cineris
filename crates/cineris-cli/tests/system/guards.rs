@@ -272,16 +272,26 @@ fn namespaces_allowed() -> bool {
 /// (finding 7) the walk up the line of parents stopped at process 1 without
 /// reading it, and `ext add` printed its hash, approved with it and pinned,
 /// and `permissions trust` trusted. The script also says what process 1 is,
-/// so that the test shows the harness was it.
+/// so that the test shows the harness was it. It needs an unprivileged
+/// user namespace, which Ubuntu 24.04 (the hosted `ubuntu-latest`) refuses
+/// through AppArmor (`kernel.apparmor_restrict_unprivileged_userns`): there
+/// it says it was not run, and a runner of Ubuntu 22.04 runs it (`try`'s
+/// `os=linux-22.04`); elsewhere on CI it must run. The walk's rule itself is
+/// held on every system by `cineris-sandbox`'s
+/// `session::tests::a_harness_that_is_process_1_is_seen_and_the_line_ends_at_process_0`.
 #[cfg(target_os = "linux")]
 #[test]
 fn sys_a_harness_that_is_process_1_is_seen() {
     if !namespaces_allowed() {
+        let restricted = std::fs::read_to_string(
+            "/proc/sys/kernel/apparmor_restrict_unprivileged_userns",
+        )
+        .is_ok_and(|value| value.trim() == "1");
         assert!(
-            std::env::var_os("CI").is_none(),
-            "CI's runners allow user namespaces"
+            restricted || std::env::var_os("CI").is_none(),
+            "this runner refuses user namespaces, and AppArmor's restriction is not why"
         );
-        eprintln!("not run: this machine refuses unprivileged namespaces");
+        eprintln!("not run: this machine refuses unprivileged user namespaces");
         return;
     }
     let machine = Machine::with_config(
