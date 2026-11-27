@@ -136,7 +136,7 @@ pub(crate) struct Page {
     /// How long the page may be kept, in milliseconds: absent or negative
     /// is 0.
     pub(crate) ttl_ms: u64,
-    /// The size of its tools' definitions, written as JSON.
+    /// What its tools' definitions take in memory, every copy counted.
     pub(crate) bytes: usize,
 }
 
@@ -158,7 +158,6 @@ pub(crate) fn tools_page(mut result: Json) -> Result<Page, ClientError> {
     let mut tools = Vec::with_capacity(entries.len());
     let mut bytes = 0usize;
     for (index, raw) in entries.into_iter().enumerate() {
-        bytes = bytes.saturating_add(written_size(&raw));
         let Some(name) = raw.get("name").and_then(Json::as_str) else {
             return Err(broken(&format!(
                 "has an entry ({}) with no name",
@@ -179,6 +178,9 @@ pub(crate) fn tools_page(mut result: Json) -> Result<Page, ClientError> {
                 .cloned(),
             raw,
         });
+        if let Some(tool) = tools.last() {
+            bytes = bytes.saturating_add(held_tool(tool));
+        }
     }
     Ok(Page {
         tools,
@@ -188,22 +190,46 @@ pub(crate) fn tools_page(mut result: Json) -> Result<Page, ClientError> {
     })
 }
 
-/// How many bytes `value` is written as JSON, counted without writing it.
-fn written_size(value: &Json) -> usize {
-    struct Counter(usize);
-    impl std::io::Write for Counter {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0 = self.0.saturating_add(bytes.len());
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    let mut counter = Counter(0);
-    // Writing to a counter cannot fail.
-    let _written = serde_json::to_writer(&mut counter, value);
-    counter.0
+/// What `value` takes in memory: each value at its own size, and what it
+/// holds on the heap. A JSON value is far larger in memory than written:
+/// `0` is one byte of a line and 32 in memory.
+fn held_size(value: &Json) -> usize {
+    const VALUE: usize = std::mem::size_of::<Json>();
+    // A map's entry: its key's `String`, and the map's own bookkeeping.
+    const ENTRY: usize = std::mem::size_of::<String>() + 16;
+    let held = match value {
+        Json::Null | Json::Bool(_) | Json::Number(_) => 0,
+        Json::String(text) => text.len(),
+        Json::Array(items) => items.iter().map(held_size).fold(0, usize::saturating_add),
+        Json::Object(map) => map
+            .iter()
+            .map(|(key, item)| {
+                ENTRY
+                    .saturating_add(key.len())
+                    .saturating_add(held_size(item))
+            })
+            .fold(0, usize::saturating_add),
+    };
+    VALUE.saturating_add(held)
+}
+
+/// What a tool's definition takes in memory: `raw`, and the copies of its
+/// parts read from it.
+fn held_tool(tool: &ToolDefinition) -> usize {
+    let text = |text: &Option<String>| text.as_ref().map_or(0, String::len);
+    let json = |value: &Option<Json>| value.as_ref().map_or(0, held_size);
+    [
+        std::mem::size_of::<ToolDefinition>(),
+        tool.name.len(),
+        text(&tool.title),
+        text(&tool.description),
+        held_size(&tool.input_schema),
+        json(&tool.output_schema),
+        json(&tool.annotations),
+        held_size(&tool.raw),
+    ]
+    .into_iter()
+    .fold(0, usize::saturating_add)
 }
 
 impl ToolDefinition {
@@ -352,6 +378,22 @@ mod tests {
         assert!(tools_page(json!({"tools": [{"title": "x"}]})).is_err());
         assert!(tools_page(json!({"tools": [], "nextCursor": 3})).is_err());
         assert!(tools_page(json!({})).is_err());
+    }
+
+    #[test]
+    fn a_page_is_charged_what_its_definitions_take_in_memory_every_copy_counted() {
+        let zeros = vec![0; 10_000];
+        let page = tools_page(json!({"tools": [
+            {"name": "a", "inputSchema": {"type": "object", "x": zeros}},
+        ]}))
+        .unwrap();
+        let value = std::mem::size_of::<Json>();
+        // Two bytes of a line each, and at least a value's size in memory,
+        // in `raw` and again in `input_schema`.
+        assert!(page.bytes >= 2 * 10_000 * value, "{}", page.bytes);
+        assert!(page.bytes < 3 * 10_000 * value, "{}", page.bytes);
+        assert_eq!(held_size(&json!(0)), value);
+        assert_eq!(held_size(&json!("abc")), value + 3);
     }
 
     #[test]

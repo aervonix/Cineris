@@ -460,7 +460,7 @@ fn a_listings_lifetime_is_its_shortest_pages() {
 }
 
 #[test]
-fn a_listing_larger_than_sixteen_mib_is_refused() {
+fn a_listing_larger_than_the_cap_is_refused() {
     run(async {
         let timer = timer();
         let description = "x".repeat(1024 * 1024);
@@ -479,12 +479,92 @@ fn a_listing_larger_than_sixteen_mib_is_refused() {
         let Err(ClientError::Protocol(why)) = result else {
             panic!("{result:?}");
         };
-        assert!(why.contains("16 MiB"), "{why}");
+        assert!(why.contains("32 MiB"), "{why}");
         assert_eq!(
             server.of("tools/list").len(),
             16,
             "every page read until then"
         );
+    });
+}
+
+/// A call whose first round was written and answered (`input_required`
+/// with a state), and whose server exits before the next round is written,
+/// may have run. Written by the second review of the client.
+#[test]
+fn a_call_whose_first_round_ran_says_it_may_have_run_when_the_next_is_never_written() {
+    run(async {
+        let timer = timer();
+        let server = FakeServer::modern().reply(
+            "step",
+            Reply::ExitThenAnswer(Box::new(Reply::AlwaysInput(
+                json!({"resultType": "input_required", "requestState": "s1"}),
+            ))),
+        );
+        let client = connect(&server, &timer).await;
+        let result = client.call("step", json!({}), &CancelToken::new()).await;
+        assert_eq!(server.of("tools/call").len(), 1, "round 1 was written");
+        assert!(
+            matches!(result, Err(ClientError::MayHaveRun(_))),
+            "a call whose first round ran: {result:?}"
+        );
+    });
+}
+
+/// A tool whose input schema holds `count` zeros: two bytes each of a line,
+/// and a JSON value each in memory.
+fn zeros_tool(count: usize) -> Json {
+    json!({"name": "zeros", "inputSchema": {"type": "object", "x": vec![0; count]}})
+}
+
+/// How many JSON values `value` is, and the bytes of its strings and keys:
+/// what holding it takes, counted apart from the client's own measure.
+fn values_and_text(value: &Json) -> (usize, usize) {
+    match value {
+        Json::Array(items) => items
+            .iter()
+            .map(values_and_text)
+            .fold((1, 0), |sum, item| (sum.0 + item.0, sum.1 + item.1)),
+        Json::Object(map) => map.iter().fold((1, 0), |sum, (key, item)| {
+            let item = values_and_text(item);
+            (sum.0 + item.0, sum.1 + key.len() + item.1)
+        }),
+        Json::String(text) => (1, text.len()),
+        _ => (1, 0),
+    }
+}
+
+#[test]
+fn a_listing_is_capped_by_what_it_holds_in_memory_and_one_near_the_cap_stays_under_its_bound() {
+    run(async {
+        let timer = timer();
+        let value = std::mem::size_of::<Json>();
+        // 600,000 zeros: 1.2 MB of a line, under the first round's cap of
+        // 16 MiB written, and 19 MB in memory for each of the two copies a
+        // definition keeps (`raw` and `input_schema`): over 32 MiB.
+        let over = FakeServer::modern().tools(vec![zeros_tool(600_000)]);
+        let client = connect(&over, &timer).await;
+        let result = client.list_tools(&CancelToken::new()).await;
+        let Err(ClientError::Protocol(why)) = result else {
+            panic!("{result:?}");
+        };
+        assert!(why.contains("32 MiB"), "{why}");
+
+        // 450,000 zeros: 14.4 MB a copy, under the cap.
+        let near = FakeServer::modern().tools(vec![zeros_tool(450_000)]);
+        let client = connect(&near, &timer).await;
+        let tools = client.list_tools(&CancelToken::new()).await.unwrap();
+        let held = tools
+            .iter()
+            .flat_map(|tool| [&tool.raw, &tool.input_schema])
+            .map(values_and_text)
+            .map(|(values, text)| values * value + text)
+            .sum::<usize>();
+        // The bound: what the listing the client returns holds, its two
+        // copies of each schema included, is under 32 MiB; the first
+        // round's cap let a listing of zeros hold about 1 GiB.
+        assert!(held > 28_000_000, "{held}");
+        assert!(held < cineris_mcp::MAX_LISTING_BYTES, "{held}");
     });
 }
 

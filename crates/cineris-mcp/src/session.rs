@@ -65,8 +65,10 @@ pub const MAX_PAGES: usize = 20;
 pub const MAX_ROUNDS: usize = 3;
 
 /// At most this many bytes of tool definitions in a listing, every page
-/// counted: 512 tools of 32 KiB.
-pub const MAX_LISTING_BYTES: usize = 16 * 1024 * 1024;
+/// counted, as the client holds them in memory: each JSON value at its
+/// size in memory, every copy a definition keeps (`raw` and the fields read
+/// from it). A listing the client returns holds at most this much.
+pub const MAX_LISTING_BYTES: usize = 32 * 1024 * 1024;
 
 /// How long the client waits before it opens a change stream again after
 /// the server ended it.
@@ -380,7 +382,27 @@ struct Listed {
     number: u64,
     /// The count of changes when it began.
     generation: u64,
-    tools: Vec<ToolDefinition>,
+    /// Its tools, kept only while someone who asked during it has not
+    /// taken them: no copy is kept once all have.
+    tools: Option<Vec<ToolDefinition>>,
+    /// How many of those who asked during it have yet to take them.
+    owed: usize,
+}
+
+/// One who asks for a listing, counted while it waits or lists.
+struct Asking<'a>(&'a AtomicU64);
+
+impl<'a> Asking<'a> {
+    fn new(count: &'a AtomicU64) -> Self {
+        count.fetch_add(1, Ordering::AcqRel);
+        Self(count)
+    }
+}
+
+impl Drop for Asking<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
 /// The protocol, both eras, over one connection whose handshake is done.
@@ -395,6 +417,8 @@ pub(crate) struct Session {
     listing: tokio::sync::Mutex<Option<Listed>>,
     /// How many listings have finished.
     listings: AtomicU64,
+    /// How many ask for a listing now, waiting for it or running it.
+    asking: AtomicU64,
     /// The wait for the end of the last listing's lifetime.
     lifetime: Mutex<Option<AbortHandle>>,
     /// Cancelled when the client shuts down: ends the change stream.
@@ -432,6 +456,7 @@ impl Session {
             options,
             listing: tokio::sync::Mutex::new(None),
             listings: AtomicU64::new(0),
+            asking: AtomicU64::new(0),
             lifetime: Mutex::new(None),
             stop: CancelToken::new(),
         })
@@ -459,20 +484,33 @@ impl Session {
     ) -> Result<Vec<ToolDefinition>, ClientError> {
         let mut limit = Limit::new(&self.timer, "list its tools", self.options.list_timeout);
         let arrived = self.listings.load(Ordering::Acquire);
+        let _asking = Asking::new(&self.asking);
         let mut listed = bounded(self.listing.lock(), Some(&mut limit), Some(cancel)).await?;
         let generation = *self.router.changes.borrow();
-        if let Some(last) = listed.as_ref()
+        if let Some(last) = listed.as_mut()
             && last.number > arrived
             && last.generation == generation
+            && last.tools.is_some()
         {
-            return Ok(last.tools.clone());
+            // The last of those who asked during it takes the kept copy.
+            last.owed = last.owed.saturating_sub(1);
+            let tools = if last.owed == 0 {
+                last.tools.take()
+            } else {
+                last.tools.clone()
+            };
+            return Ok(tools.unwrap_or_default());
         }
         let (tools, lifetime) = self.list_pages(&mut limit, cancel).await?;
         let number = self.listings.fetch_add(1, Ordering::AcqRel) + 1;
+        // Those asking now, besides this one, began waiting during it.
+        let owed = usize::try_from(self.asking.load(Ordering::Acquire).saturating_sub(1))
+            .unwrap_or(usize::MAX);
         *listed = Some(Listed {
             number,
             generation,
-            tools: tools.clone(),
+            tools: (owed > 0).then(|| tools.clone()),
+            owed,
         });
         drop(listed);
         self.keep_for(lifetime);
@@ -520,7 +558,7 @@ impl Session {
             bytes = bytes.saturating_add(page.bytes);
             if bytes > MAX_LISTING_BYTES {
                 return Err(ClientError::Protocol(format!(
-                    "its list of tools is larger than {} MiB",
+                    "its list of tools takes more than {} MiB in memory",
                     MAX_LISTING_BYTES / 1024 / 1024
                 )));
             }
@@ -568,9 +606,10 @@ impl Session {
     ) -> Result<CallOutput, ClientError> {
         let mut limit = Limit::new(&self.timer, "answer the call", limit);
         let mut state: Option<String> = None;
+        let mut answered = false;
         for _ in 0..=MAX_ROUNDS {
             let params = wire::call_params(tool, arguments, state.as_deref());
-            let result = self
+            let asked = self
                 .rpc
                 .ask(
                     "tools/call",
@@ -579,8 +618,16 @@ impl Session {
                     Some(cancel),
                     true,
                 )
-                .await?
-                .map_err(wire::server_error)?;
+                .await;
+            let result = match asked {
+                // A round that ran before this one was lost: the call may
+                // have run.
+                Err(ClientError::Stopped(words)) if answered => {
+                    return Err(ClientError::MayHaveRun(words));
+                }
+                other => other?.map_err(wire::server_error)?,
+            };
+            answered = true;
             if self.era == Era::Legacy || wire::result_type(&result)? == ResultType::Complete {
                 return Ok(wire::call_output(result, self.era));
             }

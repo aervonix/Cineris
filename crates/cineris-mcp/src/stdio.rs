@@ -111,16 +111,24 @@ impl StdioTransport {
     ) -> Result<(), ClientError> {
         let misbehaving = |words: String| ClientError::Protocol(words);
         match jsonrpc::decode(line) {
-            Decoded::One(message) => self.route(message, line.len(), budget, inbound),
+            Decoded::One(message) => self.route(message, line.len(), budget, inbound).map(drop),
             Decoded::Batch(messages) if self.batches.load(Ordering::Acquire) => {
-                // The line is counted once, with its bytes, whatever it
-                // holds (an empty batch included); then each message in it
-                // that answers nothing.
-                budget.spend(line.len()).map_err(misbehaving)?;
+                // An empty batch answers nothing: one message, counted with
+                // its bytes.
+                if messages.is_empty() {
+                    return budget.spend(line.len()).map_err(misbehaving);
+                }
+                // Each message that answers nothing is counted, the line's
+                // bytes with the first of them; answers to pending requests
+                // cost nothing, batched or not.
+                let mut bytes = line.len();
                 for message in messages {
-                    match message {
-                        Some(message) => self.route(message, 0, budget, inbound)?,
-                        None => budget.spend(0).map_err(misbehaving)?,
+                    let counted = match message {
+                        Some(message) => self.route(message, bytes, budget, inbound)?,
+                        None => budget.spend(bytes).map(|()| true).map_err(misbehaving)?,
+                    };
+                    if counted {
+                        bytes = 0;
                     }
                 }
                 Ok(())
@@ -132,17 +140,17 @@ impl StdioTransport {
     }
 
     /// Gives an answer to its request, or counts the message and hands it
-    /// to the session.
+    /// to the session. Whether it was counted.
     fn route(
         &self,
         message: Message,
         bytes: usize,
         budget: &mut Budget,
         inbound: &SharedInbound,
-    ) -> Result<(), ClientError> {
+    ) -> Result<bool, ClientError> {
         let message = match message {
             Message::Response { id, answer } => match id.ours() {
-                Some(ours) if self.pending.answer(ours, answer.clone()) => return Ok(()),
+                Some(ours) if self.pending.answer(ours, answer.clone()) => return Ok(false),
                 _ => Message::Response { id, answer },
             },
             other => other,
@@ -151,7 +159,7 @@ impl StdioTransport {
         if let Some(reply) = inbound.handle(message) {
             self.send(reply);
         }
-        Ok(())
+        Ok(true)
     }
 }
 
