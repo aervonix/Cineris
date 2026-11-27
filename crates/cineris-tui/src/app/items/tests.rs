@@ -383,6 +383,87 @@ fn each_reasoning_knows_its_run_of_its_item_and_holds_its_words_once() {
     assert_eq!(tried[0].origin, None);
 }
 
+/// The mapper's blocks and `reasoning_runs` are decided by one rule, so
+/// that a block's run is the one the viewer reads again: a reasoning part
+/// with no words (a signature, an encrypted payload) and an answer's text
+/// with none neither begin nor end a run, as an item read in progress
+/// replays them (the independent review of the fixes of step 25: the
+/// mapper opened a block for an empty reasoning and ended one on empty
+/// text, so the viewer showed the next run as the block's, and the last
+/// could not be read).
+#[test]
+fn a_part_with_no_words_neither_begins_nor_ends_a_reasoning_run() {
+    let mut rig = Rig::new();
+    rig.transcript.keep_finished();
+    let words = |text: &str| {
+        Part::Reasoning(cineris_protocol::message::ReasoningPart {
+            text: text.to_owned(),
+            raw: None,
+        })
+    };
+    let call = |id: &str| {
+        Part::ToolCall(ToolCallPart {
+            id: CallId::from(id),
+            name: "read".to_owned(),
+            arguments: json!({"path": "src/lex.rs"}),
+            raw: None,
+        })
+    };
+    let parts = vec![
+        words(""),
+        Part::text(""),
+        words("First"),
+        Part::text(""),
+        words(", and more."),
+        call("c_1"),
+        words(""),
+        words("Second."),
+        call("c_2"),
+        words("Third."),
+    ];
+    let item = assistant("i_1", parts.clone(), StopReason::ToolCalls);
+    rig.mapper.in_progress(
+        &mut rig.transcript,
+        &item,
+        &SessionId::from("s_test"),
+        rig.now,
+    );
+    rig.completed(item);
+    rig.result("i_2", "c_1", "read", ToolOutcome::Success);
+    rig.result("i_3", "c_2", "read", ToolOutcome::Success);
+    let _ = rig.frame();
+    let runs = super::reasoning_runs(&parts);
+    assert_eq!(runs, ["First, and more.", "Second.", "Third."]);
+    let kept: Vec<Reasoning> = rig
+        .transcript
+        .take_finished()
+        .into_iter()
+        .filter_map(|finished| match finished.block {
+            Block::Reasoning(reasoning) => Some(reasoning),
+            _ => None,
+        })
+        .collect();
+    let drawn: Vec<(usize, Option<String>)> = kept
+        .iter()
+        .map(|reasoning| {
+            (
+                reasoning
+                    .origin
+                    .as_ref()
+                    .map_or(usize::MAX, |origin| origin.run),
+                reasoning.summary.clone(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        drawn,
+        runs.iter()
+            .enumerate()
+            .map(|(n, run)| (n, Some(run.clone())))
+            .collect::<Vec<_>>()
+    );
+}
+
 #[test]
 fn a_response_thrown_away_ends_where_it_was_and_its_calls_never_ran() {
     let mut rig = Rig::new();
