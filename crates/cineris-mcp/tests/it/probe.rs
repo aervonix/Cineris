@@ -226,6 +226,56 @@ fn a_modern_server_that_speaks_no_revision_of_the_clients_is_never_sent_initiali
 }
 
 #[test]
+fn a_server_whose_unsupported_version_names_only_legacy_revisions_is_initialized() {
+    run(async {
+        let timer = timer();
+        let legacy_only = ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"];
+        let server = FakeServer::legacy("2025-11-25").on_discover(Discover::Unsupported {
+            supported: legacy_only
+                .iter()
+                .map(|version| (*version).to_owned())
+                .collect(),
+            times: 99,
+        });
+        let client = connect(&server, &timer).await;
+        assert_eq!(client.info().era, Era::Legacy);
+        assert_eq!(client.info().version, "2025-11-25");
+        server.wait_for("notifications/initialized", 1).await;
+        assert_eq!(
+            server.methods(),
+            ["server/discover", "initialize", "notifications/initialized"]
+        );
+        assert_eq!(server.spawns(), 1, "on the same process");
+    });
+}
+
+#[test]
+fn a_server_known_to_be_legacy_that_refuses_initialize_and_exits_is_probed_on_a_new_process() {
+    run(async {
+        let timer = timer();
+        let server = FakeServer::modern().refuses_initialize_and_exits();
+        let client = StdioClient::connect_known(
+            Era::Legacy,
+            &definition(),
+            server.spawn(),
+            server.respawn(),
+            shared(&timer),
+            ClientOptions::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(client.info().era, Era::Modern);
+        assert_eq!(server.spawns(), 2);
+        let methods: Vec<Json> = server
+            .received_by(2)
+            .iter()
+            .map(|message| message["method"].clone())
+            .collect();
+        assert_eq!(methods, ["server/discover"], "asked, not initialized");
+    });
+}
+
+#[test]
 fn the_other_modern_errors_end_the_start_without_initialize() {
     for code in [-32020, -32021] {
         run(async {

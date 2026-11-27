@@ -152,6 +152,24 @@ replace: return Probe::Refused(String::new());
 caught-by:
     cineris-mcp::it probe::a_server_that_answers_the_probe_with_a_result_of_another_kind_is_legacy
 
+[break] a-legacy-only-unsupported-version-is-refused
+rule: A `-32022` whose list names only legacy revisions, one of them the client's, is a legacy server, initialized on the same process.
+file: crates/cineris-mcp/src/connect.rs
+in: Start::probe
+find: Probe::Unsupported(supported) if only_legacy(&supported) =>
+replace: Probe::Unsupported(supported) if false && only_legacy(&supported) =>
+caught-by:
+    cineris-mcp::it probe::a_server_whose_unsupported_version_names_only_legacy_revisions_is_initialized
+
+[break] a-known-legacy-server-that-exits-on-refusing-initialize-is-initialized-again
+rule: A server known to be legacy that refuses `initialize` and exits on the probe is started again and asked what it speaks, not sent `initialize`.
+file: crates/cineris-mcp/src/connect.rs
+in: Start::probe
+find: Probe::Exited(_) if refused =>
+replace: Probe::Exited(_) if false =>
+caught-by:
+    cineris-mcp::it probe::a_server_known_to_be_legacy_that_refuses_initialize_and_exits_is_probed_on_a_new_process
+
 [break] a-modern-error-falls-back-to-initialize
 rule: `-32021` (and `-32020`, `-32022`) to the probe is a modern server, never sent `initialize`.
 file: crates/cineris-mcp/src/session.rs

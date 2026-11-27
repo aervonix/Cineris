@@ -152,6 +152,9 @@ struct Script {
     initialize_gate: Option<Gate>,
     /// Whether its first process exits on `initialize`.
     exits_on_first_initialize: bool,
+    /// Whether a modern server refuses `initialize` with `-32022` and then
+    /// exits.
+    refuses_initialize_and_exits: bool,
     /// What the acknowledgement of a change stream waits for.
     ack_gate: Option<Gate>,
     /// What each page of `tools/list` waits for before it is answered.
@@ -254,6 +257,7 @@ impl FakeServer {
             stderr: String::new(),
             initialize_gate: None,
             exits_on_first_initialize: false,
+            refuses_initialize_and_exits: false,
             ack_gate: None,
             list_gate: None,
         };
@@ -386,6 +390,14 @@ impl FakeServer {
     #[must_use]
     pub fn exits_on_first_initialize(self) -> Self {
         self.script(|script| script.exits_on_first_initialize = true);
+        self
+    }
+
+    /// A modern server that refuses `initialize` with `-32022` naming its
+    /// revisions, and then exits, as `rmcp`'s modern servers do.
+    #[must_use]
+    pub fn refuses_initialize_and_exits(self) -> Self {
+        self.script(|script| script.refuses_initialize_and_exits = true);
         self
     }
 
@@ -794,6 +806,12 @@ async fn respond(
                 .await;
         }
     } else {
+        if method == "initialize" && script.refuses_initialize_and_exits {
+            process
+                .send(unsupported(&id, &script.supported, "2025-11-25"))
+                .await;
+            return process.exit("it exited after it refused initialize");
+        }
         let version = message
             .pointer("/params/_meta/io.modelcontextprotocol~1protocolVersion")
             .and_then(Json::as_str);
