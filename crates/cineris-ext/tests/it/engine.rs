@@ -716,6 +716,40 @@ fn the_host_calls_waiting_for_answers_are_bounded() {
     }
 }
 
+/// The arguments the waiting host calls hold together are bounded too,
+/// outside the runtime's memory limit, which does not count them: two
+/// programs' calls of 6.25 MiB each, neither awaited, are more than the 12 MiB
+/// a runtime's waiting calls may hold, and the second is refused before it
+/// is sent (the review of step 28's close, finding 19: no test held the
+/// bound).
+#[test]
+fn the_bytes_the_waiting_host_calls_hold_are_bounded() {
+    let timer = timer();
+    let snapshot = tool(
+        "exec = [\"gh\"]",
+        "async () => { \
+           const big = 'x'.repeat(6.25 * 1024 * 1024); \
+           const told = (call) => call.then(() => 'answered', (e) => e.message); \
+           const first = told(cineris.exec('gh', [big])); \
+           const second = told(cineris.exec('gh', [big])); \
+           return { second: await second, first: await first }; \
+         }",
+    );
+    let runtime = start(&snapshot, &timer).unwrap();
+    let host = FakeHost::new();
+    let result = call(&runtime, &snapshot, &host, &timer, json!({})).unwrap();
+    let second = result["second"].as_str().unwrap();
+    assert!(
+        second.contains("await them") && second.contains("12 MiB"),
+        "{result}"
+    );
+    // The first was sent, and answered by the host's own refusal of an
+    // argument that long.
+    let first = result["first"].as_str().unwrap();
+    assert!(!first.contains("await them"), "{result}");
+    assert!(runtime.is_alive());
+}
+
 /// A host call that finds its turn stopped ends the script's call there:
 /// nothing more of the script runs.
 #[test]

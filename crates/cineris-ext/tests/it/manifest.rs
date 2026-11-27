@@ -163,6 +163,43 @@ fn globs_are_relative_to_the_workspace() {
     }
 }
 
+/// Every alternative a glob's braces give is relative to the workspace,
+/// nested braces included: a look at the text's start let
+/// `{/etc/**,src/**}` through (the review of step 28's close, finding 13).
+#[test]
+fn no_alternative_of_a_globs_braces_leaves_the_workspace() {
+    for bad in [
+        "{/etc/**,src/**}",
+        "{src/**,/etc/**}",
+        "{a,{b,/etc}}/**",
+        "{src/**,{x,/etc/**}}",
+        "{.,/}etc/**",
+        "{..}/**",
+        "{a,..}/x",
+        "{~,x}/notes/**",
+        "{~/notes/**,src}",
+        "{C:/x/**,src/**}",
+        "{src,c:x}",
+        "{//server/share/**,src}",
+        "{,src/**}",
+    ] {
+        let text = refused(&manifest(&format!("read = [{bad:?}]")));
+        assert!(text.contains("capabilities.read"), "{bad}: {text}");
+        let text = refused(&manifest(&format!("write = [{bad:?}]")));
+        assert!(text.contains("capabilities.write"), "{bad}: {text}");
+    }
+    for good in [
+        "{src,lib}/**",
+        "src/{a,b/{c,d}}/*.rs",
+        "{docs/**,*.md}",
+        "src/[{]x",
+    ] {
+        let parsed = Manifest::parse(&manifest(&format!("read = [{good:?}]")))
+            .unwrap_or_else(|error| panic!("{good}: {error}"));
+        assert_eq!(parsed.capabilities.read, [good]);
+    }
+}
+
 #[test]
 fn hosts_are_names_addresses_or_wildcards_and_nothing_more() {
     for bad in [

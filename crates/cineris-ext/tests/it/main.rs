@@ -16,6 +16,7 @@ mod capability;
 mod engine;
 mod examples;
 mod folder;
+mod left_running;
 mod manifest;
 mod serve;
 

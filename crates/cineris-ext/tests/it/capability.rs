@@ -265,3 +265,63 @@ fn programs_networks_and_hooks_are_refused_unless_listed() {
         "{refusal}"
     );
 }
+
+/// A path outside the workspace is outside every glob, one whose braces
+/// hold that very path among them included: the manifest refuses such a
+/// glob when it is read, and the capabilities, given one past that check,
+/// still refuse a read there (the review of step 28's close, finding 13:
+/// the check of the path against the workspace was all that held, and no
+/// test broke without it).
+#[test]
+fn a_glob_whose_braces_name_a_path_outside_reads_nothing_there() {
+    let setup = setup("a_glob_whose_braces_name_a_path_outside_reads_nothing_there");
+    let root = setup.host.resolver.as_ref().unwrap().root().clone();
+    // The folder beside the workspace, in the spelling the resolver gives,
+    // with `/` between its names on every system.
+    let outside = root.parent().unwrap().join("outside").unwrap();
+    let glob = format!("{{{}/**,src/**}}", outside.to_string().replace('\\', "/"));
+    let refused = Manifest::parse(&manifest(&format!("read = [{glob:?}]"))).unwrap_err();
+    assert!(
+        refused.to_string().contains("capabilities.read"),
+        "{refused}"
+    );
+    let declared = cineris_ext::manifest::Declared {
+        read: vec![glob],
+        ..cineris_ext::manifest::Declared::default()
+    };
+    let capabilities = Capabilities::compile(&declared, &root).unwrap();
+    let read = |path: &str| {
+        block_on(serve(
+            HostCall::Read {
+                path: path.to_owned(),
+                offset: 0,
+                limit: None,
+            },
+            &capabilities,
+            &setup.host,
+            Phase::Tool,
+            Duration::from_secs(1),
+        ))
+        .map(|_| ())
+    };
+    assert!(refused_by(
+        read(&setup.absolute("outside/secret.rs")),
+        "read"
+    ));
+    assert!(refused_by(read("../outside/secret.rs"), "read"));
+    assert!(
+        !capabilities.reads(&outside.join("secret.rs").unwrap()),
+        "a walk would read outside the workspace"
+    );
+    // Its other alternative still reads inside.
+    read("src/a.rs").unwrap();
+    assert!(
+        setup
+            .host
+            .asked()
+            .iter()
+            .all(|asked| !asked.contains("secret")),
+        "{:?}",
+        setup.host.asked()
+    );
+}
