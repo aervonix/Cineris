@@ -29,7 +29,7 @@ use crate::workspace;
 const USAGE: &str = "\
 usage: cargo xtask ab --job --base DIR [--label NAME] [--count N] [--minutes M]
                       [--setup-base FILE] [--setup-head FILE] [--keep-build]
-                      [-p CRATE]... [-- NEXTEST ARGUMENT...]
+                      [--from-archive base|head] [-p CRATE]... [-- NEXTEST ARGUMENT...]
 
 The whole blocking test job of this tree (the head) and of the tree at DIR (the
 base), N rounds (2 when not given; an even number, at most 20, so that each
@@ -47,8 +47,13 @@ side's round:
           set for that side's build and tests. $CINERIS_AB_SIDE is base or
           head, $CINERIS_AB_ROUND the round
   build   the tests, as the blocking job builds them
+  extract with --from-archive, on that side alone: the build is a nextest
+          archive of the tests (`ci test --archive`'s), the build directory
+          is set aside, and the archive is extracted over the side's tree
+          as a Windows test job extracts it (`ci test PART --from-archive`)
   tests   the job's runs of them, as its own job makes them (tiers 1 and 2,
-          then tier 3), each timed
+          then tier 3), each timed; from the archive on its side, as the
+          Windows test jobs run them
   tier N  each tier's tests' time summed above their processes' start, from
           the report
 
@@ -60,7 +65,11 @@ as failed). Either way the round is recorded, the run goes on, and the command
 fails at the end. Each side's median is of the rounds the phase passed in on
 that side; the change is the median of head minus base over the rounds the
 phase passed in on both sides, with how many such rounds there were and in how
-many the base ran first. --minutes M starts no round that the longest
+many the base ran first. --from-archive SIDE compares the two layouts of the
+Windows test job (built and run in one job, or built into an archive and run
+from it): give both sides one tree's commit, and no -p or nextest arguments,
+since the archive holds the workspace's tests and its runs are the jobs'
+own. --minutes M starts no round that the longest
 round so far would carry past M minutes from the start; what it stopped
 before is said. Everything measured is kept in target/ab/job-ab.json after
 each side, and each side's report as target/ab/<side>-job-<round>.xml.";
@@ -87,6 +96,9 @@ pub(crate) struct Request {
     pub(crate) setup: [Option<PathBuf>; 2],
     /// Leave the build directories as they are between rounds.
     pub(crate) keep_build: bool,
+    /// The side whose tests are archived, extracted and run from the
+    /// archive, as the Windows test jobs run them.
+    pub(crate) from_archive: Option<Which>,
     pub(crate) packages: Vec<String>,
     /// For nextest, after `--`.
     pub(crate) rest: Vec<String>,
@@ -102,6 +114,7 @@ impl Request {
             minutes: None,
             setup: [None, None],
             keep_build: false,
+            from_archive: None,
             packages: Vec::new(),
             rest: Vec::new(),
         };
@@ -153,12 +166,36 @@ impl Request {
                     }
                 }
                 "--keep-build" => request.keep_build = true,
+                "--from-archive" => {
+                    let side = match value("a side, base or head")?.as_str() {
+                        "base" => Which::Base,
+                        "head" => Which::Head,
+                        other => {
+                            return Err(format!(
+                                "`--from-archive {other}`: the side to run from an archive, \
+                                 base or head"
+                            ));
+                        }
+                    };
+                    if request.from_archive.replace(side).is_some() {
+                        return Err("`--from-archive` is given twice".to_owned());
+                    }
+                }
                 "-p" | "--package" => request.packages.push(value("a crate")?.clone()),
                 "--help" | "-h" => return Err(USAGE.to_owned()),
                 other => return Err(format!("unknown argument `{other}`\n\n{USAGE}")),
             }
         }
         request.base = base.ok_or_else(|| format!("say which tree is the base\n\n{USAGE}"))?;
+        if request.from_archive.is_some()
+            && (!request.packages.is_empty() || !request.rest.is_empty())
+        {
+            return Err(
+                "`--from-archive` takes no -p and no nextest arguments: the archive holds the \
+                 workspace's tests, and its runs are the Windows test jobs' own"
+                    .to_owned(),
+            );
+        }
         if request.keep_build && request.rounds < 2 * COLD_ROUNDS {
             return Err(format!(
                 "`--keep-build` needs `--count 4` or more: the first {COLD_ROUNDS} rounds build \
@@ -239,9 +276,10 @@ fn rank(name: &str) -> usize {
         "clean" => 0,
         "setup" => 1,
         "build" => 2,
-        JOB => 5,
-        tests if tests.starts_with("tests") => 3,
-        _ => 4,
+        "extract" => 3,
+        JOB => 6,
+        tests if tests.starts_with("tests") => 4,
+        _ => 5,
     }
 }
 
@@ -772,12 +810,66 @@ fn timed(mut command: Command, what: &str) -> (f64, Result<()>) {
 /// tests' scratch folder. `xtask`'s own build (`target/debug`) is left, as
 /// it is running, and so are the kept reports (`target/ab`).
 fn clean(tree: &Path) -> Result<()> {
-    for folder in ["ci", "tmp"] {
+    for folder in ["ci", BUILT_ASIDE, "tmp"] {
         let path = tree.join("target").join(folder);
         if path.exists() {
             std::fs::remove_dir_all(&path)
                 .map_err(|error| format!("could not remove {}: {error}", path.display()))?;
         }
+    }
+    Ok(())
+}
+
+/// Where an archive side's build of the tests is set aside while its
+/// archive is extracted in its place, under `target/`: put back before the
+/// side's next build, so that `--keep-build` keeps it.
+const BUILT_ASIDE: &str = "ci-built";
+
+/// The archive an archive side's build writes, under its tree.
+fn archive_file(tree: &Path) -> PathBuf {
+    tree.join("target")
+        .join("job-ab-archive")
+        .join("tests.tar.zst")
+}
+
+/// The Windows test jobs' runs from an archive extracted at `tree`: tiers 1
+/// and 2, then the system tests, each with the filter its job gives it.
+pub(crate) fn archive_runs(tree: &Path) -> Vec<Vec<String>> {
+    use crate::checks::{SYSTEM_TESTS, from_archive_run};
+    vec![
+        from_archive_run(tree, &format!("not {SYSTEM_TESTS}")),
+        from_archive_run(tree, SYSTEM_TESTS),
+    ]
+}
+
+/// The side's build put back where the extracted archive was, if it was
+/// set aside.
+fn put_back(tree: &Path) -> Result<()> {
+    let target = tree.join("target");
+    let (built, aside) = (target.join("ci"), target.join(BUILT_ASIDE));
+    if !aside.exists() {
+        return Ok(());
+    }
+    if built.exists() {
+        std::fs::remove_dir_all(&built)
+            .map_err(|error| format!("could not remove {}: {error}", built.display()))?;
+    }
+    std::fs::rename(&aside, &built)
+        .map_err(|error| format!("could not move {} back: {error}", aside.display()))
+}
+
+/// The side's build set aside, so that the archive's extraction has the
+/// place to itself, as on a fresh runner.
+fn set_build_aside(tree: &Path) -> Result<()> {
+    let target = tree.join("target");
+    let (built, aside) = (target.join("ci"), target.join(BUILT_ASIDE));
+    if aside.exists() {
+        std::fs::remove_dir_all(&aside)
+            .map_err(|error| format!("could not remove {}: {error}", aside.display()))?;
+    }
+    if built.exists() {
+        std::fs::rename(&built, &aside)
+            .map_err(|error| format!("could not move {} aside: {error}", built.display()))?;
     }
     Ok(())
 }
@@ -792,6 +884,11 @@ pub(crate) trait SidePhases {
     fn setup(&mut self) -> Option<Result<()>>;
     /// Builds the tests.
     fn build(&mut self) -> Result<()>;
+    /// Extracts the side's archive of the tests over its tree: `None` for a
+    /// side that runs them where they were built.
+    fn extract(&mut self) -> Option<Result<()>> {
+        None
+    }
     /// How many runs the job makes of them.
     fn runs(&self) -> usize;
     /// Makes run `index`, its report kept for the next.
@@ -813,6 +910,9 @@ pub(crate) struct SidePlan {
     pub(crate) temperature: Option<&'static str>,
     /// The side's own setup script, a path in the head's tree.
     pub(crate) setup: Option<PathBuf>,
+    /// Whether the side builds an archive of the tests, extracts it over
+    /// its tree and runs them from it (`--from-archive`).
+    pub(crate) from_archive: bool,
 }
 
 /// The plan of `which`'s round `round` (from 1). The build is removed in
@@ -828,6 +928,7 @@ pub(crate) fn side_plan(request: &Request, which: Which, round: usize) -> SidePl
             .keep_build
             .then_some(if clean { "cold" } else { "warm" }),
         setup: request.setup[which as usize].clone(),
+        from_archive: request.from_archive == Some(which),
     }
 }
 
@@ -908,6 +1009,14 @@ pub(crate) fn drive_side(
         let took = clock() - job_started;
         return job_failed(side, &named(JOB), took);
     }
+    let started = clock();
+    if let Some(outcome) = phases.extract() {
+        let took = clock() - started;
+        if !phase(&mut side, &named("extract"), took, outcome) {
+            let took = clock() - job_started;
+            return job_failed(side, &named(JOB), took);
+        }
+    }
     let runs = phases.runs();
     let mut runs_passed = true;
     for index in 0..runs {
@@ -953,6 +1062,8 @@ struct RealSide<'a> {
     environment: Vec<(String, String)>,
     /// The job's runs, as its own `.config/nextest.toml` makes them.
     runs: Vec<Vec<String>>,
+    /// Whether the side runs its tests from an archive (`--from-archive`).
+    from_archive: bool,
 }
 
 impl RealSide<'_> {
@@ -992,10 +1103,40 @@ impl SidePhases for RealSide<'_> {
     }
 
     fn build(&mut self) -> Result<()> {
+        if self.from_archive {
+            put_back(self.tree)?;
+            let file = archive_file(self.tree);
+            workspace::forget_report(&file)?;
+            let archive = crate::checks::archive_command(&file);
+            timed(self.command(&archive), "the build and its archive").1?;
+            return crate::checks::forget_reports(self.tree);
+        }
         let mut build = crate::checks::ci_run(&self.request.packages);
         build.push("--no-run".to_owned());
         timed(self.command(&build), "the build").1?;
         crate::checks::forget_reports(self.tree)
+    }
+
+    fn extract(&mut self) -> Option<Result<()>> {
+        if !self.from_archive {
+            return None;
+        }
+        let tree = self.tree;
+        let extract = crate::checks::extract_command(&archive_file(tree), tree);
+        Some(
+            set_build_aside(tree)
+                .and_then(|()| timed(self.command(&extract), "the extraction").1)
+                .and_then(|()| {
+                    let nextest = tree.join("target").join("nextest");
+                    crate::checks::check_built_at(&nextest.join("cargo-metadata.json"), tree)
+                })
+                .and_then(|()| {
+                    // As the test jobs make it: the archive does not hold it.
+                    let tmp = tree.join("target").join("ci").join("tmp");
+                    std::fs::create_dir_all(&tmp)
+                        .map_err(|error| format!("could not make {}: {error}", tmp.display()))
+                }),
+        )
     }
 
     fn runs(&self) -> usize {
@@ -1198,11 +1339,16 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
             request: &request,
             setup: plan.setup.clone(),
             environment: Vec::new(),
-            runs: crate::checks::ci_runs(
-                &request.packages,
-                &request.rest,
-                crate::checks::splits(tree),
-            ),
+            runs: if plan.from_archive {
+                archive_runs(tree)
+            } else {
+                crate::checks::ci_runs(
+                    &request.packages,
+                    &request.rest,
+                    crate::checks::splits(tree),
+                )
+            },
+            from_archive: plan.from_archive,
         };
         let mut clock = || started.elapsed().as_secs_f64();
         drive_side(&mut phases, round, which, &plan, &mut clock)
@@ -1263,6 +1409,7 @@ mod tests {
             clean,
             temperature: None,
             setup: None,
+            from_archive: false,
         }
     }
     use crate::ab::Which;
@@ -1711,6 +1858,7 @@ mod tests {
     struct Fake {
         failing: Vec<&'static str>,
         setup: bool,
+        extract: bool,
         runs: usize,
         made: Vec<String>,
         clock: std::rc::Rc<std::cell::Cell<f64>>,
@@ -1721,6 +1869,7 @@ mod tests {
             Fake {
                 failing: failing.to_vec(),
                 setup: true,
+                extract: false,
                 runs: 2,
                 made: Vec::new(),
                 clock: clock.clone(),
@@ -1748,6 +1897,9 @@ mod tests {
         fn build(&mut self) -> crate::Result<()> {
             self.step("build", 100.0)
         }
+        fn extract(&mut self) -> Option<crate::Result<()>> {
+            self.extract.then(|| self.step("extract", 5.0))
+        }
         fn runs(&self) -> usize {
             self.runs
         }
@@ -1764,6 +1916,162 @@ mod tests {
             .iter()
             .map(|phase| format!("{}{}", phase.name, if phase.passed { "" } else { " !" }))
             .collect()
+    }
+
+    #[test]
+    fn an_archive_side_is_asked_for_by_its_name_and_alone() {
+        let request = Request::parse(&strings(&["--base", "b", "--from-archive", "head"])).unwrap();
+        assert_eq!(request.from_archive, Some(Which::Head));
+        assert!(side_plan(&request, Which::Head, 1).from_archive);
+        assert!(!side_plan(&request, Which::Base, 1).from_archive);
+        let request = Request::parse(&strings(&["--base", "b", "--from-archive", "base"])).unwrap();
+        assert!(side_plan(&request, Which::Base, 2).from_archive);
+        assert!(!side_plan(&request, Which::Head, 2).from_archive);
+        assert_eq!(
+            Request::parse(&strings(&["--base", "b"]))
+                .unwrap()
+                .from_archive,
+            None
+        );
+        for (arguments, said) in [
+            (
+                &["--base", "b", "--from-archive", "both"][..],
+                "base or head",
+            ),
+            (&["--base", "b", "--from-archive"], "needs a side"),
+            (
+                &[
+                    "--base",
+                    "b",
+                    "--from-archive",
+                    "head",
+                    "--from-archive",
+                    "base",
+                ],
+                "given twice",
+            ),
+            (
+                &[
+                    "--base",
+                    "b",
+                    "--from-archive",
+                    "head",
+                    "-p",
+                    "cineris-base",
+                ],
+                "no -p",
+            ),
+            (
+                &[
+                    "--base",
+                    "b",
+                    "--from-archive",
+                    "head",
+                    "--",
+                    "-E",
+                    "test(/a/)",
+                ],
+                "no -p",
+            ),
+        ] {
+            let error = Request::parse(&strings(arguments)).unwrap_err();
+            assert!(error.contains(said), "{arguments:?}: {error}");
+        }
+    }
+
+    #[test]
+    fn an_archive_side_runs_the_windows_test_jobs_runs_from_its_archive() {
+        let tree = std::path::Path::new("/w/tree");
+        let runs = super::archive_runs(tree);
+        assert_eq!(runs.len(), 2, "tiers 1 and 2, then the system tests");
+        for (run, filter) in runs.iter().zip([
+            format!("not {}", crate::checks::SYSTEM_TESTS),
+            crate::checks::SYSTEM_TESTS.to_owned(),
+        ]) {
+            assert_eq!(run, &crate::checks::from_archive_run(tree, &filter));
+            assert!(
+                run.iter().any(|word| word == "--binaries-metadata"),
+                "{run:?}"
+            );
+            assert!(
+                !run.iter().any(|word| word == "--cargo-profile"),
+                "nothing is built: {run:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_archive_sides_build_is_set_aside_and_put_back() {
+        let scratch = cineris_testkit::Scratch::outside("xtask-job-ab", "aside");
+        let tree = scratch.path();
+        let target = tree.join("target");
+        std::fs::create_dir_all(target.join("ci").join("deps")).unwrap();
+        std::fs::write(target.join("ci").join("deps").join("built"), "b").unwrap();
+        super::set_build_aside(tree).unwrap();
+        assert!(!target.join("ci").exists(), "the place is the archive's");
+        assert!(
+            target
+                .join(super::BUILT_ASIDE)
+                .join("deps")
+                .join("built")
+                .is_file()
+        );
+        // What the extraction writes there.
+        std::fs::create_dir_all(target.join("ci").join("deps")).unwrap();
+        std::fs::write(target.join("ci").join("deps").join("extracted"), "e").unwrap();
+        super::put_back(tree).unwrap();
+        assert!(target.join("ci").join("deps").join("built").is_file());
+        assert!(
+            !target.join("ci").join("deps").join("extracted").exists(),
+            "the extracted copy goes"
+        );
+        assert!(!target.join(super::BUILT_ASIDE).exists());
+        // Nothing set aside: nothing to do.
+        super::put_back(tree).unwrap();
+        assert!(target.join("ci").join("deps").join("built").is_file());
+        // A clean takes the set-aside build too.
+        super::set_build_aside(tree).unwrap();
+        super::clean(tree).unwrap();
+        assert!(!target.join(super::BUILT_ASIDE).exists());
+        assert!(!target.join("ci").exists());
+    }
+
+    #[test]
+    fn an_archive_sides_extraction_is_timed_after_its_build_and_a_failed_one_ends_the_round() {
+        let time = std::rc::Rc::new(std::cell::Cell::new(0.0));
+        let mut clock = {
+            let time = time.clone();
+            move || time.get()
+        };
+        let mut fake = Fake::new(&[], &time);
+        fake.setup = false;
+        fake.extract = true;
+        let side = drive_side(&mut fake, 1, Which::Head, &plan(false), &mut clock);
+        assert_eq!(
+            names(&side),
+            [
+                "build",
+                "extract",
+                "tests: tiers 1 and 2",
+                "tests: tier 3",
+                "tier 1, unit summed",
+                "tier 2, integration summed",
+                "tier 3, system summed",
+                JOB
+            ]
+        );
+        assert_eq!(side.phases[1].seconds, 5.0);
+        assert_eq!(
+            side.phases.last().unwrap().seconds,
+            125.0,
+            "the build, the extraction and the runs"
+        );
+        let mut fake = Fake::new(&["extract"], &time);
+        fake.setup = false;
+        fake.extract = true;
+        let side = drive_side(&mut fake, 2, Which::Head, &plan(false), &mut clock);
+        assert_eq!(names(&side), ["build", "extract !", "the job !"]);
+        assert_eq!(fake.made, ["build", "extract"], "no test runs without it");
     }
 
     #[test]
