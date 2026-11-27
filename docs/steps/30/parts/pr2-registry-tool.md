@@ -120,3 +120,12 @@ The breaks are in `mutations/step-30-pr2-registry-tool.breaks`, one a rule.
 ## Windows
 
 Nothing here is written for one system. The kept-read test makes a directory link, as the other re-decide tests do, which the hosted Windows runners may make. Not run on Windows by this part: the step's session runs the runners.
+
+## Measured
+
+- `check`'s `no-mcp` step took 5.1 s in a whole `check` on the reference machine while other builds ran on it (`no-scripts` 9.0 s, `clippy` 46.3 s in the same run), the workspace's crates already linted once. `cargo xtask check no-mcp` repeats it.
+
+## Records of other steps touched
+
+- `docs/steps/28/answered.md` and `docs/steps/step-12-redecide/answered.md` named the two items by links to their files; they name them as settled in this step now, unlinked, as earlier settled items are named.
+- `mutations/step-28-close.breaks`: the six breaks of the `no-scripts` check follow its code to its new names (`without_selection`, `without_tree`, `without_lint`, `reaches`). `mutations/step-28.breaks`, `pinned-withdrawn-kept`: its `find` is the removal with its kind.
