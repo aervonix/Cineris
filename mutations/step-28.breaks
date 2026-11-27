@@ -10898,26 +10898,15 @@ caught-by:
     cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
 
 [break] session-linux-moved-store-same
-rule: On Linux, a store's variable set otherwise than in the session's own environment is moved.
-os: linux
+rule: A store's variable set otherwise than the session's own (on Linux in its environment, on Windows as it told what it starts) is moved; one comparison serves both systems since the second review of step 28's fixes.
 file: crates/cineris-sandbox/src/session.rs
-occurrence: 1
-find: mine != theirs(name)
+in: moved_from
+find: value_in(mine, name, fold_case) != value_in(theirs, name, fold_case)
 replace: false
-packages: cineris-cli
+packages: cineris-cli,cineris-sandbox
 caught-by:
     cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
-
-[break] session-windows-moved-store-same
-rule: On Windows, a store's variable set otherwise than the session told what it starts moves the stores.
-os: windows
-file: crates/cineris-sandbox/src/session.rs
-occurrence: 2
-find: mine != theirs(name)
-replace: false
-packages: cineris-cli
-caught-by:
-    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
+    cineris-sandbox session::tests::a_nested_runs_stores_are_compared_as_cineris_reads_them
 
 [break] remove-takes-the-name-as-typed
 rule: A removal goes by the name its folder holds, or its pin's, whatever its case: its pin and its folder are one extension's.

@@ -92,9 +92,11 @@
 //!   host runs the scheduler cannot be asked, any service host counts. Any
 //!   other program ends the line: a terminal or a CI runner a service
 //!   started is not taken for one. A line that goes on through more
-//!   interpreters and runtimes than the walk reads (64), like a line of
-//!   parents longer than it reads, is not known, which refuses (the review
-//!   of step 28, finding 2). **Only a start after a harness began
+//!   interpreters and runtimes than the walk reads (64) is not known, which
+//!   refuses, unless the last it read was made before every harness that
+//!   runs, or none runs, when what started it counts for nothing, as a
+//!   start within the bound; a line of parents longer than it reads is not
+//!   known either (the review of step 28, finding 2). **Only a start after a harness began
 //!   counts:** the process the service started on the line must have been
 //!   made after the earliest harness of the user's that runs now (a process
 //!   this user may open whose job of sessions' commands is there), so that a
@@ -204,24 +206,70 @@ pub fn moved_stores() -> Option<String> {
     sys::moved_stores()
 }
 
-/// The first of `names` that this process's environment holds more than
-/// once (with `fold_case`, as Windows reads a name, in any case), said as a
-/// variable that moves the stores: where a name is given twice, the
-/// system's lookup (`getenv`, `GetEnvironmentVariableW`) takes one entry and
-/// Cineris's configuration (`cineris_config::Env`, a map of every entry) may
-/// take another, so what is compared would not be what is read (the early
-/// review of step 28's fixes). A person's own environment does not hold a
-/// name twice.
-fn set_more_than_once(names: &[&str], fold_case: bool) -> Option<String> {
-    given_twice(
-        names,
-        fold_case,
-        std::env::vars_os().map(|(name, _)| name.to_string_lossy().into_owned()),
-    )
+/// This process's environment, entry by entry in its order, as Cineris
+/// reads its own (`cineris_config::Env::from_process`, from
+/// `std::env::vars_os`): an entry whose name or value is not Unicode is
+/// left out.
+fn entries_of_this_process() -> Vec<(String, String)> {
+    std::env::vars_os()
+        .filter_map(|(name, value)| Some((name.into_string().ok()?, value.into_string().ok()?)))
+        .collect()
+}
+
+/// The value `entries` give `name`, as `cineris_config::Env` reads it: the
+/// last entry of that name (its map keeps the last), names compared in
+/// ASCII upper case with `fold_case` (Windows, where `ProgramData` and
+/// `PROGRAMDATA` are one variable), and an empty value as none.
+fn value_in(entries: &[(String, String)], name: &str, fold_case: bool) -> Option<String> {
+    let same = |entry: &str| {
+        if fold_case {
+            entry.eq_ignore_ascii_case(name)
+        } else {
+            entry == name
+        }
+    };
+    entries
+        .iter()
+        .rev()
+        .find(|(entry, _)| same(entry))
+        .map(|(_, value)| value.clone())
+        .filter(|value| !value.is_empty())
+}
+
+/// Which of `names`, the variables that move the stores, a nested run's
+/// environment `mine` (its entries in order) has otherwise than each of
+/// `sessions` (each harness's entries) says, each read as Cineris reads its
+/// own ([`value_in`]), so that what is compared is what the run would read
+/// (the second review of step 28's fixes: `std::env::var_os` folds case as
+/// the system does, and takes another entry of a name given twice). **A
+/// variable given more than once refuses first** ([`given_twice`]): the
+/// system's lookup and the configuration could take different entries of
+/// it, and a person's own environment does not hold a name twice.
+fn moved_from(
+    names: &[&str],
+    fold_case: bool,
+    mine: &[(String, String)],
+    sessions: &[Vec<(String, String)>],
+) -> Option<String> {
+    let twice = given_twice(names, fold_case, mine.iter().map(|(name, _)| name.clone()));
+    if twice.is_some() {
+        return twice;
+    }
+    for theirs in sessions {
+        let moved = names
+            .iter()
+            .find(|name| value_in(mine, name, fold_case) != value_in(theirs, name, fold_case));
+        if let Some(name) = moved {
+            return Some((*name).to_owned());
+        }
+    }
+    None
 }
 
 /// The first of `names` that `present`, the names of an environment's
-/// entries in its order, holds more than once ([`set_more_than_once`]).
+/// entries in its order, holds more than once (with `fold_case`, in ASCII
+/// upper case, as Windows reads a name), said as a variable that moves the
+/// stores (the early review of step 28's fixes).
 fn given_twice(
     names: &[&str],
     fold_case: bool,
@@ -415,6 +463,42 @@ fn walk(start: u32, seen: impl Fn(u32) -> Seen, first_must_show: bool) -> Under 
     Under::Unknown("its line of parents does not end".to_owned())
 }
 
+/// Every process of the line from `start` that runs sessions, nearest
+/// first, `seen` reading each process, as [`walk`] reads the line: to
+/// process 0, process 1 included (the review of step 28, finding 7: a
+/// harness that is a container's first process). **Every one, and not the
+/// nearest alone** (the early review of that part's fixes): a process is a
+/// harness by its name and its file's, so a copy of a shell named
+/// `cineris`, run with a moved `HOME`, would be the nearest, and the stores
+/// compared with its own. A process `/proc` does not show ends the line, as
+/// it ends [`walk`]'s; `None` where a read of the line fails, or the line
+/// does not end within the bound: what the session's stores are is then
+/// not known.
+#[cfg_attr(windows, allow(dead_code, reason = "Linux's line of parents"))]
+fn harnesses_on_the_line(start: u32, seen: impl Fn(u32) -> Seen) -> Option<Vec<u32>> {
+    let mut found = Vec::new();
+    let mut at = start;
+    for _ in 0..4096 {
+        if at == 0 {
+            return Some(found);
+        }
+        match seen(at) {
+            Seen::Of { parent, harness } => {
+                if harness {
+                    found.push(at);
+                }
+                if parent == at {
+                    return Some(found);
+                }
+                at = parent;
+            }
+            Seen::Unseen => return Some(found),
+            Seen::Failed => return None,
+        }
+    }
+    None
+}
+
 #[cfg(not(windows))]
 #[allow(
     clippy::disallowed_methods,
@@ -477,40 +561,17 @@ mod sys {
         }
     }
 
-    /// Every process of the line that runs sessions, nearest first, read as
-    /// [`line`] reads it: to process 0, process 1 included (the review of
-    /// step 28, finding 7: a harness that is a container's first process).
-    /// **Every one, and not the nearest alone** (the early review of that
-    /// part's fixes): a process is a harness by its name and its file's, so
-    /// a copy of a shell named `cineris`, run with a moved `HOME`, would be
-    /// the nearest, and the stores compared with its own. `None` where the
-    /// line cannot be read to its end (a process of it that cannot be read,
-    /// or no end within the bound): what the session's stores are is then
-    /// not known. A parent `/proc` does not show ends it, as it ends the
-    /// line.
-    fn harnesses_on_the_line() -> Option<Vec<u32>> {
-        let own = Own::read();
-        let mut found = Vec::new();
-        let mut at = std::os::unix::process::parent_id();
-        for _ in 0..4096 {
-            if at == 0 {
-                return Some(found);
-            }
-            match seen(&own, at) {
-                Seen::Of { parent, harness } => {
-                    if harness {
-                        found.push(at);
-                    }
-                    if parent == at {
-                        return Some(found);
-                    }
-                    at = parent;
-                }
-                Seen::Unseen => return Some(found),
-                Seen::Failed => return None,
-            }
-        }
-        None
+    /// The entries of a process's environment as `/proc/<pid>/environ`
+    /// gives them, in order: an entry that is not Unicode, or holds no `=`,
+    /// is left out, as Cineris's own reading leaves it out.
+    fn environ_entries(environ: &[u8]) -> Vec<(String, String)> {
+        environ
+            .split(|byte| *byte == 0)
+            .filter_map(|entry| {
+                let (name, value) = std::str::from_utf8(entry).ok()?.split_once('=')?;
+                Some((name.to_owned(), value.to_owned()))
+            })
+            .collect()
     }
 
     pub(super) fn moved_stores() -> Option<String> {
@@ -522,42 +583,28 @@ mod sys {
             "CINERIS_CONFIG",
             "CINERIS_DATA_DIR",
         ];
-        if let Some(twice) = super::set_more_than_once(&names, false) {
-            return Some(twice);
-        }
         // Asked only under a session's command, or where that could not be
         // told: with no harness found on the line (one of it could not be
         // read), what the session's stores are is not known either, and
         // nothing is compared with them (the review of step 28: this took
         // only the `CINERIS_` variables, so a line made unreadable on
         // purpose let a nested run read stores moved by `XDG_STATE_HOME`).
-        let found = harnesses_on_the_line().unwrap_or_default();
+        let own = Own::read();
+        let found = super::harnesses_on_the_line(std::os::unix::process::parent_id(), |pid| {
+            seen(&own, pid)
+        })
+        .unwrap_or_default();
         if found.is_empty() {
             return Some("the session's own environment, whose process was not found,".to_owned());
         }
+        let mut sessions = Vec::new();
         for pid in found {
             let Ok(environ) = std::fs::read(format!("/proc/{pid}/environ")) else {
                 return Some("the session's own environment, which could not be read,".to_owned());
             };
-            // The last entry of a name, as Cineris reads its own
-            // environment (`cineris_config::Env`, whose map keeps the last).
-            let theirs = |wanted: &str| {
-                environ.split(|byte| *byte == 0).rev().find_map(|entry| {
-                    let text = String::from_utf8_lossy(entry);
-                    text.split_once('=')
-                        .filter(|(name, _)| *name == wanted)
-                        .map(|(_, value)| value.to_owned())
-                })
-            };
-            let moved = names.iter().find(|name| {
-                let mine = std::env::var_os(name).map(|value| value.to_string_lossy().into_owned());
-                mine != theirs(name)
-            });
-            if let Some(name) = moved {
-                return Some((*name).to_owned());
-            }
+            sessions.push(environ_entries(&environ));
         }
-        None
+        super::moved_from(&names, false, &super::entries_of_this_process(), &sessions)
     }
 
     /// The names a process of Cineris has in `/proc/<pid>/stat`: its own
@@ -1419,40 +1466,33 @@ mod sys {
     const SAID: &str = "CINERIS_SESSION_STORES";
 
     fn stores_now() -> String {
+        let entries = super::entries_of_this_process();
         STORES
             .iter()
             .filter_map(|name| {
-                std::env::var_os(name).map(|value| format!("{name}={}", value.to_string_lossy()))
+                super::value_in(&entries, name, true).map(|value| format!("{name}={value}"))
             })
             .collect::<Vec<_>>()
             .join("|")
     }
 
     pub(super) fn moved_stores() -> Option<String> {
-        let mut names = STORES.to_vec();
-        names.push(SAID);
-        if let Some(twice) = super::set_more_than_once(&names, true) {
-            return Some(twice);
-        }
-        let Some(said) = std::env::var_os(SAID) else {
+        // This process's own entries, read as `cineris_config::Env` reads
+        // them (in ASCII upper case, the last of a name), and not by the
+        // system's lookup, whose fold of a name's case is its own (the
+        // second review of step 28's fixes).
+        let mine = super::entries_of_this_process();
+        let Some(said) = super::value_in(&mine, SAID, true) else {
             return Some("its stores, which the session did not say,".to_owned());
         };
-        let said = said.to_string_lossy().into_owned();
-        let theirs = |wanted: &str| {
-            said.split('|').find_map(|entry| {
-                entry
-                    .split_once('=')
-                    .filter(|(name, _)| *name == wanted)
-                    .map(|(_, value)| value.to_owned())
+        let theirs: Vec<(String, String)> = said
+            .split('|')
+            .filter_map(|entry| {
+                let (name, value) = entry.split_once('=')?;
+                Some((name.to_owned(), value.to_owned()))
             })
-        };
-        STORES
-            .iter()
-            .find(|name| {
-                let mine = std::env::var_os(name).map(|value| value.to_string_lossy().into_owned());
-                mine != theirs(name)
-            })
-            .map(|name| (*name).to_owned())
+            .collect();
+        super::moved_from(&STORES, true, &mine, &[theirs])
     }
 
     /// The right to ask a job about itself and its processes (`winnt.h`'s
@@ -2839,6 +2879,95 @@ mod tests {
                 .is_some_and(|said| said.starts_with("AppData, given more than once")),
             "one name to Windows"
         );
+    }
+
+    /// A nested run's stores are compared as Cineris reads them: the last
+    /// entry of a name, in ASCII upper case on Windows, an empty value as
+    /// none; a variable given twice refuses first; and every session's
+    /// harness is compared with, not the first alone (the second review of
+    /// step 28's fixes).
+    #[test]
+    fn a_nested_runs_stores_are_compared_as_cineris_reads_them() {
+        let entries = |pairs: &[(&str, &str)]| -> Vec<(String, String)> {
+            pairs
+                .iter()
+                .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+                .collect()
+        };
+        let last = entries(&[("HOME", "/a"), ("PATH", "/bin"), ("HOME", "/b")]);
+        assert_eq!(
+            value_in(&last, "HOME", false).as_deref(),
+            Some("/b"),
+            "the last entry"
+        );
+        let cased = entries(&[("AppData", "C:\\a"), ("APPDATA", "C:\\b")]);
+        assert_eq!(value_in(&cased, "AppData", true).as_deref(), Some("C:\\b"));
+        assert_eq!(value_in(&cased, "AppData", false).as_deref(), Some("C:\\a"));
+        assert_eq!(
+            value_in(&entries(&[("HOME", "")]), "HOME", false),
+            None,
+            "empty"
+        );
+        let names = ["HOME", "XDG_CACHE_HOME"];
+        let session = entries(&[("HOME", "/home/me"), ("XDG_CACHE_HOME", "/home/me/.s")]);
+        assert_eq!(
+            moved_from(&names, false, &session, std::slice::from_ref(&session)),
+            None
+        );
+        // The session's own environment read for its last entry too.
+        let session_twice = entries(&[
+            ("HOME", "/tmp/x"),
+            ("HOME", "/home/me"),
+            ("XDG_CACHE_HOME", "/home/me/.s"),
+        ]);
+        assert_eq!(moved_from(&names, false, &session, &[session_twice]), None);
+        let moved = entries(&[("HOME", "/home/me"), ("XDG_CACHE_HOME", "/tmp/evil")]);
+        assert_eq!(
+            moved_from(&names, false, &moved, std::slice::from_ref(&session)).as_deref(),
+            Some("XDG_CACHE_HOME")
+        );
+        // A variable given twice, its last entry the session's.
+        let twice = entries(&[
+            ("HOME", "/tmp/evil"),
+            ("HOME", "/home/me"),
+            ("XDG_CACHE_HOME", "/home/me/.s"),
+        ]);
+        assert!(
+            moved_from(&names, false, &twice, std::slice::from_ref(&session))
+                .is_some_and(|said| said.starts_with("HOME, given more than once")),
+        );
+        // Every session's harness: the nearest says the moved value.
+        let near = entries(&[("HOME", "/home/me"), ("XDG_CACHE_HOME", "/tmp/evil")]);
+        assert_eq!(
+            moved_from(&names, false, &moved, &[near, session]).as_deref(),
+            Some("XDG_CACHE_HOME")
+        );
+    }
+
+    /// Every harness of a line is found, nearest first, to process 0,
+    /// process 1 included (a harness that is a container's first process,
+    /// the review of step 28, finding 7); a process `/proc` does not show
+    /// ends the line, and a read that fails leaves it not known.
+    #[test]
+    fn the_harnesses_of_a_line_are_every_one_to_process_0() {
+        let processes = [
+            (7, of(5, true)),
+            (5, of(1, false)),
+            (1, of(0, true)),
+            (20, of(19, true)),
+            (30, of(29, true)),
+            (29, Seen::Failed),
+        ];
+        let read = table(&processes);
+        assert_eq!(harnesses_on_the_line(7, &read), Some(vec![7, 1]));
+        assert_eq!(harnesses_on_the_line(5, &read), Some(vec![1]));
+        assert_eq!(harnesses_on_the_line(0, &read), Some(vec![]));
+        assert_eq!(
+            harnesses_on_the_line(20, &read),
+            Some(vec![20]),
+            "19 not shown"
+        );
+        assert_eq!(harnesses_on_the_line(30, &read), None);
     }
 
     /// Another process's line, as the RPC socket reads a peer's: the same
