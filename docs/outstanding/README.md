@@ -82,7 +82,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [the-maps-files-of-recent-sessions](the-maps-files-of-recent-sessions.md): The map's ranking by the files of recent sessions has its seam (`RecentFiles`) and no source: step 16's tool records name no files. Owner: the step that has the statistics record files.
 - [the-shell-version-after-a-shell-update](the-shell-version-after-a-shell-update.md): The first session after a shell is installed or updated has no shell version in its prompt, so the next resume is a `resume` epoch. Owner: step 33.
 - [the-top-of-a-tree-past-the-listing-cap](the-top-of-a-tree-past-the-listing-cap.md): A listing cut at 100,000 entries holds the first directories of a depth-first walk, not the top of the tree. Owner: a later index step, or step 33.
-- [two-hundred-turns-of-reasoning-pass-the-inline-budget](two-hundred-turns-of-reasoning-pass-the-inline-budget.md): After 200 turns that each reason 16 KiB, the inline presenter's process holds 48.4 MB, against a budget of 40 MB, though the interface keeps at most 1.6 MB of the reasoning. Owner: step 33.
+- [two-hundred-turns-of-reasoning-pass-the-inline-budget](two-hundred-turns-of-reasoning-pass-the-inline-budget.md): After 200 turns that each reason 16 KiB, the inline presenter's process holds 48.4 MB, against a budget of 40 MB, though the interface keeps at most 1.6 MB of the reasoning. Owner: a small step after the step 25 fixes.
 - [what-start-up-opens-traced](what-start-up-opens-traced.md): The blocking check that start-up opens no file outside an allow-list does not exist; the index's part is checked with a held gate. Owner: the next start-up step, or step 33.
 
 ### cineris-index

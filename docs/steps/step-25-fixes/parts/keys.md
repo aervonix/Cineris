@@ -1,6 +1,6 @@
 # Step 25 fixes: `auth login`, the commands step and the first run's mode
 
-The review of step 25's findings 1, 17, 5 and 6. Each has a test that fails on `main` and a break the test catches ([`mutations/step-25-fixes-keys.breaks`](../../../../mutations/step-25-fixes-keys.breaks), put together into `step-25-fixes.breaks`).
+The review of step 25's findings 1, 17, 5 and 6. Each has a test that fails on `main` and a break the test catches ([`mutations/step-25-fixes.breaks`](../../../../mutations/step-25-fixes.breaks), put together into `step-25-fixes.breaks`).
 
 ## 1. `cineris auth login` echoed a key typed before its row was drawn
 

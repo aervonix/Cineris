@@ -1,6 +1,6 @@
 # Step 25 fixes: the terminal's keyboard flags and its failed writes
 
-The review of step 25 found two defects in the terminal layer: findings 10 and 11, and the "Rules no test or break holds" bullet on the emergency restore's mouse-off. The full screen left the enhanced keyboard protocol's flags pushed on the alternate screen, and a failed write that leaves the alternate screen was never tried again. This part fixes both, and gives the test kit's virtual terminal a stack of keyboard flags per screen. An independent review of the fixes then found five more defects, fixed in a second round (below). The breaks are in [`mutations/step-25-fixes-terminal.breaks`](../../../../mutations/step-25-fixes-terminal.breaks).
+The review of step 25 found two defects in the terminal layer: findings 10 and 11, and the "Rules no test or break holds" bullet on the emergency restore's mouse-off. The full screen left the enhanced keyboard protocol's flags pushed on the alternate screen, and a failed write that leaves the alternate screen was never tried again. This part fixes both, and gives the test kit's virtual terminal a stack of keyboard flags per screen. An independent review of the fixes then found five more defects, fixed in a second round (below). The breaks are in [`mutations/step-25-fixes.breaks`](../../../../mutations/step-25-fixes.breaks).
 
 ## Finding 10: the keyboard flags were left on the alternate screen
 

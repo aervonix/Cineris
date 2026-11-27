@@ -51,7 +51,7 @@ The maintainers kept the 8 KiB bound and the row under a cut reasoning (the ques
 
 ## The breaks
 
-In [mutations/step-25-fixes-reasoning.breaks](../../../../mutations/step-25-fixes-reasoning.breaks), run with `cargo xtask mutate step-25-fixes-reasoning --jobs 2`:
+In [mutations/step-25-fixes.breaks](../../../../mutations/step-25-fixes.breaks), run with `cargo xtask mutate step-25-fixes-reasoning --jobs 2`:
 
 | Break | Rule | Caught by |
 |---|---|---|

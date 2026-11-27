@@ -179,6 +179,7 @@ impl Rounds {
         let commit = changes.get("base_commit").and_then(Json::as_str);
         let restorable = list("restorable");
         let created = list("created");
+        let deleted = list("deleted");
         // What git keeps of their modes, asked once for them all.
         let modes = match commit {
             Some(commit) => self.git_modes(commit, &restorable),
@@ -202,11 +203,19 @@ impl Rounds {
             // the tool named, is known. Everything else that changed had
             // already been changed before the command, or git was not
             // asked.
+            // Git's mode only for a file the command removed, which a
+            // put-back makes again: a file still there keeps its own mode,
+            // which git's (owner-only) would narrow on every undo of a
+            // command that edited it (the last read of the step 25 fixes).
+            let mode = deleted
+                .contains(&path)
+                .then(|| modes.get(path).copied())
+                .flatten();
             let before = match commit {
                 Some(commit) if restorable.contains(&path) => self
                     .earlier_content(commit, path)
                     .map_or(Before::Unknown, |version| {
-                        Before::Version(version.with_mode(modes.get(path).copied()))
+                        Before::Version(version.with_mode(mode))
                     }),
                 _ => Before::Unknown,
             };

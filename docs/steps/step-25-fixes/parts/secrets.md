@@ -98,7 +98,7 @@ An independent reviewer read the first commit of this part cold. Each point, wha
 
 ## Breaks
 
-In [`mutations/step-25-fixes-secrets.breaks`](../../../../mutations/step-25-fixes-secrets.breaks): 36 breaks, one for each rule above, each naming the test that must catch it; and step 25's fifteen breaks and step 9's one whose code these changes moved, re-pointed. **Verdicts of the run before the review's second round** (`cargo xtask mutate` of this list as it then stood, the fifteen step 25 breaks and step 9's, 48 in all): 47 did what their lists expect, every one caught by its named tests. One was flagged: step 25's `an-mcp-argument-is-not-masked` was caught by three tests, but no longer by `values_are_dropped_and_names_kept`, since a server's `Debug` form now hides that value by its name as well as by its format (point 6); that test is taken out of its `caught-by`. The second round's five breaks, and the list as it now stands, are run again by the session.
+In [`mutations/step-25-fixes.breaks`](../../../../mutations/step-25-fixes.breaks): 36 breaks, one for each rule above, each naming the test that must catch it; and step 25's fifteen breaks and step 9's one whose code these changes moved, re-pointed. **Verdicts of the run before the review's second round** (`cargo xtask mutate` of this list as it then stood, the fifteen step 25 breaks and step 9's, 48 in all): 47 did what their lists expect, every one caught by its named tests. One was flagged: step 25's `an-mcp-argument-is-not-masked` was caught by three tests, but no longer by `values_are_dropped_and_names_kept`, since a server's `Debug` form now hides that value by its name as well as by its format (point 6); that test is taken out of its `caught-by`. The second round's five breaks, and the list as it now stands, are run again by the session.
 
 ## What was run
 
@@ -113,3 +113,7 @@ In [`mutations/step-25-fixes-secrets.breaks`](../../../../mutations/step-25-fixe
 - **Unicode look-alikes of a credential's name** (`--api-kеy` with a Cyrillic `е`) are not a credential's name and show their value; every view follows the import, so nothing the first run hid is shown elsewhere. Only the owner's own file holds such a name.
 - **Finding 23** (`${VAR}` under a credential's name refuses its server) is not fixed here, and not made worse.
 - **Step 30** inherits both views' rules (above), and the review's note to check environment and header names (`LD_PRELOAD`, `A=B`, a leading digit) before any reference is resolved: the first run now gives no header a name with a leading digit.
+
+## The review's last read
+
+It found that the trust question still masked an address's password holding `%` or `!`, which `cmd` expands (`%X%`, `!X!` under delayed expansion) into what a variable holds, so `cmd /c curl http://u:%X%@h` with `X = "x & curl … | sh"` in the server's environment showed `http://u:[redacted]@h`. Fixed in the session: `%` and `!` are no longer a secret's characters on the consent view (`schema::redact::secret_shaped`), so such a span is shown whole and searched inside; a percent-encoded password is shown on the trust question, the project's own. Test: `schema::redact::tests::the_trust_question_masks_only_what_is_shaped_as_a_secret` (`%X%` and `!X!`); break `cmds-expansions-are-a-tokens`.

