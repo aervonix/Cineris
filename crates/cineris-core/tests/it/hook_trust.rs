@@ -632,7 +632,10 @@ fn sys_an_unreadable_trust_store_holds_a_projects_gates_until_it_is_read() {
 /// though its own time is far off; the call it gated is refused, and the
 /// turn goes on (the review of step 28's fixes: nothing tested that runs
 /// already going stop). Its time is on the session's clock, which does not
-/// move: only the withdrawal ends it.
+/// move: only the withdrawal ends it, and at once, with no grace on that
+/// clock between asking the program to stop and killing it (on Windows a
+/// program may not answer the polite stop: under stress the run waited for
+/// a 2 s grace that nothing moved the clock past).
 #[test]
 fn sys_a_projects_hook_run_going_on_stops_when_its_trust_is_taken_away() {
     const STUCK: std::time::Duration = std::time::Duration::from_secs(50);

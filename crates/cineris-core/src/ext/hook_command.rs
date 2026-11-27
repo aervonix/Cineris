@@ -823,7 +823,8 @@ impl HookCommands {
     }
 
     /// The token a run of a hook of `source`'s is under, beside its own:
-    /// a project's is stopped when the project's trust is taken away.
+    /// a project's is stopped when the project's trust is taken away. Given as
+    /// both a run's tokens, it stops the run at once, with no grace.
     pub(crate) fn run_cancel(&self, source: Source) -> CancelToken {
         match source {
             Source::User => CancelToken::new(),
