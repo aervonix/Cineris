@@ -279,8 +279,8 @@ fn the_trust_question_shows_a_projects_command_lines_whole() {
         LayerKind::User,
         &format!("{servers}[mcp.servers.p.oauth]\ncommand = \"p-oauth\"\n"),
     );
-    // The project's local file is the person's own, never committed: a
-    // token there is masked in the question as everywhere.
+    // The project's local file is not committed by convention only: a
+    // repository can ship one, so it is shown whole as the shared file is.
     machine.layer(
         LayerKind::ProjectLocal,
         "[mcp.servers.mine]\ncommand = \"mine-mcp\"\nargs = [\"--api-key\", \"Local0123456\"]\n",
@@ -305,8 +305,8 @@ fn the_trust_question_shows_a_projects_command_lines_whole() {
     assert!(!held.contains(KEY), "a known format is masked:\n{held}");
     assert!(held.contains("\"mine-mcp\""), "{held}");
     assert!(
-        !held.contains("Local0123456"),
-        "the person's own token:\n{held}"
+        held.contains("Local0123456"),
+        "the local file's value is approved unseen:\n{held}"
     );
 
     let shown = loaded.show(&env, false);

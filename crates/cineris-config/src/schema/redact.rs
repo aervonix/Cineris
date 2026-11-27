@@ -8,8 +8,9 @@
 //! holds back for trust,** which the trust question asks the person to
 //! approve, is shown through [`redact_for_consent`] instead: whole, but what
 //! the secret filter's formats know (since the review of the step 25 fixes,
-//! settled by the maintainers). The project's local file, the person's own,
-//! is held back through [`redact`]. Three rules:
+//! settled by the maintainers), the project's local file's as well: it is
+//! not committed by convention only, and a repository can ship one. Three
+//! rules:
 //!
 //! 1. **A declared key that can hold a secret** (its kind is text or
 //!    `{ env = "NAME" }`: today a provider's headers) shows its literal
