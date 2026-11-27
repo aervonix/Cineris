@@ -236,6 +236,71 @@ opt-level = 2
 [profile.ci.package.bincode]
 opt-level = 2
 
+# And the crates under every core and session test's own work (the Windows
+# tier 2 fix, docs/steps/windows-tier2/answered.md): the async runtime each
+# test's core and server run on, the configuration's parser, which every
+# session's open reads the files with, the script engine
+# under the extensions' tests, the text's widths and graphemes under every
+# drawn row, and the searches, globs and diffs of the tools. On one Windows
+# runner, five rounds a side, they took 3.2 s off the integration tier and
+# cost a cold build 29 s (`try` 45979971472 and 45979975138).
+[profile.ci.package.tokio]
+opt-level = 2
+
+[profile.ci.package.tokio-util]
+opt-level = 2
+
+[profile.ci.package.mio]
+opt-level = 2
+
+[profile.ci.package.toml]
+opt-level = 2
+
+[profile.ci.package.toml_parser]
+opt-level = 2
+
+[profile.ci.package.toml_datetime]
+opt-level = 2
+
+[profile.ci.package.serde_spanned]
+opt-level = 2
+
+[profile.ci.package.winnow]
+opt-level = 2
+
+[profile.ci.package.rquickjs]
+opt-level = 2
+
+[profile.ci.package.rquickjs-core]
+opt-level = 2
+
+[profile.ci.package.rquickjs-sys]
+opt-level = 2
+
+[profile.ci.package.unicode-width]
+opt-level = 2
+
+[profile.ci.package.unicode-segmentation]
+opt-level = 2
+
+[profile.ci.package.memchr]
+opt-level = 2
+
+[profile.ci.package.aho-corasick]
+opt-level = 2
+
+[profile.ci.package.globset]
+opt-level = 2
+
+[profile.ci.package.ignore]
+opt-level = 2
+
+[profile.ci.package.bstr]
+opt-level = 2
+
+[profile.ci.package.similar]
+opt-level = 2
+
 # Optimised for size, as the shipped binary is (decision 0036): `dist`
 # inherits the level, so every measurement made in `release` (`cargo xtask
 # perf`, the `perf_` tests, `try -f profile=release`) runs code optimised as
