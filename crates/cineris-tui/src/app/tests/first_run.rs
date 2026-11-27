@@ -613,7 +613,12 @@ fn what_the_configuration_in_force_holds_otherwise_is_said_after_the_write() {
         ..fake()
     });
     skip_three(&mut run);
-    let said = squash(&run.scrollback.join(" "));
+    // What is said is drawn: committed, or in the set-up's card.
+    let drawn = |run: &mut Run| {
+        let live = run.frame();
+        squash(&[run.scrollback.clone(), live].concat().join(" "))
+    };
+    let said = drawn(&mut run);
     let written = said
         .find("Written to ~/.config/cineris/config.toml.")
         .unwrap_or_else(|| panic!("{said}"));
@@ -621,11 +626,9 @@ fn what_the_configuration_in_force_holds_otherwise_is_said_after_the_write() {
     assert!(told > written, "{said}");
     let mut quiet = Run::new(fake());
     skip_three(&mut quiet);
-    assert!(
-        !squash(&quiet.scrollback.join(" ")).contains("But the configuration"),
-        "{:?}",
-        quiet.scrollback
-    );
+    let said = drawn(&mut quiet);
+    assert!(said.contains("Written to"), "{said}");
+    assert!(!said.contains("But the configuration"), "{said}");
 }
 
 /// `x` skips the whole set-up: the file is written with the defaults, the

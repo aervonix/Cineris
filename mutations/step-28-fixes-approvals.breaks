@@ -30,8 +30,8 @@ caught-by:
 rule: `cineris ext inspect` shows an extension's whole text for the system prompt, as its approval shows it.
 file: crates/cineris-core/src/ext/manage.rs
 in: judged
-find: prompt: prompt_shown(&found.manifest, &found.snapshot),
-replace: prompt: None,
+find: prompt: prompt_shown(&found.manifest, &found.snapshot)
+replace: prompt: None
 caught-by:
     cineris-core::it extensions_approvals::ext_inspect_shows_an_extensions_environment_and_its_prompt
 
