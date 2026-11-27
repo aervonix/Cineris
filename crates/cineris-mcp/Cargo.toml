@@ -14,6 +14,10 @@ cineris-protocol.workspace = true
 cineris-base.workspace = true
 cineris-tools.workspace = true
 cineris-sandbox.workspace = true
+rmcp = { version = "=3.12.0", default-features = false, features = ["client", "transport-async-rw", "transport-streamable-http-client-reqwest"] }
+reqwest.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["rt", "process", "io-util"] }
 
 [lints]
 workspace = true

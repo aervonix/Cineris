@@ -85,6 +85,23 @@ fn main() -> ExitCode {
         return ExitCode::from(u8::try_from(code).unwrap_or(1));
     }
 
+    // SIZE PROBE ONLY: keeps the MCP client in the binary.
+    if let Some(program) = env::var_os("CINERIS_SIZE_PROBE_MCP") {
+        let url = env::var("CINERIS_SIZE_PROBE_MCP_URL").ok();
+        let token = env::var("CINERIS_SIZE_PROBE_MCP_TOKEN").ok();
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build();
+        if let Ok(runtime) = runtime {
+            let program = program.to_string_lossy().into_owned();
+            let program = (!program.is_empty()).then_some(program);
+            let out = runtime.block_on(cineris_core::mcp_size_probe(
+                program.as_deref(),
+                url.as_deref(),
+                token,
+            ));
+            println!("{out:?}");
+        }
+        return ExitCode::SUCCESS;
+    }
     let command = match args::parse(rest) {
         Ok(command) => command,
         Err(error) => {

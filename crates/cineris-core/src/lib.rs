@@ -35,6 +35,9 @@ pub mod core;
 mod day;
 pub mod events;
 pub mod ext;
+/// Size probe only.
+#[cfg(feature = "mcp")]
+pub use cineris_mcp::probe as mcp_size_probe;
 pub use commands::A_COMMAND_IS_TAKEN;
 #[cfg(feature = "scripts")]
 pub use commands::A_SCRIPT_COMMAND_RUNS;
