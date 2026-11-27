@@ -198,6 +198,28 @@ fn the_golden_values_round_trip_exactly() {
                 )));
                 assert_eq!(result.problems.len(), 1);
             }
+            Some("ApprovalProposal") => {
+                // Since the signed approvals step: what a person signs
+                // whole. It is a value the harness enforces, so a field
+                // this build does not know refuses it, in the unit and in
+                // a pin.
+                let proposal = round_trip::<crate::methods::ApprovalProposal>(value);
+                let pins = match &proposal {
+                    crate::methods::ApprovalProposal::Project { pins, .. }
+                    | crate::methods::ApprovalProposal::UserPins { pins, .. } => pins,
+                };
+                assert!(!pins.is_empty());
+                let mut later = entry["value"].clone();
+                later["signed_at"] = "2027-01-01T00:00:00Z".into();
+                assert!(
+                    serde_json::from_value::<crate::methods::ApprovalProposal>(later).is_err()
+                );
+                let mut later = entry["value"].clone();
+                later["pins"][0]["expires_at"] = "2027-01-01T00:00:00Z".into();
+                assert!(
+                    serde_json::from_value::<crate::methods::ApprovalProposal>(later).is_err()
+                );
+            }
             other => panic!("the values file names a type this test does not read: {other:?}"),
         }
     }
