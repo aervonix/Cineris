@@ -228,16 +228,30 @@ pub(crate) fn nested_run(name: &str, run: &crate::args::Run) -> Result<bool, u8>
         return Err(exit::USAGE);
     }
     // Its configuration and its approvals are read where the session's
-    // are, or it does not run (the re-look at the early review, B).
-    if let Some(moved) = cineris_sandbox::session::moved_stores() {
-        eprintln!(
-            "{name}: `{name} -p` was refused under a session's command: {moved} is set otherwise \
-             than for the session that started it, and moves where its configuration and its \
-             approvals are read from. If you mean it, run it in your own terminal."
-        );
-        return Err(exit::USAGE);
+    // are, or it does not run (the re-look at the early review, B); and
+    // where the session's are cannot be told, it does not run either (the
+    // review of the harness's word, W2).
+    match cineris_sandbox::session::moved_stores() {
+        None => Ok(true),
+        Some(cineris_sandbox::session::Moved::Variable(moved)) => {
+            eprintln!(
+                "{name}: `{name} -p` was refused under a session's command: {moved} is set \
+                 otherwise than for the session that started it, and moves where its \
+                 configuration and its approvals are read from. If you mean it, run it in your \
+                 own terminal."
+            );
+            Err(exit::USAGE)
+        }
+        Some(cineris_sandbox::session::Moved::NotKnown(why)) => {
+            eprintln!(
+                "{name}: `{name} -p` was refused under a session's command: it reads its \
+                 configuration and its approvals where the session that started it reads its \
+                 own, or does not run, and where that is could not be told ({why}). If you mean \
+                 it, run it in your own terminal."
+            );
+            Err(exit::USAGE)
+        }
     }
-    Ok(true)
 }
 
 /// Writes `text` to standard output. A reader that has gone (`| head`)

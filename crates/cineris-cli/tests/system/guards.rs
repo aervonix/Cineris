@@ -401,7 +401,9 @@ fn sys_a_nested_run_whose_line_cannot_be_read_is_refused_with_its_stores_moved()
     let run = machine.run(&["-p", "go", "--output", "json"]);
     let said = std::fs::read_to_string(machine.workspace.join("unread.err")).unwrap_or_default();
     assert!(
-        said.contains("was refused") && said.contains("whose harness was not found"),
+        said.contains("was refused")
+            && said.contains("could not be told")
+            && said.contains("could not be read"),
         "{said}\n{}",
         shown(&run)
     );
@@ -442,7 +444,7 @@ fn sys_a_shell_named_cineris_on_the_line_does_not_pass_moved_stores() {
     let run = machine.run(&["-p", "go", "--output", "json"]);
     let said = std::fs::read_to_string(machine.workspace.join("fake.err")).unwrap_or_default();
     assert!(
-        said.contains("which this process does not hold") && said.contains("was refused"),
+        said.contains("gave it no word") && said.contains("was refused"),
         "{said}\n{}",
         shown(&run)
     );

@@ -118,17 +118,18 @@ caught-by:
 [break] stores-not-compared-without-a-harness
 rule: On Linux, under a session's command whose harness is not found on the line, a nested run's stores cannot be compared with the session's, and it is refused.
 file: crates/cineris-sandbox/src/session.rs
-find: return Some("the session's own environment, whose process was not found,".to_owned());
-replace: return None;
-packages: cineris-cli
+in: agreeing
+find: return Err("no process of its line that runs Cineris's sessions was found".to_owned());
+replace: return Ok(Vec::new());
+packages: cineris-sandbox
 os: linux
 caught-by:
-    cineris-cli::system guards::sys_a_nested_run_whose_line_cannot_be_read_is_refused_with_its_stores_moved
+    cineris-sandbox session::sys::tests::a_line_that_cannot_be_read_leaves_the_stores_not_known
 
 [break] a-peers-line-is-not-read
 rule: On Linux another process's line of parents is read as this process's own, from its parent up.
 file: crates/cineris-sandbox/src/session.rs
-find: Seen::Of { parent, .. } => walk(parent, |pid| seen(&own, pid), false),
+find: Seen::Of { parent, .. } => walk(parent, |pid| seen(&own, pid, stat_of), false),
 replace: Seen::Of { .. } => Under::Nothing,
 packages: cineris-sandbox
 os: linux
@@ -211,10 +212,11 @@ rule: On Linux a nested run's stores are compared with every harness of its line
 file: crates/cineris-sandbox/src/session.rs
 find: for pid in found {
 replace: for pid in found.into_iter().take(1) {
-packages: cineris-cli
+packages: cineris-sandbox
 os: linux
 caught-by:
-    cineris-cli::system guards::sys_a_shell_named_cineris_on_the_line_does_not_pass_moved_stores
+    cineris-sandbox session::sys::tests::a_word_a_command_makes_must_agree_with_its_harnesss
+    cineris-sandbox::it harden::sys_a_word_a_command_makes_does_not_stand_for_its_session
 
 [break] a-store-variable-given-twice-passes
 rule: A variable that moves the stores, given more than once in a nested run's environment (in any case, on Windows), refuses it.

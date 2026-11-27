@@ -1,0 +1,165 @@
+# Signed approvals, part: fixes to the harness's word
+# (docs/steps/signed-approvals/parts/word-fixes.md).
+#
+# The every-harness comparison (W1) and the refusal of a line that cannot be
+# read (W2) are step 28's fixes' (`stores-compared-with-the-nearest-harness-
+# alone` and `stores-not-compared-without-a-harness` in step-28-fixes.breaks,
+# their tests moved to the words); these are the rules this part adds.
+
+# ------------------------------------------- W1: a word a command makes
+
+[break] a-harness-of-the-line-without-a-word-is-passed
+rule: A process of a nested run's line that runs sessions and gave it no word (its command closed it, or it is a copy of another program named as Cineris) leaves the session's stores not known, which refuses.
+file: crates/cineris-sandbox/src/session.rs
+in: agreeing
+find: if given.is_empty() {
+replace: if false {
+os: linux
+packages: cineris-sandbox, cineris-cli
+caught-by:
+    cineris-sandbox session::sys::tests::a_word_a_command_makes_must_agree_with_its_harnesss
+    cineris-sandbox::it harden::sys_a_word_a_command_makes_does_not_stand_for_its_session
+    cineris-sandbox::it harden::sys_a_closed_harness_is_told_by_the_word_it_gives
+    cineris-cli::system guards::sys_a_shell_named_cineris_on_the_line_does_not_pass_moved_stores
+
+[break] one-word-of-each-harness-counts
+rule: Every word a harness of the line gave counts: two that say different things refuse, whichever the nested run's stores are.
+file: crates/cineris-sandbox/src/session.rs
+in: agreeing
+find: sessions.extend(given.iter().map(|word| word.entries()));
+replace: sessions.extend(given.iter().take(1).map(|word| word.entries()));
+os: linux
+caught-by:
+    cineris-sandbox session::sys::tests::two_words_of_one_harness_that_disagree_refuse
+
+# ---------------------------------------------- W2: a line not known
+
+[break] a-line-not-known-passes-the-stores
+rule: Where a nested run's line of parents cannot be read to its end, where its session's stores are is not known, and it refuses, saying why: no variable is passed unchecked.
+file: crates/cineris-sandbox/src/session.rs
+in: agreeing
+find: let found = super::harnesses_on_the_line(start, seen)?;
+replace: let Ok(found) = super::harnesses_on_the_line(start, seen) else { return Ok(Vec::new()) };
+os: linux
+packages: cineris-sandbox, cineris-cli
+caught-by:
+    cineris-sandbox session::sys::tests::a_line_that_cannot_be_read_leaves_the_stores_not_known
+    cineris-sandbox::it harden::sys_a_line_that_cannot_be_read_refuses_a_nested_runs_stores
+    cineris-cli::system guards::sys_a_nested_run_whose_line_cannot_be_read_is_refused_with_its_stores_moved
+
+[break] the-line-past-a-hidden-harness-is-known
+rule: The line past a harness that /proc does not show (hidepid) cannot be read, and leaves a nested run's stores not known: a command that hides itself so, with a word of its own, would otherwise end the line before its harness.
+file: crates/cineris-sandbox/src/session.rs
+in: harnesses_on_the_line
+find: Seen::HiddenHarness => return Err(past_hidden(at)),
+replace: Seen::HiddenHarness => return Ok(found),
+os: linux
+caught-by:
+    cineris-sandbox session::sys::tests::a_line_that_cannot_be_read_leaves_the_stores_not_known
+
+# ------------------------------------------ W3: a word off the line
+
+[break] a-word-off-the-line-is-nothing
+rule: A word held whose maker still runs puts the approving subcommands under a session's command wherever the process stands: a command that left its line of parents keeps its harness's word.
+file: crates/cineris-sandbox/src/session.rs
+in: under
+find: match words.first() {
+replace: match None::<&&Channel> {
+os: linux
+caught-by:
+    cineris-sandbox session::sys::tests::a_held_word_whose_maker_runs_counts_off_the_line
+    cineris-sandbox::it harden::sys_a_command_that_left_its_line_is_under_its_session_by_its_word
+
+[break] a-word-off-the-line-is-not-compared
+rule: A nested run's stores must agree with every word it holds whose maker still runs, on its line or not.
+file: crates/cineris-sandbox/src/session.rs
+in: agreeing
+find: sessions.extend(live(own, alive)?.iter().map(|word| word.entries()));
+replace: live(own, alive)?;
+os: linux
+caught-by:
+    cineris-sandbox session::sys::tests::a_held_word_whose_maker_runs_counts_off_the_line
+
+[break] a-word-whose-maker-is-not-known-passes
+rule: Where whether a held word's maker still runs cannot be told, whether the process runs under a session's command is not known, which refuses.
+file: crates/cineris-sandbox/src/session.rs
+in: under
+find: Err(why) => Under::Unknown(why)
+replace: Err(_) => on_line
+os: linux
+caught-by:
+    cineris-sandbox session::sys::tests::a_held_word_whose_maker_runs_counts_off_the_line
+
+[break] a-gone-makers-word-counts
+rule: A word's maker runs while a process has its id and the start the word says: one of another start has its id after it.
+file: crates/cineris-sandbox/src/session.rs
+in: alive
+find: Some(_) => Alive::No,
+replace: Some(_) => Alive::Yes,
+os: linux
+caught-by:
+    cineris-sandbox session::sys::tests::a_words_maker_runs_while_its_id_and_start_are_its
+
+[break] a-word-of-its-own-making-is-a-session
+rule: A word a process made itself (a harness holds its own) does not put it under a session's command.
+file: crates/cineris-sandbox/src/session.rs
+in: live
+find: if word.pid == std::process::id() {
+replace: if false {
+os: linux
+caught-by:
+    cineris-sandbox session::sys::tests::a_held_word_whose_maker_runs_counts_off_the_line
+
+# ---------------------------------------- W4: a signal refused otherwise
+
+[break] a-refused-signal-is-gone
+rule: Only ESRCH says a process /proc does not show is gone: any other refusal of a signal of nothing (a security module's EACCES) leaves it not known.
+file: crates/cineris-sandbox/src/session/channel.rs
+in: whose
+find: Err(_) => Whose::NotKnown
+replace: Err(_) => Whose::Gone
+os: linux
+caught-by:
+    cineris-sandbox session::channel::tests::whose_a_process_is_is_told_by_a_signal_of_nothing
+
+[break] a-process-whose-owner-is-not-known-ends-the-line
+rule: A process of the line that /proc does not show, whose owner a signal of nothing cannot tell, is not known, and refuses.
+file: crates/cineris-sandbox/src/session.rs
+in: hidden
+find: Whose::NotKnown => Seen::Failed
+replace: Whose::NotKnown => Seen::Unseen
+os: linux
+caught-by:
+    cineris-sandbox session::sys::tests::a_process_proc_does_not_show_is_told_by_whose_it_is
+
+# ------------------------------------- W5: rules no test held before
+
+[break] another-users-process-is-not-known
+rule: A process /proc does not show that a signal of nothing may not be sent to (EPERM) is another user's, and ends the line elsewhere.
+file: crates/cineris-sandbox/src/session/channel.rs
+in: whose
+find: Err(libc::EPERM) => Whose::Others,
+replace: Err(libc::EPERM) => Whose::NotKnown,
+os: linux
+caught-by:
+    cineris-sandbox session::channel::tests::whose_a_process_is_is_told_by_a_signal_of_nothing
+
+[break] a-refused-stat-is-gone
+rule: A process whose stat cannot be read (ENOENT, EACCES) is asked whose it is: one of this user's that is there is not known, and refuses.
+file: crates/cineris-sandbox/src/session.rs
+in: seen
+find: return hidden(own, pid);
+replace: return Seen::Unseen;
+os: linux
+caught-by:
+    cineris-sandbox session::sys::tests::a_live_process_of_this_user_whose_stat_is_refused_is_not_known
+
+[break] a-word-of-another-user-counts
+rule: A word is held only where the process that made it, as the kernel gives it (SO_PEERCRED), is of this process's user.
+file: crates/cineris-sandbox/src/session/channel.rs
+in: read_one
+find: asked != 0 || peer.uid != uid
+replace: asked != 0
+os: linux
+caught-by:
+    cineris-sandbox session::channel::tests::a_word_counts_only_where_its_maker_is_of_this_user

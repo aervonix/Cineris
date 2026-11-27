@@ -20,7 +20,12 @@
 //! close the descriptor, or take the record out of it, and then holds
 //! nothing: a nested run refuses, and the line of parents is read as
 //! before. It cannot hold one that names its harness and says something
-//! else.
+//! else. It can make a word of its own, naming itself: that counts only
+//! beside its harness's, since every process of the line that runs
+//! sessions must have given a word that agrees, and so must every word held
+//! whose maker still runs (the review of the harness's word, W1). A word
+//! whose maker still runs counts for the approving subcommands wherever it
+//! is held, on the line of parents or not (W3).
 //!
 //! Cineris makes sequenced-packet sockets nowhere else, and connects to
 //! none, so no socket whose peer is a harness carries a record it did not
@@ -176,7 +181,20 @@ pub(super) fn give(names: &[&str]) -> io::Result<()> {
         .ok()
         .and_then(|stat| start_in(&stat))
         .ok_or_else(|| io::Error::other("this process's start could not be read"))?;
-    let record = record(start, names);
+    let kept = made(&record(start, names))?;
+    // SAFETY: `kept` is open; the call sets its flags to none, so that it
+    // is inherited, and touches no memory.
+    if unsafe { libc::fcntl(kept.as_raw_fd(), libc::F_SETFD, 0) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let _ = GIVEN.set(kept);
+    Ok(())
+}
+
+/// A pair of sequenced-packet Unix sockets with `record` written into the
+/// end returned, and the other end closed. The end returned is still
+/// closed on `execve`: [`give`] clears that.
+fn made(record: &[u8]) -> io::Result<OwnedFd> {
     if record.len() > MOST {
         return Err(io::Error::other("the stores' record is too long"));
     }
@@ -210,13 +228,7 @@ pub(super) fn give(names: &[&str]) -> io::Result<()> {
     }
     // Nothing can be written to the kept end once this one is closed.
     drop(writer);
-    // SAFETY: `kept` is open; the call sets its flags to none, so that it
-    // is inherited, and touches no memory.
-    if unsafe { libc::fcntl(kept.as_raw_fd(), libc::F_SETFD, 0) } != 0 {
-        return Err(io::Error::last_os_error());
-    }
-    let _ = GIVEN.set(kept);
-    Ok(())
+    Ok(kept)
 }
 
 /// One integer option of a socket: `None` where `fd` is not a socket or
@@ -320,19 +332,47 @@ pub(crate) fn inherit(fd: RawFd) {
     let _ = unsafe { libc::fcntl(fd, libc::F_SETFD, 0) };
 }
 
-/// Whether the process `pid`, which `/proc` does not show, is there and of
-/// this user (a signal of nothing may be sent to it: `Some(true)`), there
-/// and another user's (`Some(false)`), or gone (`None`).
-pub(super) fn ours(pid: u32) -> Option<bool> {
-    let pid = libc::pid_t::try_from(pid).ok()?;
+/// Whose a process that `/proc` does not show is, as a signal of nothing
+/// sent to it tells.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Whose {
+    /// There, and one this process may signal: of this user.
+    Ours,
+    /// There, and another user's (`EPERM`).
+    Others,
+    /// Gone (`ESRCH`).
+    Gone,
+    /// The call failed otherwise, as where a security module (SELinux,
+    /// AppArmor) refuses the signal with `EACCES`: what it is is not known
+    /// (the review of the harness's word, W4).
+    NotKnown,
+}
+
+/// Whose the process `pid`, which `/proc` does not show, is: a signal of
+/// nothing is asked of it (`kill(pid, 0)`).
+pub(super) fn ours(pid: u32) -> Whose {
+    // An id of 0 or below would ask of a group of processes, not of one.
+    let Some(pid) = libc::pid_t::try_from(pid).ok().filter(|pid| *pid > 0) else {
+        return Whose::NotKnown;
+    };
     // SAFETY: signal 0 sends nothing: the call only asks whether a signal
     // could be sent.
     if unsafe { libc::kill(pid, 0) } == 0 {
-        return Some(true);
+        return whose(Ok(()));
     }
-    match io::Error::last_os_error().raw_os_error() {
-        Some(libc::EPERM) => Some(false),
-        _ => None,
+    whose(Err(io::Error::last_os_error()
+        .raw_os_error()
+        .unwrap_or_default()))
+}
+
+/// What a signal of nothing's outcome says: sent, or refused with an error
+/// number. Only `ESRCH` is gone, and only `EPERM` another user's.
+fn whose(asked: Result<(), i32>) -> Whose {
+    match asked {
+        Ok(()) => Whose::Ours,
+        Err(libc::EPERM) => Whose::Others,
+        Err(libc::ESRCH) => Whose::Gone,
+        Err(_) => Whose::NotKnown,
     }
 }
 
@@ -371,11 +411,49 @@ mod tests {
         assert!(start_in(&own).is_some(), "{own}");
     }
 
-    /// A process of this user is told from one that is gone.
+    /// A process of this user is told from one that is gone, and from
+    /// another user's: the system's first process, root's on every system
+    /// the tests run on, unless they run as root or in a container whose
+    /// first process is their user's. Only `ESRCH` is gone and only `EPERM`
+    /// another user's: any other refusal, as a security module's `EACCES`,
+    /// is not known (the review of the harness's word, W4 and W5).
     #[test]
-    fn a_process_of_this_user_is_told_from_one_that_is_gone() {
-        assert_eq!(ours(std::process::id()), Some(true));
+    fn whose_a_process_is_is_told_by_a_signal_of_nothing() {
+        use std::os::unix::fs::MetadataExt as _;
+        assert_eq!(ours(std::process::id()), Whose::Ours);
         // The largest id the kernel can give, which no process has.
-        assert_eq!(ours(4_194_304), None);
+        assert_eq!(ours(4_194_304), Whose::Gone);
+        assert_eq!(ours(0), Whose::NotKnown);
+        // SAFETY: takes nothing and cannot fail.
+        let uid = unsafe { libc::geteuid() };
+        let first = std::fs::metadata("/proc/1").map(|first| first.uid());
+        if uid != 0 && first.is_ok_and(|owner| owner != uid) {
+            assert_eq!(ours(1), Whose::Others);
+        }
+        assert_eq!(whose(Ok(())), Whose::Ours);
+        assert_eq!(whose(Err(libc::EPERM)), Whose::Others);
+        assert_eq!(whose(Err(libc::ESRCH)), Whose::Gone);
+        assert_eq!(whose(Err(libc::EACCES)), Whose::NotKnown);
+        assert_eq!(whose(Err(libc::EINVAL)), Whose::NotKnown);
+    }
+
+    /// A word is held only where the process that made it is of this user,
+    /// as the kernel gives it (`SO_PEERCRED`): the same socket, read as a
+    /// process of another user would read it, is none. It is looked at and
+    /// not taken: read twice, it says the same.
+    #[test]
+    fn a_word_counts_only_where_its_maker_is_of_this_user() {
+        let start = start_in(&std::fs::read_to_string("/proc/self/stat").unwrap()).unwrap();
+        let mut bytes = TAG.to_vec();
+        bytes.extend_from_slice(format!("\0{start}\0HOME=/h\0").as_bytes());
+        let kept = made(&bytes).unwrap();
+        // SAFETY: takes nothing and cannot fail.
+        let uid = unsafe { libc::geteuid() };
+        for _ in 0..2 {
+            let word = read_one(kept.as_raw_fd(), uid).unwrap();
+            assert_eq!((word.pid, word.start), (std::process::id(), start));
+            assert_eq!(word.value("HOME"), Some(&b"/h"[..]));
+        }
+        assert!(read_one(kept.as_raw_fd(), uid.wrapping_add(1)).is_none());
     }
 }

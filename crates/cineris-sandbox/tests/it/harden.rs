@@ -53,7 +53,12 @@ const ENTRY: &str = "harden::the_roles_this_binary_is_run_again_in";
 
 /// This binary run again in `role`, with `rest` after it.
 fn in_role(role: &str, rest: &[String]) -> Command {
-    let mut command = Command::new(std::env::current_exe().unwrap());
+    in_role_of(&std::env::current_exe().unwrap(), role, rest)
+}
+
+/// `program`, a copy of this binary, run in `role`, with `rest` after it.
+fn in_role_of(program: &std::path::Path, role: &str, rest: &[String]) -> Command {
+    let mut command = Command::new(program);
     command
         .args(["--exact", ENTRY, "--nocapture", role, "--"])
         .args(rest);
@@ -70,6 +75,12 @@ fn the_roles_this_binary_is_run_again_in() {
         .iter()
         .position(|argument| argument == "--")
         .map_or_else(Vec::new, |at| arguments[at + 1..].to_vec());
+    #[cfg(target_os = "linux")]
+    if has(BETWEEN) {
+        let code = between(&after);
+        #[expect(clippy::exit, reason = "a process between ends as what it ran")]
+        std::process::exit(code);
+    }
     if has(TARGET) {
         target(after.first().map(String::as_str) == Some("closed"));
     } else if has(COMMAND) {
@@ -132,18 +143,30 @@ fn target(closed: bool) {
     command.wait().unwrap();
 }
 
-/// The `STANDING` role: says where this process stands, and ends.
+/// The `STANDING` role: says where this process stands, and ends. Left by
+/// a `detach` (`BETWEEN`), it first waits for the process that left it to
+/// end, so that it has no parent of its line when it looks.
 pub(crate) fn say_standing() -> ! {
+    use cineris_sandbox::session::{Moved, Under};
+    #[cfg(target_os = "linux")]
+    if let Some(pid) = std::env::var(DETACHED_FROM)
+        .ok()
+        .and_then(|pid| pid.parse().ok())
+    {
+        wait_for_the_end_of(pid);
+    }
     let under = match cineris_sandbox::session::under_a_session() {
-        cineris_sandbox::session::Under::Nothing => "nothing".to_owned(),
-        cineris_sandbox::session::Under::Session(how) => format!("session ({how})"),
-        cineris_sandbox::session::Under::Unknown(what) => format!("unknown ({what})"),
+        Under::Nothing => "nothing".to_owned(),
+        Under::Session(how) => format!("session ({how})"),
+        Under::Unknown(what) => format!("unknown ({what})"),
     };
     println!("under: {under}");
-    println!(
-        "moved: {}",
-        cineris_sandbox::session::moved_stores().unwrap_or_else(|| "none".to_owned())
-    );
+    let moved = match cineris_sandbox::session::moved_stores() {
+        None => "none".to_owned(),
+        Some(Moved::Variable(name)) => name,
+        Some(Moved::NotKnown(why)) => format!("not known ({why})"),
+    };
+    println!("moved: {moved}");
     std::io::stdout().flush().unwrap();
     #[expect(clippy::exit, reason = "a role ends when it has said where it stands")]
     std::process::exit(0);
@@ -871,6 +894,19 @@ pub(crate) fn standing(
     input: &str,
     program: &[String],
 ) -> (String, String) {
+    standing_under(
+        scratch,
+        &std::env::current_exe().unwrap(),
+        mark,
+        input,
+        program,
+    )
+}
+
+/// A program and its arguments in a file of `scratch`, each ended by a
+/// nul, as `HARNESS` and `BETWEEN` read what they run.
+#[cfg(target_os = "linux")]
+fn written(scratch: &cineris_testkit::scratch::Scratch, program: &[String]) -> String {
     static WRITTEN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let at = WRITTEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut text = String::new();
@@ -878,13 +914,23 @@ pub(crate) fn standing(
         text.push_str(word);
         text.push('\0');
     }
-    let file = scratch.file(format!("program-{at}"), text);
-    let rest = [
-        mark.to_owned(),
-        input.to_owned(),
-        file.display().to_string(),
-    ];
-    let output = in_role(HARNESS, &rest).output().unwrap();
+    scratch
+        .file(format!("program-{at}"), text)
+        .display()
+        .to_string()
+}
+
+/// As [`standing`], the harness run from `harness`, a copy of this binary.
+#[cfg(target_os = "linux")]
+fn standing_under(
+    scratch: &cineris_testkit::scratch::Scratch,
+    harness: &std::path::Path,
+    mark: &str,
+    input: &str,
+    program: &[String],
+) -> (String, String) {
+    let rest = [mark.to_owned(), input.to_owned(), written(scratch, program)];
+    let output = in_role_of(harness, HARNESS, &rest).output().unwrap();
     let said = String::from_utf8_lossy(&output.stdout).into_owned();
     let line = |prefix: &str| {
         said.lines()
@@ -951,5 +997,288 @@ fn sys_a_closed_harness_is_told_by_the_word_it_gives() {
     let own = std::env::current_exe().unwrap().display().to_string();
     let (under, moved) = standing(&scratch, "bare", "-", &standing_arguments(&own));
     assert!(under.starts_with("session"), "{under}");
-    assert!(moved.contains("does not hold"), "{moved}");
+    assert!(
+        moved.starts_with("not known") && moved.contains("no word"),
+        "{moved}"
+    );
+}
+
+/// On Linux: a process between a harness and what it runs, as a session's
+/// command's own would be: `BETWEEN -- <actions> <home|-> <program file>`.
+/// The actions, joined by commas: `close` closes every harness's word it
+/// holds; `forge` makes a word of its own, naming itself, that says its
+/// stores with `HOME` as given; `rename` gives it a name that is not UTF-8;
+/// `detach` starts the program and ends at once, so that the program is
+/// left with no parent of its line. It runs the program (its words in the
+/// file, each ended by a nul, so that none is a filter of the test
+/// runner's), with `HOME` as given (`-` leaves it), and ends as it does.
+#[cfg(target_os = "linux")]
+const BETWEEN: &str = "cin-harden-between";
+
+/// Where a program `detach` left is told which process to wait to see end
+/// before it says where it stands: its parent, of its line.
+#[cfg(target_os = "linux")]
+const DETACHED_FROM: &str = "CIN_HARDEN_DETACHED_FROM";
+
+/// The arguments that run this binary as `BETWEEN`.
+#[cfg(target_os = "linux")]
+fn between_arguments(actions: &str, home: &str, program_file: &str) -> Vec<String> {
+    let own = std::env::current_exe().unwrap().display().to_string();
+    [
+        own.as_str(),
+        "--exact",
+        ENTRY,
+        "--nocapture",
+        BETWEEN,
+        "--",
+        actions,
+        home,
+        program_file,
+    ]
+    .map(str::to_owned)
+    .to_vec()
+}
+
+/// The `BETWEEN` role.
+#[cfg(target_os = "linux")]
+fn between(after: &[String]) -> i32 {
+    let actions: Vec<&str> = after[0].split(',').collect();
+    let home = (after[1] != "-").then(|| after[1].clone());
+    let program = std::fs::read_to_string(&after[2]).unwrap();
+    let program: Vec<&str> = program.split_terminator('\0').collect();
+    if actions.contains(&"close") {
+        for word in words_held() {
+            // SAFETY: closes a descriptor this process holds and nothing in
+            // it uses: a sequenced-packet socket it inherited.
+            unsafe { libc::close(word) };
+        }
+    }
+    // Kept for the process's life: its maker runs while what it starts
+    // does.
+    let _forged = actions.contains(&"forge").then(|| forge(home.as_deref()));
+    if actions.contains(&"rename") {
+        // The thread group's own name, which `/proc/<pid>/stat` shows,
+        // whichever thread writes it.
+        std::fs::write("/proc/self/comm", b"\xff\xfe-x").unwrap();
+    }
+    let mut command = Command::new(program[0]);
+    command.args(&program[1..]);
+    if let Some(home) = &home {
+        command.env("HOME", home);
+    }
+    if actions.contains(&"detach") {
+        #[allow(
+            clippy::zombie_processes,
+            reason = "this process ends at once, and the program it leaves is handed to another \
+                      parent, which waits for it"
+        )]
+        let _left = command
+            .env(DETACHED_FROM, std::process::id().to_string())
+            .stdin(Stdio::null())
+            .spawn()
+            .unwrap();
+        return 0;
+    }
+    command.status().unwrap().code().unwrap_or(99)
+}
+
+/// The sequenced-packet sockets this process holds: a harness's word is
+/// one.
+#[cfg(target_os = "linux")]
+fn words_held() -> Vec<i32> {
+    let held: Vec<i32> = std::fs::read_dir("/proc/self/fd")
+        .unwrap()
+        .flatten()
+        .filter_map(|entry| entry.file_name().to_str()?.parse().ok())
+        .collect();
+    held.into_iter()
+        .filter(|fd| {
+            let mut kind: libc::c_int = 0;
+            let mut length = libc::socklen_t::try_from(size_of::<libc::c_int>()).unwrap();
+            // SAFETY: `kind` and `length` are live, and `length` says how
+            // large `kind` is; a descriptor that is not a socket fails.
+            let asked = unsafe {
+                libc::getsockopt(
+                    *fd,
+                    libc::SOL_SOCKET,
+                    libc::SO_TYPE,
+                    (&raw mut kind).cast(),
+                    &raw mut length,
+                )
+            };
+            asked == 0 && kind == libc::SOCK_SEQPACKET
+        })
+        .collect()
+}
+
+/// A word this process makes of its own, as a command could: a pair of
+/// sequenced-packet sockets, the record Cineris writes (its tag, this
+/// process's start, and its stores, `HOME` as given) sent into the end
+/// kept, the other end closed, and the end kept inherited by what it
+/// starts. Its maker, as the kernel says, is this process.
+#[cfg(target_os = "linux")]
+fn forge(home: Option<&str>) -> std::os::fd::OwnedFd {
+    use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd};
+    use std::os::unix::ffi::OsStrExt as _;
+    let stat = std::fs::read_to_string("/proc/self/stat").unwrap();
+    let start = stat[stat.rfind(')').unwrap() + 1..]
+        .split_whitespace()
+        .nth(19)
+        .unwrap()
+        .to_owned();
+    let mut record = b"cineris-session-stores 1\0".to_vec();
+    record.extend_from_slice(start.as_bytes());
+    record.push(0);
+    for name in [
+        "HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_STATE_HOME",
+        "XDG_DATA_HOME",
+        "CINERIS_CONFIG",
+        "CINERIS_DATA_DIR",
+    ] {
+        let value = match home {
+            Some(home) if name == "HOME" => Some(std::ffi::OsString::from(home)),
+            _ => std::env::var_os(name),
+        };
+        if let Some(value) = value {
+            record.extend_from_slice(name.as_bytes());
+            record.push(b'=');
+            record.extend_from_slice(value.as_bytes());
+            record.push(0);
+        }
+    }
+    let mut pair = [0; 2];
+    // SAFETY: `pair` has room for the two descriptors the call writes.
+    let made =
+        unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_SEQPACKET, 0, pair.as_mut_ptr()) };
+    assert_eq!(made, 0, "{}", std::io::Error::last_os_error());
+    // SAFETY: both were just made by the call and nothing else owns them.
+    let (kept, writer) = unsafe { (OwnedFd::from_raw_fd(pair[0]), OwnedFd::from_raw_fd(pair[1])) };
+    // SAFETY: `writer` is open, and the record lives through the call.
+    let sent = unsafe { libc::send(writer.as_raw_fd(), record.as_ptr().cast(), record.len(), 0) };
+    assert_eq!(usize::try_from(sent).ok(), Some(record.len()));
+    drop(writer);
+    kept
+}
+
+/// Waits for the process `pid` to end, by a descriptor of it
+/// (`pidfd_open`), which becomes readable when it has ended, after the
+/// processes it started were handed to another parent. One gone already
+/// has handed them on.
+#[cfg(target_os = "linux")]
+fn wait_for_the_end_of(pid: u32) {
+    use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd};
+    let pid = libc::pid_t::try_from(pid).unwrap();
+    // SAFETY: the call takes a process id and flags, and gives a new
+    // descriptor or -1.
+    let made = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+    let Some(made) = i32::try_from(made).ok().filter(|fd| *fd >= 0) else {
+        return;
+    };
+    // SAFETY: just made by the call, and owned by nothing else.
+    let end = unsafe { OwnedFd::from_raw_fd(made) };
+    let mut ask = libc::pollfd {
+        fd: end.as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    // SAFETY: one live `pollfd`; no time limit, the process's end is waited
+    // for, as a test waits for any event, bounded by the runner's limit.
+    while unsafe { libc::poll(&raw mut ask, 1, -1) } < 0
+        && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted
+    {}
+}
+
+/// A command's process between a closed harness and a nested run that
+/// makes a word of its own, naming itself and a moved `HOME`, does not
+/// stand for the session: the line is read on to the harness, whose word
+/// says otherwise; and where the command closed the harness's word too, a
+/// harness that is known by its name (`cin`) gave none it holds, which
+/// refuses (the review of the harness's word, W1: the nearest word alone
+/// decided, and the moved `HOME` passed).
+#[cfg(target_os = "linux")]
+#[test]
+fn sys_a_word_a_command_makes_does_not_stand_for_its_session() {
+    let scratch = cineris_testkit::scratch::Scratch::outside(
+        "cineris-sandbox-harden",
+        "sys_a_word_a_command_makes_does_not_stand_for_its_session",
+    );
+    let copy = other_copy(&scratch);
+    let elsewhere = scratch.join("elsewhere").display().to_string();
+    let standing_file = written(&scratch, &standing_arguments(&copy));
+    let forged = between_arguments("forge", &elsewhere, &standing_file);
+    let (under, moved) = standing(&scratch, "mark", "-", &forged);
+    assert!(under.starts_with("session"), "{under}");
+    assert_eq!(moved, "HOME");
+
+    let cin = scratch.join("cin");
+    std::fs::copy(std::env::current_exe().unwrap(), &cin).unwrap();
+    let closed = between_arguments("close,forge", &elsewhere, &standing_file);
+    let (under, moved) = standing_under(&scratch, &cin, "mark", "-", &closed);
+    assert!(under.starts_with("session"), "{under}");
+    assert!(
+        moved.starts_with("not known") && moved.contains("no word"),
+        "{moved}"
+    );
+}
+
+/// A process of the line whose name is not UTF-8 leaves the line not
+/// known; with the harness's word closed too, nothing tells where the
+/// session's stores are, and a nested run with `HOME` moved is refused (the
+/// review of the harness's word, W2: only the `CINERIS_` variables were
+/// compared, and it passed).
+#[cfg(target_os = "linux")]
+#[test]
+fn sys_a_line_that_cannot_be_read_refuses_a_nested_runs_stores() {
+    let scratch = cineris_testkit::scratch::Scratch::outside(
+        "cineris-sandbox-harden",
+        "sys_a_line_that_cannot_be_read_refuses_a_nested_runs_stores",
+    );
+    let copy = other_copy(&scratch);
+    let elsewhere = scratch.join("elsewhere").display().to_string();
+    let standing_file = written(&scratch, &standing_arguments(&copy));
+    let renamed = between_arguments("close,rename", &elsewhere, &standing_file);
+    let (under, moved) = standing(&scratch, "mark", "-", &renamed);
+    assert!(under.starts_with("unknown"), "{under}");
+    assert!(
+        moved.starts_with("not known") && moved.contains("could not be read"),
+        "{moved}"
+    );
+}
+
+/// A command that leaves its line of parents (its parent ends, and it is
+/// handed to the system's first process or a subreaper) and keeps its
+/// harness's word is under the session's command while the harness runs
+/// (the review of the harness's word, W3: words were asked only of the
+/// processes of the line); a nested run there finds no harness on its line
+/// to read its session's stores from, and is refused, with its stores moved
+/// or not.
+#[cfg(target_os = "linux")]
+#[test]
+fn sys_a_command_that_left_its_line_is_under_its_session_by_its_word() {
+    let scratch = cineris_testkit::scratch::Scratch::outside(
+        "cineris-sandbox-harden",
+        "sys_a_command_that_left_its_line_is_under_its_session_by_its_word",
+    );
+    let copy = other_copy(&scratch);
+    let elsewhere = scratch.join("elsewhere").display().to_string();
+    let standing_file = written(&scratch, &standing_arguments(&copy));
+    for home in ["-", elsewhere.as_str()] {
+        // The harness waits on `cat`, which waits for the program the
+        // process between left, on the pipe it holds.
+        let mut program: Vec<String> = ["/bin/sh", "-c", "\"$@\" | cat", "sh"]
+            .map(str::to_owned)
+            .to_vec();
+        program.extend(between_arguments("detach", home, &standing_file));
+        let (under, moved) = standing(&scratch, "mark", "-", &program);
+        assert!(
+            under.starts_with("session") && under.contains("holds the word"),
+            "{under}"
+        );
+        assert!(
+            moved.starts_with("not known") && moved.contains("no process of its line"),
+            "{home}: {moved}"
+        );
+    }
 }

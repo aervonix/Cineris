@@ -36,8 +36,8 @@ caught-by:
 [break] a-hidden-process-of-this-user-ends-the-line
 rule: A process of this user that /proc does not show (hidepid hides a harness that closed itself from its own commands) is not known on a line of parents, and refuses; only another user's, or one that is gone, ends the line.
 file: crates/cineris-sandbox/src/session.rs
-find: Some(true) => Seen::Hidden,
-replace: Some(true) => Seen::Unseen,
+find: Whose::Ours => Seen::Hidden,
+replace: Whose::Ours => Seen::Unseen,
 os: linux
 caught-by:
     cineris-sandbox session::sys::tests::a_process_proc_does_not_show_is_told_by_whose_it_is
