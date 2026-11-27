@@ -17,6 +17,7 @@ Measured and not taken:
 | Our own crates at `opt-level = 1` | 45970482928 (tiers), 45970486829 (job) | 5, 2 | 8 ms | 53.7 → 39.4 s | cold 213 → 660 s |
 | `cineris-tui` at `opt-level = 1` | 45975998314 (job) | 2 | 5 ms | 33.3 → 31.6 s | cold 119 → 150 s |
 | `cineris-core` at `opt-level = 1` | 45976001836 (job) | 2 | 8 ms | 63.1 → 61.6 s | cold 212 → 284 s |
+| Windows' tiers 1 and 2 one at a time | 45987739680 | 5 | 7 ms | 60.3 → 53.6 s | none; the runs' wall time 116.8 → 167.9 s |
 
 The job A/B of the third-party crates (`try` 45979975138, two rounds): a cold build 186.0 → 214.7 s, tier 2 52.4 → 51.6 s.
 
