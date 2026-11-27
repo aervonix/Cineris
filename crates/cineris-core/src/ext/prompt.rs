@@ -205,7 +205,14 @@ mod tests {
         registry
             .set_source("notes", SourceKind::Extension, "Notes", Vec::new())
             .unwrap();
+        // A server's source there before the parts are made is listed
+        // once: the snapshot takes the extensions' alone.
+        registry
+            .set_source("early", SourceKind::Mcp, "Early", Vec::new())
+            .unwrap();
         let parts = PromptParts::new(Arc::clone(&registry));
+        assert_eq!(shown(&parts.sections()).1, ["early", "notes"]);
+        assert!(registry.remove_source("early", SourceKind::Mcp));
         assert_eq!(shown(&parts.sections()).1, ["notes"]);
         registry
             .set_source("docs", SourceKind::Mcp, "Product docs", Vec::new())

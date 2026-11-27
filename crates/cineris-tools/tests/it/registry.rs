@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use cineris_base::Classified;
+use cineris_protocol::item::ToolOutcome;
 use cineris_protocol::lease::{Effect as EffectKind, RuleAction};
 use cineris_tools::{
     BoxFuture, Concurrency, ConcurrencyClass, Effect, Hold, Json, NetworkTarget, Plan, PlanCx,
@@ -480,18 +481,151 @@ fn a_held_tool_shows_only_its_name_and_why_it_waits() {
     assert_eq!(found[0].parameters, Json::Null);
     assert_eq!(found[0].hold, Some(Hold::Changed));
 
-    // A call of it is planned with arguments that do not fit, which a
-    // mismatch would have quoted the schema for.
+    // A call of it is refused before anything decides it, whatever its
+    // arguments: one that would not fit, whose mismatch would quote the
+    // schema, and one that would.
     let call = ToolCall::new(registry);
+    for arguments in [json!({}), json!({"title": "t"})] {
+        let error = ws
+            .plan(
+                &call,
+                json!({"tool": "tracker/create_issue", "arguments": arguments}),
+            )
+            .unwrap_err();
+        assert_eq!(error.code(), "needs_approval");
+        let result = error.into_result();
+        assert_eq!(result.outcome(), &ToolOutcome::Denied);
+        assert_eq!(
+            result.text(),
+            "The tool `tracker/create_issue` is changed since the person approved it, and needs \
+             the person's approval before it can be called: `cineris mcp approve tracker`."
+        );
+    }
+    let fresh = ws
+        .plan(&call, json!({"tool": "tracker/fresh_tool"}))
+        .unwrap_err();
+    assert!(
+        fresh
+            .to_string()
+            .starts_with("The tool `tracker/fresh_tool` is new, not yet approved")
+    );
+    // Through the pair as the loop runs it: denied, and nothing ran.
+    let denied = ws.call(
+        &call,
+        json!({"tool": "tracker/create_issue", "arguments": {"title": "t"}}),
+    );
+    assert_eq!(denied.outcome(), &ToolOutcome::Denied);
+    assert!(!denied.text().contains("ssh"));
+    assert_eq!(runs.load(Ordering::SeqCst), 0);
+    // A tool of the source that is not held is called as before.
     let plan = ws
         .plan(
             &call,
-            json!({"tool": "tracker/create_issue", "arguments": {}}),
+            json!({"tool": "tracker/find_issue", "arguments": {}}),
         )
         .unwrap();
-    assert!(plan.summary.starts_with("tracker/create_issue: "));
     assert_eq!(plan.concurrency, Concurrency::Exclusive);
-    assert_eq!(runs.load(Ordering::SeqCst), 0);
+}
+
+/// A schema's keys are cut where they are shown, as its values are.
+#[test]
+fn a_shown_schemas_keys_are_cut_too() {
+    let ws = Workspace::new("tool_search_long_keys");
+    let key = "ü".repeat(1500);
+    let registry = Arc::new(ToolRegistry::new());
+    registry
+        .set_source(
+            "big",
+            SourceKind::Mcp,
+            "",
+            vec![Arc::new(Remote::new(
+                "keys",
+                "Has a long key.",
+                json!({"type": "object", "properties": {key.clone(): {"type": "string"}}}),
+            ))],
+        )
+        .unwrap();
+    let text = ok(&ws.call(&ToolSearch::new(registry), json!({"query": "keys"})));
+    assert!(
+        text.contains(&format!("\"{}…\"", "ü".repeat(1024))),
+        "{text}"
+    );
+    assert!(!text.contains(&key));
+}
+
+/// What acts unseen in a tool's text is written as an escape wherever the
+/// registry shows it, whoever wrote it (an extension's author too): its
+/// description in a search, every string of its schema, and what a
+/// mismatch quotes of it.
+#[test]
+fn what_acts_unseen_in_a_tools_text_is_escaped_where_it_is_shown() {
+    let ws = Workspace::new("tool_text_escaped");
+    let registry = Arc::new(ToolRegistry::new());
+    registry
+        .set_source(
+            "notes",
+            SourceKind::Extension,
+            "",
+            vec![Arc::new(Remote::new(
+                "pick",
+                "Picks\u{202e} one.\nThen \u{e0049}obeys.",
+                json!({
+                    "type": "object",
+                    "properties": {"mode": {"enum": ["x\u{200b}"], "description": "a\u{e0041}"}},
+                    "required": ["mode"]
+                }),
+            ))],
+        )
+        .unwrap();
+    let text = ok(&ws.call(
+        &ToolSearch::new(Arc::clone(&registry)),
+        json!({"query": "pick"}),
+    ));
+    assert!(
+        text.contains("\n  Picks\\u{202e} one.\n  Then \\u{e0049}obeys."),
+        "{text}"
+    );
+    // In the schema's JSON a backslash is written twice.
+    assert!(
+        text.contains("x\\\\u{200b}") && text.contains("a\\\\u{e0041}"),
+        "{text}"
+    );
+    for unseen in ['\u{202e}', '\u{e0049}', '\u{200b}', '\u{e0041}'] {
+        assert!(!text.contains(unseen), "{text:?}");
+    }
+    let error = failed(&ws.call(
+        &ToolCall::new(registry),
+        json!({"tool": "notes/pick", "arguments": {"mode": "y"}}),
+    ));
+    assert!(error.contains("x\\u{200b}"), "{error}");
+    assert!(!error.contains('\u{200b}'), "{error:?}");
+}
+
+/// A source's description is made one line, with what acts unseen taken
+/// out, when it is registered, so every view of it is clean: a search that
+/// finds nothing lists it so.
+#[test]
+fn a_sources_description_is_cleaned_where_it_is_registered() {
+    let ws = Workspace::new("tool_search_source_cleaned");
+    let registry = Arc::new(ToolRegistry::new());
+    registry
+        .set_source(
+            "docs",
+            SourceKind::Mcp,
+            "Docs \u{e0049}\u{e0067}\u{202e}for \t the team",
+            vec![Arc::new(Remote::new(
+                "find",
+                "Finds.",
+                json!({"type": "object"}),
+            ))],
+        )
+        .unwrap();
+    assert_eq!(registry.sources()[0].description, "Docs for the team");
+    let text = ok(&ws.call(&ToolSearch::new(registry), json!({"query": "zzzz"})));
+    assert!(
+        text.contains("\n  docs/ (1 tool): Docs for the team\n"),
+        "{text}"
+    );
 }
 
 // --- tool_search -------------------------------------------------------------

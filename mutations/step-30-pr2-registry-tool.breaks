@@ -432,14 +432,16 @@ caught-by:
 
 # --- The round's cache of early results ---------------------------------------------
 
-[break] a-kept-run-is-adopted-after-its-call-moved
-rule: A run kept from a response sent again is not used for a call whose plan names other paths than the run's: the call runs again.
+[break] a-kept-run-outlives-a-call-that-runs-alone
+rule: Every run kept from a response sent again is discarded, one still running included, when a call that runs alone and may change the file system starts: the calls it was kept for run again.
 file: crates/cineris-agent/src/round.rs
-in: Round::planned
-find: cached.footprint.paths != footprint.paths
-replace: false
+in: Round::start
+find: self.discard_kept();
+replace:
 caught-by:
     cineris-agent::it redecide::a_kept_read_is_not_used_for_a_call_planned_again_onto_another_path
+    cineris-agent::it early::a_kept_read_is_not_used_after_a_tool_from_outside_ran_before_it
+    cineris-agent::it early::a_kept_read_still_running_is_stopped_when_a_tool_from_outside_starts
 
 # --- The check of a build without the MCP client --------------------------------------
 
@@ -460,3 +462,200 @@ find: feature: "mcp"
 replace: feature: "scripts"
 caught-by:
     checks::tests::check_holds_a_build_of_the_binary_without_the_mcp_client
+
+# --- The full review ----------------------------------------------------------------
+
+[break] a-held-tool-is-called
+rule: `tool_call` refuses a call of a held tool before the permission engine is asked, whatever its arguments, the level and the rules.
+file: crates/cineris-tools/src/registry.rs
+in: ToolCall::plan
+find: if let Some(hold) = hold {
+replace: if let Some(hold) = hold.filter(|_| false) {
+packages: cineris-tools, cineris-mcp, cineris-core
+caught-by:
+    cineris-tools::it registry::a_held_tool_shows_only_its_name_and_why_it_waits
+    cineris-mcp::it tool::a_held_tools_call_is_refused_and_never_reaches_the_server
+    cineris-core::it mcp_sources::a_held_tools_call_never_reaches_its_server_whatever_would_allow_it
+
+[break] a-held-tools-refusal-is-an-error
+rule: The refusal of a held tool's call is a denial.
+file: crates/cineris-tools/src/result.rs
+in: ToolError::into_result
+find: Self::NeedsApproval(text) => ToolResult::denied(text)
+replace: Self::NeedsApproval(text) => ToolResult::error(text)
+caught-by:
+    cineris-tools::it registry::a_held_tool_shows_only_its_name_and_why_it_waits
+
+[break] a-held-tools-mismatch-quotes-its-schema
+rule: A held tool quotes nothing of its definition when its arguments do not fit: not the schema, not the problems.
+file: crates/cineris-mcp/src/tool.rs
+in: McpTool::mismatch
+find: if self.hold.is_some() {
+replace: if false {
+caught-by:
+    cineris-mcp::it tool::a_mismatch_on_a_held_tool_shows_nothing_of_its_schema
+
+[break] a-sources-description-is-kept-as-written
+rule: A source's description is made one line, with what acts unseen taken out, when it is registered: every view of it is clean.
+file: crates/cineris-tools/src/registry.rs
+in: ToolRegistry::set_source_with_holds
+find: one_line(description.lines().next().unwrap_or(""), SOURCE_DESCRIPTION_BYTES)
+replace: if SOURCE_DESCRIPTION_BYTES > 0 { description.lines().next().unwrap_or("").trim().to_owned() } else { one_line(description, 0) }
+packages: cineris-tools, cineris-mcp
+caught-by:
+    cineris-tools::it registry::a_sources_description_is_cleaned_where_it_is_registered
+    cineris-mcp::it tool::a_search_that_finds_nothing_shows_each_sources_description_cleaned
+
+[break] a-tools-description-is-shown-raw-in-a-search
+rule: A search writes what acts unseen in a tool's description as an escape, an extension's too.
+file: crates/cineris-tools/src/registry.rs
+in: ToolSearch::run
+find: text.push_str(&visible_to_the_model(line));
+replace: text.push_str(line);
+caught-by:
+    cineris-tools::it registry::what_acts_unseen_in_a_tools_text_is_escaped_where_it_is_shown
+
+[break] a-mismatchs-problems-are-quoted-raw
+rule: The problems `tool_call` quotes of arguments that do not fit have what acts unseen written as an escape.
+file: crates/cineris-tools/src/registry.rs
+in: ToolCall::plan
+find: .map(|problem| visible_to_the_model(problem))
+replace: .map(|problem| std::borrow::Cow::Borrowed(problem.as_str()))
+caught-by:
+    cineris-tools::it registry::what_acts_unseen_in_a_tools_text_is_escaped_where_it_is_shown
+
+[break] a-shown-schemas-strings-are-not-escaped
+rule: A shown schema has what acts unseen in every string written as an escape.
+file: crates/cineris-tools/src/registry.rs
+in: changes_when_shown
+find: text.len() > MAX_DESCRIPTION_BYTES || matches!(visible_to_the_model(text), Cow::Owned(_))
+replace: text.len() > MAX_DESCRIPTION_BYTES
+caught-by:
+    cineris-tools::it registry::what_acts_unseen_in_a_tools_text_is_escaped_where_it_is_shown
+
+[break] a-shown-schemas-keys-are-not-cut
+rule: A shown schema's keys are cut at 2 KiB, as its values are.
+file: crates/cineris-tools/src/registry.rs
+in: cut_strings
+find: .map(|(key, value)| (cut(key), cut_strings(value)))
+replace: .map(|(key, value)| (key.clone(), cut_strings(value)))
+caught-by:
+    cineris-tools::it registry::a_shown_schemas_keys_are_cut_too
+
+[break] a-call-is-checked-against-the-shown-schema
+rule: A server tool checks the arguments against the server's own schema, not the one shown, before it sends them.
+file: crates/cineris-mcp/src/tool.rs
+in: McpTool::run
+find: let arguments = match cineris_tools::schema::validate(&self.schema, &arguments) {
+replace: let arguments = match cineris_tools::schema::validate(&self.spec.parameters, &arguments) {
+caught-by:
+    cineris-mcp::it tool::a_value_shown_with_escapes_is_given_back_as_it_was_shown
+
+[break] escapes-are-not-read-back
+rule: Arguments that fit the server's schema only with the escapes the model was shown read back are sent so.
+file: crates/cineris-mcp/src/tool.rs
+in: McpTool::run
+find: let read_back = unescaped(&arguments);
+replace: let read_back = if arguments.is_null() { unescaped(&arguments) } else { arguments.clone() };
+caught-by:
+    cineris-mcp::it tool::a_value_shown_with_escapes_is_given_back_as_it_was_shown
+
+[break] a-mismatch-quotes-the-servers-schema
+rule: A server tool's mismatch quotes the schema as the model is shown it, every string cut at 2 KiB.
+file: crates/cineris-mcp/src/tool.rs
+in: McpTool::mismatch
+find: shown_schema(&self.spec.parameters)
+replace: if false { shown_schema(&self.spec.parameters) } else { std::borrow::Cow::Borrowed(&self.spec.parameters) }
+caught-by:
+    cineris-mcp::it tool::a_mismatch_quotes_the_schema_as_shown
+
+[break] a-mismatchs-problems-are-raw
+rule: A server tool's mismatch has what acts unseen in its problems, which quote the server's schema, written as an escape.
+file: crates/cineris-mcp/src/tool.rs
+in: McpTool::mismatch
+find: .map(|problem| visible_to_the_model(problem))
+replace: .map(|problem| std::borrow::Cow::Borrowed(problem.as_str()))
+caught-by:
+    cineris-mcp::it tool::a_mismatch_quotes_the_schema_as_shown
+
+[break] a-schema-over-its-cap-once-shown-is-admitted
+rule: The cap on a schema holds of it as the model is shown it too.
+file: crates/cineris-mcp/src/tool.rs
+in: admit
+find: if larger_than(&shown, MAX_SCHEMA_BYTES) {
+replace: if false {
+caught-by:
+    cineris-mcp::it tool::a_schema_over_its_cap_once_escaped_is_left_out
+
+[break] a-resources-text-is-passed-on-raw
+rule: An embedded resource's text has what acts unseen written as an escape, as a text block's has.
+file: crates/cineris-mcp/src/tool.rs
+in: McpTool::rendered
+find: .unwrap_or_default(), as_received(text)
+replace: .unwrap_or_default(), text
+caught-by:
+    cineris-mcp::it tool::a_result_is_labelled_as_the_servers_and_each_block_has_its_form
+
+[break] a-structured-result-is-passed-on-raw
+rule: A structured result given as compact JSON has what acts unseen written as an escape.
+file: crates/cineris-mcp/src/tool.rs
+in: McpTool::rendered
+find: parts.push(as_received(&structured.to_string()).into_owned());
+replace: parts.push(structured.to_string());
+caught-by:
+    cineris-mcp::it tool::a_structured_result_is_given_once
+
+[break] a-links-address-is-raw
+rule: A link's address in a result is escaped and cut, as a line of the harness's.
+file: crates/cineris-mcp/src/tool.rs
+in: McpTool::rendered
+find: format!("[a link to the resource {} at {}]", line(name), line(uri))
+replace: format!("[a link to the resource {} at {}]", line(name), uri)
+caught-by:
+    cineris-mcp::it tool::a_result_is_labelled_as_the_servers_and_each_block_has_its_form
+    cineris-mcp::it tool::a_servers_long_texts_are_cut_at_two_kib
+
+[break] audios-type-is-raw
+rule: An audio block's type in a result is escaped.
+file: crates/cineris-mcp/src/tool.rs
+in: McpTool::rendered
+find: format!("[audio, {}, {}: not shown]", line(mime), size(*bytes))
+replace: format!("[audio, {}, {}: not shown]", mime, size(*bytes))
+caught-by:
+    cineris-mcp::it tool::a_result_is_labelled_as_the_servers_and_each_block_has_its_form
+
+[break] a-blobs-type-is-raw
+rule: An embedded resource's type, when it is data, is escaped in a result.
+file: crates/cineris-mcp/src/tool.rs
+in: McpTool::rendered
+find: mime.as_deref().map_or(Cow::Borrowed("data"), line)
+replace: mime.as_deref().map_or(Cow::Borrowed("data"), Cow::Borrowed)
+caught-by:
+    cineris-mcp::it tool::a_result_is_labelled_as_the_servers_and_each_block_has_its_form
+
+[break] a-results-own-line-is-not-cut
+rule: A server's text on a result's own line is cut at 2 KiB.
+file: crates/cineris-mcp/src/tool.rs
+in: line
+find: Cow::Owned(cut(&shown, MAX_SHOWN))
+replace: shown
+caught-by:
+    cineris-mcp::it tool::a_servers_long_texts_are_cut_at_two_kib
+
+[break] a-failed-calls-words-are-not-cut
+rule: A failed call's words, in which a server's message may be, are cut at 2 KiB.
+file: crates/cineris-mcp/src/tool.rs
+in: McpTool::failed
+find: cut(&visible_to_the_model(&other.to_string()), MAX_SHOWN)
+replace: visible_to_the_model(&other.to_string()).into_owned()
+caught-by:
+    cineris-mcp::it tool::a_servers_long_texts_are_cut_at_two_kib
+
+[break] prompt-parts-start-with-every-source
+rule: The prompt parts start from the extensions' sources alone: a server's there already is listed once, from the registry.
+file: crates/cineris-core/src/ext/prompt.rs
+in: PromptParts::new
+find: registry.sources_of(SourceKind::Extension)
+replace: registry.sources()
+caught-by:
+    cineris-core ext::prompt::tests::a_servers_source_is_listed_as_the_registry_holds_it

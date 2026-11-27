@@ -743,3 +743,82 @@ fn a_call_whose_block_ends_before_an_earlier_calls_block_waits_for_it() {
     );
     assert_valid_history(&last_request(&world.provider).messages);
 }
+
+/// A read kept from a response sent again is not used once a tool from
+/// outside that declares no path ran before it in the new response: such a
+/// tool (an MCP server's) may have written the file, so the kept run goes
+/// as it starts, and the read runs again after it (the review of step 30's
+/// second part, M3).
+#[test]
+fn a_kept_read_is_not_used_after_a_tool_from_outside_ran_before_it() {
+    let fails = Gate::new();
+    let response = Response::new()
+        .tool_call("c1", "read", &json!({"path": "x"}))
+        .wait(&fails)
+        .event(retry(2))
+        .event(start())
+        .tool_call("c2", "solo", &json!({"id": "w"}))
+        .tool_call("c3", "read", &json!({"path": "x"}))
+        .end(StopReason::ToolCalls);
+    let world = World::new("kept_after_solo", [response, says("Done.")]);
+    let rig = Setup::new(&world).start(&world);
+    world.run(async {
+        rig.prompt("go");
+        rig.events.seen("result:read:success", 1).await;
+        fails.open();
+        rig.events.turns(1).await;
+    });
+    assert_eq!(
+        world.log.lines(),
+        [
+            "start read x",
+            "end read x",
+            "start solo w",
+            "end solo w",
+            "start read x",
+            "end read x"
+        ],
+        "the read the model put after the tool is answered with what was read before it"
+    );
+    assert_valid_history(&last_request(&world.provider).messages);
+}
+
+/// The same when the kept read is still running as the tool starts: it is
+/// stopped and discarded, not joined after the tool ran.
+#[test]
+fn a_kept_read_still_running_is_stopped_when_a_tool_from_outside_starts() {
+    let fails = Gate::new();
+    let read = json!({"path": "x", "gate": "slow"});
+    let response = Response::new()
+        .tool_call("c1", "read", &read)
+        .wait(&fails)
+        .event(retry(2))
+        .event(start())
+        .tool_call("c2", "solo", &json!({"id": "w"}))
+        .tool_call("c3", "read", &read)
+        .end(StopReason::ToolCalls);
+    let world = World::new("kept_running_after_solo", [response, says("Done.")]);
+    let rig = Setup::new(&world).start(&world);
+    world.run(async {
+        rig.prompt("go");
+        world.log.has("start read x").await;
+        fails.open();
+        world.log.has("end solo w").await;
+        world.gates.open("slow");
+        rig.events.turns(1).await;
+    });
+    let lines = world.log.lines();
+    let at = |wanted: &str| lines.iter().position(|line| line == wanted);
+    assert!(lines.contains(&"cancelled read x".to_owned()), "{lines:?}");
+    let ends: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| *line == "end read x")
+        .map(|(at, _)| at)
+        .collect();
+    assert_eq!(ends.len(), 1, "{lines:?}");
+    assert!(at("end solo w") < Some(ends[0]), "{lines:?}");
+    let starts = lines.iter().filter(|line| *line == "start read x").count();
+    assert_eq!(starts, 2, "the read ran again after the tool: {lines:?}");
+    assert_valid_history(&last_request(&world.provider).messages);
+}

@@ -216,6 +216,11 @@ pub enum ToolError {
     /// There is no tool by that name.
     #[error("{0}")]
     UnknownTool(String),
+    /// The tool is held: the person has not approved its definition as it
+    /// is now (`registry::Hold`). The message says how to approve it, and
+    /// nothing of the definition. Its result is a denial.
+    #[error("{0}")]
+    NeedsApproval(String),
     /// A bug in the harness: a plan run by the wrong tool, a task that
     /// panicked.
     #[error("internal error: {0}")]
@@ -232,7 +237,10 @@ impl ToolError {
     /// The error as the result of the call that caused it.
     #[must_use]
     pub fn into_result(self) -> ToolResult {
-        ToolResult::error(self.to_string())
+        match self {
+            Self::NeedsApproval(text) => ToolResult::denied(text),
+            other => ToolResult::error(other.to_string()),
+        }
     }
 }
 
@@ -240,6 +248,7 @@ impl Classified for ToolError {
     fn kind(&self) -> ErrorKind {
         match self {
             Self::InvalidArguments(_) | Self::Path(_) | Self::UnknownTool(_) => ErrorKind::Tool,
+            Self::NeedsApproval(_) => ErrorKind::Permission,
             Self::Internal(_) => ErrorKind::Internal,
         }
     }
@@ -249,6 +258,7 @@ impl Classified for ToolError {
             Self::InvalidArguments(_) => "invalid_arguments",
             Self::Path(_) => "path_refused",
             Self::UnknownTool(_) => "unknown_tool",
+            Self::NeedsApproval(_) => "needs_approval",
             Self::Internal(_) => "internal",
         }
     }

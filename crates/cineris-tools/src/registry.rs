@@ -16,16 +16,24 @@
 //! - **A tool may be held** ([`Hold`]): its definition is new, or changed
 //!   since the person approved it. A search shows only its full name and
 //!   one line saying so, never its description or its schema, which may be
-//!   the change itself; and `tool_call` does not check its arguments
-//!   against a schema the model was not shown.
-//! - **What a search shows of a schema** has every string in it cut at
-//!   2 KiB, as a description is ([`shown_schema`]).
+//!   the change itself; and `tool_call` refuses a call of it, saying how
+//!   the person approves it and nothing of its definition
+//!   ([`ToolError::NeedsApproval`], a denial), whatever the level and the
+//!   rules, since it fails before the policy is asked.
+//! - **Every view of a source's or a tool's text is cleaned:** a source's
+//!   description is made one line with what acts unseen taken out when it
+//!   is registered ([`cineris_base::one_line`]); a tool's description in a
+//!   search, and every string of a schema a search or an error shows, a
+//!   key or a value, has what acts unseen written as an escape
+//!   ([`cineris_base::visible_to_the_model`]) and is cut at 2 KiB
+//!   ([`shown_schema`]).
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard};
 
 use cineris_base::text::truncate_bytes;
+use cineris_base::{one_line, visible_to_the_model};
 use cineris_protocol::lease::RuleAction;
 use serde::Deserialize;
 use serde_json::json;
@@ -43,6 +51,10 @@ use crate::schema;
 /// string in its schema. Descriptions and schemas are written by third
 /// parties, and reach the model only here.
 pub const MAX_DESCRIPTION_BYTES: usize = 2048;
+
+/// The longest a source's description is kept, in bytes: what section 6
+/// and a search that finds nothing show of it.
+pub const SOURCE_DESCRIPTION_BYTES: usize = 200;
 
 /// How many tools a search returns unless the call says otherwise.
 const DEFAULT_LIMIT: u64 = 8;
@@ -259,7 +271,13 @@ impl ToolRegistry {
                 });
             }
         }
-        let description = description.lines().next().unwrap_or("").trim().to_owned();
+        // One line, with what acts unseen taken out, once for every view of
+        // it: section 6, and a search that finds nothing. It is the user's
+        // text, or a project's approved one; a repository can write it.
+        let description = one_line(
+            description.lines().next().unwrap_or(""),
+            SOURCE_DESCRIPTION_BYTES,
+        );
         let mut sources = self.sources.write().unwrap_or_else(PoisonError::into_inner);
         if let Some(holder) = sources.get(source).map(|held| held.kind)
             && holder != kind
@@ -459,37 +477,49 @@ impl std::fmt::Debug for ToolRegistry {
 }
 
 /// `schema` as a search result or an error shows it: every string in it,
-/// a key or a value, cut at [`MAX_DESCRIPTION_BYTES`] and ended with `…`,
-/// as a description is cut. Borrowed when nothing is that long.
+/// a key or a value, with what acts unseen written as an escape
+/// ([`visible_to_the_model`]: every variation selector too), and cut at
+/// [`MAX_DESCRIPTION_BYTES`] and ended with `…`, as a description is cut.
+/// Borrowed when nothing in it changes.
 #[must_use]
 pub fn shown_schema(schema: &Json) -> Cow<'_, Json> {
-    if has_long_string(schema) {
+    if needs_showing(schema) {
         Cow::Owned(cut_strings(schema))
     } else {
         Cow::Borrowed(schema)
     }
 }
 
-fn has_long_string(value: &Json) -> bool {
+/// Whether a string is shown otherwise than it is: too long, or holding
+/// what [`visible_to_the_model`] escapes.
+fn changes_when_shown(text: &str) -> bool {
+    text.len() > MAX_DESCRIPTION_BYTES || matches!(visible_to_the_model(text), Cow::Owned(_))
+}
+
+fn needs_showing(value: &Json) -> bool {
     match value {
-        Json::String(text) => text.len() > MAX_DESCRIPTION_BYTES,
-        Json::Array(items) => items.iter().any(has_long_string),
+        Json::String(text) => changes_when_shown(text),
+        Json::Array(items) => items.iter().any(needs_showing),
         Json::Object(map) => map
             .iter()
-            .any(|(key, value)| key.len() > MAX_DESCRIPTION_BYTES || has_long_string(value)),
+            .any(|(key, value)| changes_when_shown(key) || needs_showing(value)),
         Json::Null | Json::Bool(_) | Json::Number(_) => false,
     }
 }
 
+/// A string of a tool's text as the model is shown it: escaped, then cut.
+fn shown_text(text: &str) -> String {
+    let escaped = visible_to_the_model(text);
+    let kept = truncate_bytes(&escaped, MAX_DESCRIPTION_BYTES);
+    if kept.len() < escaped.len() {
+        format!("{kept}…")
+    } else {
+        kept.to_owned()
+    }
+}
+
 fn cut_strings(value: &Json) -> Json {
-    let cut = |text: &str| -> String {
-        let kept = truncate_bytes(text, MAX_DESCRIPTION_BYTES);
-        if kept.len() < text.len() {
-            format!("{kept}…")
-        } else {
-            text.to_owned()
-        }
-    };
+    let cut = shown_text;
     match value {
         Json::String(text) => Json::String(cut(text)),
         Json::Array(items) => Json::Array(items.iter().map(cut_strings).collect()),
@@ -627,9 +657,12 @@ impl Tool for ToolSearch {
                 }
                 let description = tool.description.trim();
                 let shown = truncate_bytes(description, MAX_DESCRIPTION_BYTES);
+                // Each line with what acts unseen written as an escape: an
+                // MCP server's is cleaned already, an extension's is its
+                // author's text.
                 for line in shown.lines() {
                     text.push_str("\n  ");
-                    text.push_str(line);
+                    text.push_str(&visible_to_the_model(line));
                 }
                 if shown.len() < description.len() {
                     text.push_str("\n  [the description goes on]");
@@ -671,7 +704,9 @@ impl ToolSearch {
             ));
             if !source.description.is_empty() {
                 text.push_str(": ");
-                text.push_str(truncate_bytes(&source.description, 200));
+                // Made one line, and what acts unseen taken out, when it
+                // was registered.
+                text.push_str(&source.description);
             }
         }
         text.push_str("\nSearch with other words, or with `source/` to list one source's tools.");
@@ -770,21 +805,34 @@ impl Tool for ToolCall {
                 )
             }));
         };
-        let arguments = call.arguments.unwrap_or_else(|| json!({}));
-        // A held tool's arguments are not held against a schema the model
-        // was not shown, which a mismatch would quote: what a call of one
-        // does is its source's to say, and its tool checks them before it
-        // sends them anywhere.
-        if hold.is_none() {
-            let schema = &tool.spec().parameters;
-            schema::validate(schema, &arguments).map_err(|mismatch| {
-                ToolError::invalid(format!(
-                    "The arguments for `{name}` do not fit its schema:\n{mismatch}\nIts schema \
-                     is:\n{}",
-                    shown_schema(schema)
-                ))
-            })?;
+        // A held tool is not called: the person has not approved what it
+        // is now. The refusal says nothing of its definition. (The part
+        // that registers held tools puts the person's question here.)
+        if let Some(hold) = hold {
+            let source = name.split_once('/').map_or(name, |(source, _)| source);
+            return Err(ToolError::NeedsApproval(format!(
+                "The tool `{name}` is {}, and needs the person's approval before it can be \
+                 called: `cineris mcp approve {source}`.",
+                match hold {
+                    Hold::New => "new, not yet approved",
+                    Hold::Changed => "changed since the person approved it",
+                }
+            )));
         }
+        let arguments = call.arguments.unwrap_or_else(|| json!({}));
+        let schema = &tool.spec().parameters;
+        schema::validate(schema, &arguments).map_err(|mismatch| {
+            ToolError::invalid(format!(
+                "The arguments for `{name}` do not fit its schema:\n{}\nIts schema is:\n{}",
+                mismatch
+                    .problems()
+                    .iter()
+                    .map(|problem| visible_to_the_model(problem))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                shown_schema(schema)
+            ))
+        })?;
         let inner = tool.plan(&arguments, cx)?;
         // The call is what the tool it names says it is: the same effects,
         // and besides them the call of the tool itself, which the permission

@@ -4,12 +4,12 @@
 //!
 //! - **What is admitted** ([`admit_all`], [`admit`]): a tool named with 1
 //!   to 128 of ASCII letters, digits, `_`, `-` and `.`, whose input schema
-//!   is the schema of an object, at most 32 KiB written compactly and 64
-//!   levels deep, with no key that holds a character that acts unseen, and
-//!   one the client can call (not a tool that runs only as a task); at
-//!   most 512 a server, after the entry's `tools` and `deny_tools`. What is
-//!   left out is said, with why ([`LeftOut`]), for `cineris mcp inspect` and
-//!   a notice.
+//!   is the schema of an object, at most 32 KiB written compactly (as sent,
+//!   and as shown, escaped) and 64 levels deep, with no key that holds a
+//!   character that acts unseen, and one the client can call (not a tool
+//!   that runs only as a task); at most 512 a server, after the entry's
+//!   `tools` and `deny_tools`. What is left out is said, with why
+//!   ([`LeftOut`]), for `cineris mcp inspect` and a notice.
 //! - **What the model is shown** ([`McpTool`]'s spec): the title, when
 //!   given, as the first line, then the description, each made one line by
 //!   [`cineris_base::one_line`] (what acts unseen taken out, white space
@@ -32,7 +32,7 @@ use std::sync::{Arc, LazyLock};
 
 use cineris_base::text::truncate_bytes;
 use cineris_base::{
-    CancelToken, in_code, one_line, visible, visible_keeping, visible_to_the_model,
+    CancelToken, in_code, one_line, unescape, visible, visible_keeping, visible_to_the_model,
 };
 use cineris_protocol::lease::RuleAction;
 use cineris_tools::registry::{MAX_DESCRIPTION_BYTES, shown_schema};
@@ -100,7 +100,8 @@ pub enum WhyLeftOut {
     SchemaNotObject,
     /// Its input schema is nested deeper than [`MAX_SCHEMA_DEPTH`].
     SchemaTooDeep,
-    /// Its input schema is over [`MAX_SCHEMA_BYTES`] written compactly.
+    /// Its input schema is over [`MAX_SCHEMA_BYTES`] written compactly, as
+    /// the server sent it or as the model would be shown it (escaped).
     SchemaTooLarge,
     /// A key of its input schema, a property's name among them, holds a
     /// character that acts unseen: shown as [`in_code`] shows it. A key is
@@ -133,7 +134,7 @@ impl std::fmt::Display for WhyLeftOut {
             ),
             Self::SchemaTooLarge => write!(
                 f,
-                "its input schema is over {} KiB written compactly",
+                "its input schema is over {} KiB written compactly, as sent or as shown",
                 MAX_SCHEMA_BYTES / 1024
             ),
             Self::UnseenKey(key) => write!(
@@ -237,7 +238,13 @@ pub fn admit(
     if let Some(why) = definition.unusable() {
         return Err(WhyLeftOut::Unusable(why));
     }
-    Ok(McpTool::new(server, definition, caller))
+    // The cap holds of the schema as the model is shown it too: escapes
+    // make a string of unseen characters more than twice as long.
+    let shown = cleaned(&definition.input_schema);
+    if larger_than(&shown, MAX_SCHEMA_BYTES) {
+        return Err(WhyLeftOut::SchemaTooLarge);
+    }
+    Ok(McpTool::new(server, definition, shown, caller))
 }
 
 /// Whether `name` may be a tool's name: 1 to [`MAX_NAME_LEN`] of ASCII
@@ -305,17 +312,18 @@ impl std::fmt::Debug for McpTool {
 }
 
 impl McpTool {
-    fn new(server: &str, definition: &ToolDefinition, caller: Arc<dyn ToolCaller>) -> Self {
-        let spec = ToolSpec::new(
-            definition.name.clone(),
-            description_of(definition),
-            cleaned(&definition.input_schema),
-        )
-        // A server's tool asks unless a rule allows it by name, and runs
-        // alone whatever it says of itself: its annotations are hints for
-        // the person only, and a plan that says otherwise is not taken.
-        .permission(RuleAction::Ask)
-        .concurrency(ConcurrencyClass::Exclusive);
+    fn new(
+        server: &str,
+        definition: &ToolDefinition,
+        shown: Json,
+        caller: Arc<dyn ToolCaller>,
+    ) -> Self {
+        let spec = ToolSpec::new(definition.name.clone(), description_of(definition), shown)
+            // A server's tool asks unless a rule allows it by name, and runs
+            // alone whatever it says of itself: its annotations are hints for
+            // the person only, and a plan that says otherwise is not taken.
+            .permission(RuleAction::Ask)
+            .concurrency(ConcurrencyClass::Exclusive);
         Self {
             spec,
             server: server.to_owned(),
@@ -413,6 +421,31 @@ impl McpTool {
         format!("{}\n{}", self.label(), parts.join("\n"))
     }
 
+    /// What the model is told of arguments that do not fit the server's
+    /// schema: the problems and the schema as shown, each line escaped; of
+    /// a held tool, neither, since both are of the definition the person
+    /// has not approved.
+    fn mismatch(&self, mismatch: &cineris_tools::schema::SchemaMismatch) -> ToolResult {
+        let tool = format!("{}/{}", code(&self.server), code(&self.spec.name));
+        if self.hold.is_some() {
+            return ToolResult::error(format!(
+                "The arguments for `{tool}` do not fit its schema, which is shown once the \
+                 person has approved the tool."
+            ));
+        }
+        ToolResult::error(format!(
+            "The arguments for `{tool}` do not fit its schema:\n{}\nIts schema is:\n{}",
+            // It quotes the server's schema.
+            mismatch
+                .problems()
+                .iter()
+                .map(|problem| visible_to_the_model(problem))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            shown_schema(&self.spec.parameters)
+        ))
+    }
+
     /// What the model is told of a call that did not get a result.
     fn failed(&self, error: &ClientError) -> ToolResult {
         let what = format!(
@@ -461,24 +494,22 @@ impl Tool for McpTool {
                 Ok(arguments) => arguments,
                 Err(error) => return error.into_result(),
             };
-            // Against the server's own schema, before anything is sent: a
-            // held tool's arguments were not checked before its question.
-            if let Err(mismatch) = cineris_tools::schema::validate(&self.schema, &arguments) {
-                return ToolResult::error(format!(
-                    "The arguments for `{}/{}` do not fit its schema:\n{}\nIts schema is:\n{}",
-                    code(&self.server),
-                    code(&self.spec.name),
-                    // Each line as the model is shown a schema's strings:
-                    // it quotes the server's schema.
-                    mismatch
-                        .problems()
-                        .iter()
-                        .map(|problem| visible_to_the_model(problem))
-                        .collect::<Vec<_>>()
-                        .join("\n"),
-                    shown_schema(&self.spec.parameters)
-                ));
-            }
+            // Against the server's own schema, before anything is sent:
+            // as given, then with the escapes the model was shown read back
+            // (a value shown as `\u{fe0f}` given back as shown), so that a
+            // value meant as it is written (a Windows path's `\n`) goes as
+            // it is whenever it fits.
+            let arguments = match cineris_tools::schema::validate(&self.schema, &arguments) {
+                Ok(()) => arguments,
+                Err(mismatch) => {
+                    let read_back = unescaped(&arguments);
+                    if cineris_tools::schema::validate(&self.schema, &read_back).is_ok() {
+                        read_back
+                    } else {
+                        return self.mismatch(&mismatch);
+                    }
+                }
+            };
             match self
                 .caller
                 .call(&self.spec.name, arguments, &cx.cancel)
@@ -517,6 +548,22 @@ fn description_of(definition: &ToolDefinition) -> String {
         (Some(title), Some(description)) => format!("{title}\n{description}"),
         (Some(only), None) | (None, Some(only)) => only,
         (None, None) => String::new(),
+    }
+}
+
+/// `value` with every string in it read back from the escapes
+/// [`visible_to_the_model`] writes ([`cineris_base::unescape`]): the
+/// arguments as meant, when the model gave back a value as it was shown.
+fn unescaped(value: &Json) -> Json {
+    match value {
+        Json::String(text) => Json::String(unescape(text).into_owned()),
+        Json::Array(items) => Json::Array(items.iter().map(unescaped).collect()),
+        Json::Object(map) => Json::Object(
+            map.iter()
+                .map(|(key, value)| (unescape(key).into_owned(), unescaped(value)))
+                .collect(),
+        ),
+        other => other.clone(),
     }
 }
 

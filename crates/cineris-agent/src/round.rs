@@ -935,20 +935,11 @@ impl Round {
         // A kept run of another call that touched the same files is not what
         // the model was shown: it goes before this call can meet what it
         // left behind. A kept run of this same call stays, to be used when
-        // the call's turn comes; unless this plan names other paths than
-        // the run's did (a link was made since the run was planned, by a
-        // call of this response): the run is of where the old ones led, so
-        // it goes, and the call runs again. It is held against the run's
-        // own plan, not the call's first: the call may have been planned
-        // first after the link was made, and its second plan then names
-        // what its first did.
+        // the call's turn comes, unless a call that runs alone starts first
+        // (`start`).
         let key = call.key.clone();
         self.discard_where(|cached| {
-            if cached.key == key {
-                cached.footprint.paths != footprint.paths
-            } else {
-                overlap(&cached.footprint.paths, &footprint.paths)
-            }
+            cached.key != key && overlap(&cached.footprint.paths, &footprint.paths)
         });
         self.calls[position].footprint = Some(footprint);
         if self.cancel.is_cancelled() {
@@ -1498,6 +1489,23 @@ impl Round {
             self.adopt(position, kept);
             return;
         }
+        // A call that runs alone and may change the file system (a command,
+        // a tool from an extension or an MCP server) may change any file,
+        // and make a link that moves a path, whatever paths it names: every
+        // run kept from the response before is of the file system as it
+        // was, and the calls of this response it was kept for come after
+        // this one. They go, a run still going with them, and those calls
+        // run again when their turn comes.
+        if self.calls[position]
+            .footprint
+            .as_ref()
+            .is_some_and(|footprint| {
+                footprint.may_change
+                    && matches!(footprint.shadow.concurrency, Concurrency::Exclusive)
+            })
+        {
+            self.discard_kept();
+        }
         let call = &mut self.calls[position];
         let CallState::Ready(plan) = std::mem::replace(&mut call.state, CallState::Running) else {
             return;
@@ -1927,6 +1935,8 @@ impl Planning {
                 let stat = match &error {
                     ToolError::Internal(_) => ToolStatOutcome::Failed,
                     ToolError::UnknownTool(_) => ToolStatOutcome::UnknownTool,
+                    // A held tool, refused before the policy is asked.
+                    ToolError::NeedsApproval(_) => ToolStatOutcome::Denied,
                     _ => ToolStatOutcome::InvalidArguments,
                 };
                 (error.into_result(), stat)
