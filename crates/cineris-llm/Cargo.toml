@@ -35,8 +35,9 @@ rustls = { workspace = true, optional = true }
 # them and fetches nothing (src/fetch.rs).
 rustls-native-certs = { workspace = true, optional = true }
 # `rt`: the fetch client looks names up, and makes its HTTP clients, on the
-# blocking pool (src/fetch.rs).
-tokio = { workspace = true, optional = true, features = ["rt", "time"] }
+# blocking pool; `sync`: the system's resolver holds its lookups there to a
+# count (src/fetch.rs).
+tokio = { workspace = true, optional = true, features = ["rt", "sync", "time"] }
 
 [build-dependencies]
 # The catalog is written in TOML and embedded as JSON (build.rs).

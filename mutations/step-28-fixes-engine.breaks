@@ -1,0 +1,98 @@
+# The fixes to step 28 from the review of its close, the engine's part:
+# the cap of threads left running counted from when a thread is told to
+# stop and looked at where a call starts, the system's name lookups held
+# to a count until they return, every alternative of a manifest glob's
+# braces relative to the workspace, and two rules of the host calls that
+# no test held (a URL's user part, the bytes of the waiting host calls).
+
+[break] a-thread-being-stopped-is-not-waited-for
+rule: A start or a call of an extension waits while a thread of that extension is being stopped (in its grace), and is refused if that thread is left running.
+file: crates/cineris-ext/src/engine/mod.rs
+in: must_wait
+find: if stopping.iter().any(|watched| watched.hash == *hash) {
+replace: if false {
+packages: cineris-ext
+caught-by:
+    cineris-ext::it left_running::a_runtime_started_in_anothers_grace_waits_and_is_refused_when_that_one_is_left
+    cineris-ext::it left_running::calls_of_other_sessions_made_in_a_grace_are_refused_once_that_thread_is_left
+
+[break] a-thread-told-to-stop-is-not-counted
+rule: A runtime's thread counts toward the cap from when it is told to stop, until it ends or is left running.
+file: crates/cineris-ext/src/engine/mod.rs
+in: ScriptRuntime::stop_thread
+find: self.watched.tell();
+replace: let _ = &self.watched;
+packages: cineris-ext
+caught-by:
+    cineris-ext::it left_running::a_runtime_started_in_anothers_grace_waits_and_is_refused_when_that_one_is_left
+    cineris-ext::it left_running::a_thread_whose_call_was_given_up_is_judged_by_the_next_start
+
+[break] a-start-given-up-is-not-counted
+rule: A start given up before its end tells its thread to stop, and the thread counts toward the cap until it ends or is left running.
+file: crates/cineris-ext/src/engine/mod.rs
+in: Starting::drop
+find: watched.tell();
+replace: let _ = watched;
+packages: cineris-ext
+caught-by:
+    cineris-ext::it left_running::a_thread_whose_start_was_given_up_is_judged_by_the_next_start
+
+[break] the-cap-is-not-looked-at-for-a-call
+rule: Past the cap of threads left running, a runtime alive before the cap was reached takes no call.
+file: crates/cineris-ext/src/engine/mod.rs
+in: ScriptRuntime::call_to_its_end
+find: if abandoned >= MAX_ABANDONED {
+replace: if false {
+packages: cineris-ext
+caught-by:
+    cineris-ext::it left_running::past_the_cap_a_runtime_alive_before_it_takes_no_call
+
+[break] a-lookup-given-up-frees-its-place
+rule: A system lookup holds its place among the process's lookups until the blocking lookup returns, not until its future is dropped.
+file: crates/cineris-llm/src/fetch.rs
+in: on_the_pool
+find: let _place = place;
+replace: drop(place);
+packages: cineris-llm
+caught-by:
+    cineris-llm fetch::tests::a_lookup_given_up_holds_its_place_until_the_lookup_returns
+
+[break] a-glob-is-looked-at-whole-not-by-its-alternatives
+rule: Every alternative a manifest glob's braces give is relative to the workspace, nested braces included.
+file: crates/cineris-ext/src/manifest.rs
+in: check_glob
+find: .all(|alternative| is_relative_glob(alternative))
+replace: .all(|_| is_relative_glob(glob))
+packages: cineris-ext
+caught-by:
+    cineris-ext::it manifest::no_alternative_of_a_globs_braces_leaves_the_workspace
+
+[break] a-path-outside-the-workspace-matches-a-glob
+rule: A path that leads outside the workspace is outside every manifest glob, one whose braces hold that very path among them included.
+file: crates/cineris-ext/src/capability.rs
+in: Capabilities::check
+find: let inside = path.is_inside_workspace() && path.abs().starts_with(&self.workspace);
+replace: let inside = true;
+packages: cineris-ext
+caught-by:
+    cineris-ext::it capability::a_glob_whose_braces_name_a_path_outside_reads_nothing_there
+
+[break] a-url-with-a-user-and-password-is-read
+rule: A fetch's URL that names a user, or a user and a password, is refused before the manifest is asked.
+file: crates/cineris-ext/src/host.rs
+in: url_host
+find: if authority.contains('@') {
+replace: if false {
+packages: cineris-ext
+caught-by:
+    cineris-ext::it serve::a_urls_host_is_read_without_its_port_user_or_brackets
+
+[break] the-waiting-host-calls-bytes-are-not-bounded
+rule: The host calls waiting for their answers hold at most 12 MiB of arguments together, which the runtime's memory limit does not count.
+file: crates/cineris-ext/src/engine/thread.rs
+in: Shared::admit
+find: || self.pending_bytes + bytes > MAX_PENDING_BYTES
+replace: || false
+packages: cineris-ext
+caught-by:
+    cineris-ext::it engine::the_bytes_the_waiting_host_calls_hold_are_bounded

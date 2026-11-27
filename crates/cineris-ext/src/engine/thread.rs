@@ -32,7 +32,7 @@ use serde_json::Value as Json;
 use tokio::sync::{mpsc as async_mpsc, oneshot};
 
 use super::loader::{SnapshotLoader, SnapshotResolver};
-use super::{Failure, Limit, LoadError, Target};
+use super::{Failure, Limit, LoadError, Target, Watched};
 use crate::event::Event;
 use crate::folder::Snapshot;
 use crate::host::{FetchCall, HostAnswer, HostCall, Phase, Scope};
@@ -151,7 +151,7 @@ pub(crate) fn spawn(
     expected: Option<Registration>,
     stack: usize,
     stop: Arc<AtomicBool>,
-    alive: Arc<AtomicBool>,
+    alive: Alive,
     ready: oneshot::Sender<Result<Loaded, LoadError>>,
 ) -> std::io::Result<mpsc::Sender<ToThread>> {
     let (sender, inbox) = mpsc::channel();
@@ -162,20 +162,23 @@ pub(crate) fn spawn(
         .stack_size(stack * 8 + 1024 * 1024)
         .spawn(move || {
             {
-                let _alive = Alive(Arc::clone(&alive));
-                body(source, expected, stack, &stop, &alive, ready, &inbox);
+                let alive = alive;
+                body(source, expected, stack, &stop, &alive.0, ready, &inbox);
             }
             cineris_base::hook::point(super::A_THREAD_ENDS);
         })?;
     Ok(sender)
 }
 
-/// Says the runtime is gone when the thread ends, however it ends.
-struct Alive(Arc<AtomicBool>);
+/// Says the runtime is gone when the thread ends, however it ends, and
+/// releases the thread from the cap of threads left running if it was
+/// told to stop.
+pub(crate) struct Alive(pub(crate) Arc<AtomicBool>, pub(crate) Arc<Watched>);
 
 impl Drop for Alive {
     fn drop(&mut self) {
         self.0.store(false, Ordering::SeqCst);
+        self.1.ended();
     }
 }
 

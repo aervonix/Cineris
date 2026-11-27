@@ -26,7 +26,7 @@ mod thread;
 use std::future::poll_fn;
 use std::path::PathBuf;
 use std::pin::pin;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
 use std::task::Poll;
 use std::time::Duration;
@@ -63,12 +63,26 @@ pub fn runtimes_made() -> usize {
     thread::RUNTIMES_MADE.load(Ordering::SeqCst)
 }
 
-/// The most threads of this process left running because their script did
-/// not stop when told to. A native function of the engine that loops
+/// The cap of threads of this process left running because their script
+/// did not stop when told to. A native function of the engine that loops
 /// without looking at the interrupt (`Array.prototype.reverse` over an
 /// object whose length is huge) cannot be stopped, and its thread runs on
-/// until the process ends: past this many, no extension is started at
-/// all (the review of step 28).
+/// until the process ends (the review of step 28).
+///
+/// A thread counts toward the cap from when it is told to stop (its call's
+/// time up, its call cancelled or given up, its start's time up or its
+/// start given up, its runtime dropped) until it ends, and from then on if
+/// it has not ended within [`GRACE`] of being told, when it is left
+/// running. A start or a call is let in only while the threads counted are
+/// fewer than this; one let in waits first, within that grace, for any
+/// thread of its own extension being stopped, and is refused if that one is
+/// left running (the review of step 28's close: the cap was looked at only
+/// as a runtime started, and an extension disabled only once a grace was
+/// over). **What that bounds:** at most this many threads left running in
+/// a process, plus the calls and starts already running when the count
+/// reached it, which nothing can stop; and one an extension, plus one for
+/// each of its other runtimes (in the process's other sessions) whose call
+/// was already running when the first was told to stop.
 pub const MAX_ABANDONED: usize = 4;
 
 /// The threads this process abandoned, of every extension.
@@ -108,6 +122,167 @@ pub fn forget_abandoned(hash: &ContentHash) {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .retain(|disabled| disabled != hash);
+}
+
+/// A runtime's thread as the cap counts it: running; told to stop and not
+/// yet ended (it counts toward the cap); left running (counted in
+/// [`abandoned_threads`] for good); ended.
+const THREAD_RUNS: u8 = 0;
+const THREAD_TOLD: u8 = 1;
+const THREAD_LEFT: u8 = 2;
+const THREAD_ENDED: u8 = 3;
+
+/// A runtime's thread, shared by the runtime, its start and the thread
+/// itself, which says when it ends: what [`MAX_ABANDONED`] counts. Every
+/// change of its state is made under [`BEING_STOPPED`]'s lock.
+#[derive(Debug)]
+pub(crate) struct Watched {
+    hash: ContentHash,
+    state: AtomicU8,
+    /// When it was told to stop, in the order of tellings.
+    told: AtomicU64,
+}
+
+/// The threads told to stop that have neither ended nor been left running.
+static BEING_STOPPED: std::sync::Mutex<Vec<Arc<Watched>>> = std::sync::Mutex::new(Vec::new());
+/// The tellings so far: a wait knows which threads were told before it.
+static TELLINGS: AtomicU64 = AtomicU64::new(0);
+/// Told whenever a thread leaves [`BEING_STOPPED`].
+static SETTLED: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+fn being_stopped() -> std::sync::MutexGuard<'static, Vec<Arc<Watched>>> {
+    BEING_STOPPED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+impl Watched {
+    fn new(hash: ContentHash) -> Arc<Self> {
+        Arc::new(Self {
+            hash,
+            state: AtomicU8::new(THREAD_RUNS),
+            told: AtomicU64::new(0),
+        })
+    }
+
+    /// Its thread is told to stop: from now until it ends, or is left
+    /// running, it counts toward the cap, and its extension's starts and
+    /// calls wait for it to be judged. Nothing when it was told before, or
+    /// has ended.
+    fn tell(self: &Arc<Self>) {
+        let mut stopping = being_stopped();
+        if self.state.load(Ordering::SeqCst) == THREAD_RUNS {
+            self.state.store(THREAD_TOLD, Ordering::SeqCst);
+            self.told
+                .store(TELLINGS.fetch_add(1, Ordering::SeqCst), Ordering::SeqCst);
+            stopping.push(Arc::clone(self));
+        }
+    }
+
+    /// Its thread has ended, however it ended: released from the cap,
+    /// unless it was left running before, which stays counted.
+    pub(crate) fn ended(&self) {
+        let released = {
+            let mut stopping = being_stopped();
+            let was = self.state.load(Ordering::SeqCst);
+            if was != THREAD_LEFT {
+                self.state.store(THREAD_ENDED, Ordering::SeqCst);
+            }
+            if was == THREAD_TOLD {
+                stopping.retain(|other| !std::ptr::eq(Arc::as_ptr(other), self));
+            }
+            was == THREAD_TOLD
+        };
+        if released {
+            SETTLED.notify_waiters();
+        }
+    }
+
+    /// Its thread, told to stop, has not ended within its grace: it is
+    /// left running, counted once whoever judges it, and its extension is
+    /// disabled. Whether it is left running, now or before.
+    fn leave(&self) -> bool {
+        let left = {
+            let mut stopping = being_stopped();
+            match self.state.load(Ordering::SeqCst) {
+                THREAD_TOLD => {
+                    self.state.store(THREAD_LEFT, Ordering::SeqCst);
+                    stopping.retain(|other| !std::ptr::eq(Arc::as_ptr(other), self));
+                    ABANDONED.fetch_add(1, Ordering::SeqCst);
+                    disable(self.hash);
+                    Some(true)
+                }
+                THREAD_LEFT => Some(false),
+                _ => None,
+            }
+        };
+        if left == Some(true) {
+            SETTLED.notify_waiters();
+        }
+        left.is_some()
+    }
+
+    fn is_left(&self) -> bool {
+        self.state.load(Ordering::SeqCst) == THREAD_LEFT
+    }
+}
+
+/// How many threads have been told to stop and have neither ended nor been
+/// left running: each counts toward [`MAX_ABANDONED`].
+#[must_use]
+pub fn threads_being_stopped() -> usize {
+    being_stopped().len()
+}
+
+/// Whether a start or a call of the extension of `hash` must wait: a thread
+/// of that extension is being stopped, or the threads being stopped would,
+/// with those left running and the starts let go, reach the cap.
+fn must_wait(hash: &ContentHash) -> bool {
+    let stopping = being_stopped();
+    if stopping.iter().any(|watched| watched.hash == *hash) {
+        return true;
+    }
+    let abandoned = ABANDONED.load(Ordering::SeqCst);
+    !stopping.is_empty()
+        && abandoned < MAX_ABANDONED
+        && abandoned + stopping.len() + LET_GO.load(Ordering::SeqCst) >= MAX_ABANDONED
+}
+
+/// Waits, on `timer`, while a start or a call of the extension of `hash`
+/// must ([`must_wait`]). A thread told to stop before a round of the wait
+/// began and still not ended a [`GRACE`] later is left running, judged here
+/// as its own call would judge it: a thread whose call or start was given
+/// up, or whose runtime was dropped, has nobody else to judge it.
+async fn settle(hash: &ContentHash, timer: &dyn Timer) {
+    loop {
+        let mut settled = pin!(SETTLED.notified());
+        settled.as_mut().enable();
+        let since = TELLINGS.load(Ordering::SeqCst);
+        if !must_wait(hash) {
+            return;
+        }
+        let mut grace = timer.sleep(GRACE);
+        let graced = poll_fn(|cx| {
+            if settled.as_mut().poll(cx).is_ready() {
+                return Poll::Ready(false);
+            }
+            if grace.as_mut().poll(cx).is_ready() {
+                return Poll::Ready(true);
+            }
+            Poll::Pending
+        })
+        .await;
+        if graced {
+            let older: Vec<Arc<Watched>> = being_stopped()
+                .iter()
+                .filter(|watched| watched.told.load(Ordering::SeqCst) < since)
+                .cloned()
+                .collect();
+            for watched in older {
+                watched.leave();
+            }
+        }
+    }
 }
 
 /// A point of a runtime's thread just after it took a call to run, before
@@ -251,7 +426,11 @@ impl StartWatch {
 /// ever unnoticed; and its [`StartWatch`] is told it ended (the re-check of
 /// the script hooks, (a)).
 struct Starting<'a> {
-    stop: Option<Arc<AtomicBool>>,
+    /// Its thread's stop, and the thread as the cap counts it: told to
+    /// stop, it counts toward the cap until it ends (the review of step
+    /// 28's close: a start dropped in a native loop left a thread nothing
+    /// counted).
+    stop: Option<(Arc<AtomicBool>, Arc<Watched>)>,
     watch: &'a StartWatch,
 }
 
@@ -264,8 +443,9 @@ impl Starting<'_> {
 
 impl Drop for Starting<'_> {
     fn drop(&mut self) {
-        if let Some(stop) = &self.stop {
+        if let Some((stop, watched)) = &self.stop {
             stop.store(true, Ordering::SeqCst);
+            watched.tell();
         }
         self.watch.ended();
     }
@@ -423,6 +603,14 @@ pub enum CallError {
          was left running. It is started again after the harness restarts"
     )]
     Disabled,
+    /// Too many extensions' threads were left running: no call runs, as no
+    /// runtime starts (the review of step 28's close: a runtime alive
+    /// before the cap was reached took calls past it).
+    #[error(
+        "{0} extension threads did not stop when told to and are still running, so no extension's \
+         call runs until the harness restarts"
+    )]
+    TooManyAbandoned(usize),
 }
 
 /// What a runtime is made from.
@@ -484,8 +672,9 @@ pub struct ScriptRuntime {
     inbox: mpsc::Sender<ToThread>,
     stop: Arc<AtomicBool>,
     alive: Arc<AtomicBool>,
-    /// Whether its thread was left running: told to stop, it did not.
-    abandoned: AtomicBool,
+    /// Its thread as the cap counts it: whether it was told to stop, left
+    /// running, or ended.
+    watched: Arc<Watched>,
     loaded: Loaded,
 }
 
@@ -534,6 +723,16 @@ impl ScriptRuntime {
         // Every way out of here tells `watch` the start ended; once its
         // thread runs, a drop before its end stops it.
         let mut starting = Starting { stop: None, watch };
+        let hash = match &source {
+            Source::Folder { pinned, .. } => *pinned,
+            Source::Snapshot(snapshot) => snapshot.hash(),
+        };
+        // A thread of this extension being stopped (one in its grace) is
+        // judged before another of it starts, and threads being stopped
+        // count toward the cap (the review of step 28's close: a runtime
+        // started in another's grace, before the extension was disabled,
+        // left a second thread).
+        settle(&hash, timer).await;
         let abandoned = ABANDONED.load(Ordering::SeqCst);
         if abandoned >= MAX_ABANDONED {
             return Err(LoadError::TooManyAbandoned(abandoned));
@@ -542,10 +741,6 @@ impl ScriptRuntime {
         if abandoned + let_go >= MAX_ABANDONED {
             return Err(LoadError::StartsLetGo(let_go));
         }
-        let hash = match &source {
-            Source::Folder { pinned, .. } => *pinned,
-            Source::Snapshot(snapshot) => snapshot.hash(),
-        };
         if is_disabled(&hash) {
             return Err(LoadError::Disabled);
         }
@@ -554,6 +749,7 @@ impl ScriptRuntime {
         watch.began();
         let stop = Arc::new(AtomicBool::new(false));
         let alive = Arc::new(AtomicBool::new(true));
+        let watched = Watched::new(hash);
         let (ready, readied) = oneshot::channel();
         let source = match source {
             Source::Folder { path, pinned } => thread::Source::Folder { path, pinned },
@@ -565,11 +761,11 @@ impl ScriptRuntime {
             expected,
             STACK_BYTES,
             Arc::clone(&stop),
-            Arc::clone(&alive),
+            thread::Alive(Arc::clone(&alive), Arc::clone(&watched)),
             ready,
         )
         .map_err(|error| LoadError::Engine(format!("its thread could not start: {error}")))?;
-        starting.stop = Some(Arc::clone(&stop));
+        starting.stop = Some((Arc::clone(&stop), Arc::clone(&watched)));
         let mut readied = pin!(readied);
         let mut limit = timer.sleep(EVALUATION_TIME);
         let mut grace: Option<cineris_base::Sleep> = None;
@@ -583,6 +779,7 @@ impl ScriptRuntime {
                 }
             } else if limit.as_mut().poll(cx).is_ready() {
                 stop.store(true, Ordering::SeqCst);
+                watched.tell();
                 let mut wait = timer.sleep(GRACE);
                 // Polled once, so that it wakes this task when it is up.
                 let _ = wait.as_mut().poll(cx);
@@ -597,16 +794,13 @@ impl ScriptRuntime {
                 inbox,
                 stop,
                 alive,
-                abandoned: AtomicBool::new(false),
+                watched,
                 loaded,
             }),
             Some(Err(error)) => Err(error),
-            // Its grace passed: the thread is left running.
-            None if grace.is_some() => {
-                ABANDONED.fetch_add(1, Ordering::SeqCst);
-                disable(hash);
-                Err(LoadError::Abandoned)
-            }
+            // Its grace passed: the thread is left running, unless it ended
+            // just then.
+            None if grace.is_some() && watched.leave() => Err(LoadError::Abandoned),
             None => Err(LoadError::Limit(Limit::Time)),
         }
     }
@@ -616,7 +810,17 @@ impl ScriptRuntime {
     /// not given another in this process.
     #[must_use]
     pub fn was_abandoned(&self) -> bool {
-        self.abandoned.load(Ordering::SeqCst)
+        self.watched.is_left()
+    }
+
+    /// Tells the runtime's thread to stop: it counts toward the cap until it
+    /// ends, or is left running. A thread waiting for a host call's answer
+    /// runs none of the script's code, so the interrupt never comes: the
+    /// shutdown wakes it, and it ends.
+    fn stop_thread(&self) {
+        self.stop.store(true, Ordering::SeqCst);
+        self.watched.tell();
+        let _ = self.inbox.send(ToThread::Shutdown);
     }
 
     /// The extension's manifest, as the snapshot holds it.
@@ -688,11 +892,51 @@ impl ScriptRuntime {
         if !self.is_alive() {
             return Err(CallError::Gone);
         }
+        // A hook's time began when it was asked: its deadline runs while it
+        // waits for its turn. Any other call's begins when it starts.
+        let mut started = cx.asked.unwrap_or_else(|| cx.clock.monotonic());
+        let mut deadline: Option<cineris_base::Sleep> = cx.asked.map(|asked| {
+            let waited = cx.clock.monotonic().saturating_sub(asked);
+            cx.timer.sleep(cx.time.saturating_sub(waited))
+        });
+        let mut cancelled = pin!(cx.cancel.cancelled());
+        // A thread of this extension being stopped (another runtime's, in
+        // its grace) is judged before this call is let in, and threads
+        // being stopped count toward the cap, which is looked at here as
+        // at a start (the review of step 28's close: a call let in during
+        // another runtime's grace, or on a runtime alive before the cap was
+        // reached, left one more thread). The wait is within a hook's time
+        // and ends at the call's cancel: nothing has been sent.
+        {
+            let mut settling = pin!(settle(&self.loaded.hash, cx.timer));
+            let waited = poll_fn(|context| {
+                if settling.as_mut().poll(context).is_ready() {
+                    return Poll::Ready(None);
+                }
+                if let Some(deadline) = &mut deadline
+                    && deadline.as_mut().poll(context).is_ready()
+                {
+                    return Poll::Ready(Some(CallError::TimedOut));
+                }
+                if cancelled.as_mut().poll(context).is_ready() {
+                    return Poll::Ready(Some(CallError::Cancelled));
+                }
+                Poll::Pending
+            })
+            .await;
+            if let Some(error) = waited {
+                return Err(error);
+            }
+        }
         // Another runtime of this extension left its thread running: this
         // one takes no more calls either (the review of step 28's fixes:
         // each live runtime could leave one more).
         if is_disabled(&self.loaded.hash) {
             return Err(CallError::Disabled);
+        }
+        let abandoned = ABANDONED.load(Ordering::SeqCst);
+        if abandoned >= MAX_ABANDONED {
+            return Err(CallError::TooManyAbandoned(abandoned));
         }
         let phase = match target {
             Target::Tool(_) => Phase::Tool,
@@ -708,14 +952,6 @@ impl ScriptRuntime {
                 claim: Arc::clone(&claim),
             }))
             .map_err(|_| CallError::Gone)?;
-        // A hook's time began when it was asked: its deadline runs while it
-        // waits for its turn. Any other call's begins when it starts.
-        let mut started = cx.asked.unwrap_or_else(|| cx.clock.monotonic());
-        let mut deadline: Option<cineris_base::Sleep> = cx.asked.map(|asked| {
-            let waited = cx.clock.monotonic().saturating_sub(asked);
-            cx.timer.sleep(cx.time.saturating_sub(waited))
-        });
-        let mut cancelled = pin!(cx.cancel.cancelled());
         // Set once the call has ended and its cancel has come: only its end
         // is waited for then.
         let mut ended_cancel = false;
@@ -871,18 +1107,16 @@ impl ScriptRuntime {
     }
 
     /// Stops the runtime for a call that must end now, and waits a grace
-    /// for its thread to say so; past it, the thread is abandoned.
+    /// for its thread to say so; past it, the thread is abandoned. From the
+    /// moment it is told, the thread counts toward the cap, and the
+    /// extension's other starts and calls wait for it to be judged.
     async fn stopped(
         &self,
         replies: &mut async_mpsc::UnboundedReceiver<FromThread>,
         timer: &dyn Timer,
         error: CallError,
     ) -> CallError {
-        self.stop.store(true, Ordering::SeqCst);
-        // A thread waiting for a host call's answer runs none of the
-        // script's code, so the interrupt never comes: this wakes it, and
-        // it ends.
-        let _ = self.inbox.send(ToThread::Shutdown);
+        self.stop_thread();
         let mut grace = timer.sleep(GRACE);
         poll_fn(|context| {
             loop {
@@ -894,12 +1128,10 @@ impl ScriptRuntime {
             }
             if grace.as_mut().poll(context).is_ready() {
                 // Abandoned: it counts as torn down, and as one of the
-                // process's threads that would not stop.
+                // process's threads that would not stop, once, whoever
+                // judged it first.
                 self.alive.store(false, Ordering::SeqCst);
-                if !self.abandoned.swap(true, Ordering::SeqCst) {
-                    ABANDONED.fetch_add(1, Ordering::SeqCst);
-                    disable(self.loaded.hash);
-                }
+                self.watched.leave();
                 return Poll::Ready(());
             }
             Poll::Pending
@@ -912,9 +1144,8 @@ impl ScriptRuntime {
 impl Drop for ScriptRuntime {
     fn drop(&mut self) {
         // A script running when its runtime goes is stopped, not left to
-        // run on with no deadline.
-        self.stop.store(true, Ordering::SeqCst);
-        let _ = self.inbox.send(ToThread::Shutdown);
+        // run on with no deadline, and counted until its thread ends.
+        self.stop_thread();
     }
 }
 
@@ -964,8 +1195,11 @@ impl Drop for StopIfDropped<'_> {
         if withdrawn(&self.claim) || has_ended(&self.claim) {
             return;
         }
-        runtime.stop.store(true, Ordering::SeqCst);
-        let _ = runtime.inbox.send(ToThread::Shutdown);
+        // Nobody judges its thread now: it counts toward the cap until it
+        // ends, and the next start or call of its extension judges it when
+        // a grace has passed (the review of step 28's close: a call given
+        // up in a native loop left a thread nothing counted).
+        runtime.stop_thread();
     }
 }
 

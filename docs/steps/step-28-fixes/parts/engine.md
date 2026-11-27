@@ -1,0 +1,55 @@
+# Step 28 fixes: the engine, fetch and the manifest
+
+The review of step 28's close, its findings 9, 10, 13 and 19 (the fetch's user part and the waiting host calls' bytes), and the engine's notes of lower confidence. Breaks in [mutations/step-28-fixes-engine.breaks](../../../../mutations/step-28-fixes-engine.breaks).
+
+## 9. The cap of four threads left running was not a cap
+
+**Outcome: fixed, with the bound it now has stated.**
+
+- **What it was.** The cap (`cineris_ext::engine::MAX_ABANDONED`) was looked at only as a runtime started; a live runtime's call looked only at whether its extension was disabled, and an extension was disabled only once its thread's 2 s grace was over. So a runtime started in another's grace (a hook of a call planned meanwhile, since the core makes a fresh runtime whenever the slot's is not alive), and a call of another session's runtime made in that grace, were each let in and each could leave one more thread; and a runtime alive before the cap was reached took calls past it.
+- **The fix.** A thread is counted from when it is **told to stop**, not when its grace ends: every place that stops a thread (a call's time up, cancelled or given up, a start's time up or given up, a runtime dropped) goes through one method that marks the thread (`Watched::tell`); the thread itself says when it ends; and a thread told to stop that has not ended within the grace is left running, counted once and its extension disabled, whoever looks first (its own call, or the next start or call of its extension). A start or a call of an extension **waits** while a thread of that extension is being stopped, or while threads being stopped would with those left running reach the cap, and once its look is over is refused if that thread was left (`Disabled`) or the cap is reached (`TooManyAbandoned`, a new `CallError` for a call). The wait is within a hook's time and ends at the call's cancel; nothing is sent before it. Waiting, not refusing, keeps "the next use makes a new runtime" true when the thread comes back within its grace.
+- **Twins it closed.** A call whose future was given up in a native loop, a start given up there, and a runtime dropped while its call ran, each set the stop flag and nothing else: the thread ran on, counted by nothing, and its extension started again. They now count from the telling, and the next start or call judges them.
+- **The real bound,** now in the module's doc, [12-extensions.md](../../../architecture/12-extensions.md) ("Limits" and "Threading") and [security.md](../../../security.md) §3: four threads left running in a process, plus the calls and starts already running when the count reached four, which nothing can stop; and one an extension, plus one for each of its other runtimes, in the process's other sessions, whose call was already running when the first was told to stop. The review's first case with all five calls spinning together still leaves five; that residue is in [what-the-script-engine-cannot-stop-or-tell](../../../outstanding/what-the-script-engine-cannot-stop-or-tell.md) (step 32). **Step 28's answered.md, its Threads budget row ("at most four left running in a process before no extension starts"), is corrected here;** step 28's own record is left as it is.
+- **Tests** (`cineris-ext::it left_running`, each thread that will not stop held at `A_CALL_IS_STARTED` or `A_DEFINITION_IS_REGISTERED`, never racing a native loop; time is the fake timer's): a runtime started in another's grace waits and is refused when that one is left; one that waits goes on once that thread comes back; four other sessions' calls made in a grace are refused once that thread is left (one thread, not five); past the cap a runtime alive before it takes no call; a thread whose call was given up, and one whose start was given up, are judged by the next start.
+- **On `main`:** RESULTS-MAIN-9
+- **Breaks:** BREAKS-9
+
+## 10. A fetch's lookup outlived it and could fill the blocking pool
+
+**Outcome: fixed, with a process-wide count of system lookups.**
+
+- **The fix.** `cineris_llm::SystemResolver` holds each lookup to one of `LOOKUPS_LIMIT` (8) places in the process, taken before the lookup is sent to the blocking pool and moved into the blocking closure, so it is given back when `getaddrinfo` returns, not when the fetch's future is dropped at its time or its cancel. A lookup past them waits for a place holding no thread, within its fetch's own time and cancel. No floor on a fetch's `timeout` was added: with the count, a script's loop of `timeout: 0` fetches of names that never answer holds at most eight threads.
+- **Why a process-wide count, not one in flight per runtime.** Only the resolver knows when the blocking lookup returns; a count per runtime would need the runtime carried through the core's host into the fetch client, would not bound the process (each session's runtime would have its own), and would not cover step 30's HTTP MCP client, which will use this fetch client and has no runtime. **Who shares it:** every client of `Fetcher` with the system resolver (extensions' fetches now, step 30's MCP client later). **The provider transports do not:** they look their hosts up through their HTTP client's own resolver, so a provider's request is never held by the count. **What it costs:** while one extension's lookups that never answer hold all eight places, other fetches' lookups wait, up to their own time, for one to return (the system resolver's own timeout, tens of seconds); that slows fetches only, never the session's other blocking work.
+- **Test:** `cineris-llm fetch::tests::a_lookup_given_up_holds_its_place_until_the_lookup_returns`, over the new seam `on_the_pool` with a resolver that blocks until the test lets it go (no name looked up, no network): two lookups given up still hold their places, a third waits and is not sent to the pool, and runs once one has returned.
+- **On `main`:** confirmed by reading only, as the review was: `main` had no place to hold, and the test is of the new seam. The break that restores giving the place back as the future goes (`let _place = place;` to `drop(place);`) is caught.
+- **Breaks:** BREAKS-10
+
+## 13. A brace glob with an absolute path passed the manifest's check
+
+**Outcome: fixed.**
+
+- **The fix.** `manifest::check_glob` looks at **every alternative** the glob's braces give, read as the glob's compiler reads them (`cineris_policy::glob::brace_alternatives`, a new public function over the compiler's own `expand_braces`, so there is one reading of braces), nested braces included: each must not be empty, start at a root (`/`, `//server`), at `~` or at a drive (`C:`), or name `.` or `..`. A `\` (so `\\?\` and `\\server`) and a control character are refused in the whole text, as before. A glob whose braces the compiler cannot read (one not closed, too many alternatives) is left to the compiler to refuse, as before: it never compiles, so nothing of it is matched (a core test holds an extension whose capabilities do not compile that way). Stricter in one more case: an alternative that is wholly empty (`{,src/**}`, which compiled to every file of the workspace) is refused.
+- **Tests:** `cineris-ext::it manifest::no_alternative_of_a_globs_braces_leaves_the_workspace` (`{/etc/**,src/**}`, nested, `{.,/}etc`, `{..}`, `{~,x}/`, `{C:/x/**,src/**}`, `{src,c:x}`, `//server/share` in braces, an empty alternative; and brace globs that stay inside still read); `cineris-ext::it capability::a_glob_whose_braces_name_a_path_outside_reads_nothing_there`, which compiles such a glob past the manifest's check and reads the folder beside the workspace through it, by its absolute path and through `..`.
+- **On `main`:** RESULTS-MAIN-13
+- **Breaks:** BREAKS-13
+
+## 19 (part). Rules no test held
+
+**Outcome: two tests, each catching its break.**
+
+- **A fetch's user part** (`host::url_host`): `cineris-ext::it serve::a_urls_host_is_read_without_its_port_user_or_brackets` now refuses `https://api.example.com:pw@evil.com/`, `https://user:pw@api.example.com/` and `https://api.example.com:@evil.com:443/x` and checks the reason ("names a user"): there the password sits in a port's place and the host before it is plain, so nothing else refuses it.
+- **The 12 MiB of the waiting host calls' arguments** (`engine::thread`, `Shared::admit`): `cineris-ext::it engine::the_bytes_the_waiting_host_calls_hold_are_bounded`: two programs' calls of 6.25 MiB each, neither awaited; the second is refused before it is sent.
+- **On `main`:** RESULTS-MAIN-19
+- **Breaks:** BREAKS-19
+
+## The engine's notes of lower confidence
+
+- **`cineris.progress` is not progress.** The page now says what the code does: each line cut at 200 bytes, the call's last 20 kept and added to the tool's output when its call ends; a hook's and a command's kept nowhere ([12-extensions.md](../../../architecture/12-extensions.md), the host functions' table). **Step 28's answered.md, its point 2 ("progress 200 characters, the latest kept"), is corrected here.** Showing progress as it is made went to [an-extensions-progress-is-shown-only-when-its-tool-call-ends](../../../outstanding/an-extensions-progress-is-shown-only-when-its-tool-call-ends.md) (step 30, whose MCP client streams a server's progress the same way).
+- **Out of memory told by its text** (`thread.rs`, `classify_text`): to [what-the-script-engine-cannot-stop-or-tell](../../../outstanding/what-the-script-engine-cannot-stop-or-tell.md) (step 32), with an allocator that records its refusal as the way to close it. No safety impact.
+- **"An extension's tool runs alone" has no end-to-end test:** a row in [a-tool-that-makes-links-beside-other-calls](../../../outstanding/a-tool-that-makes-links-beside-other-calls.md) (step 30). The spec's `Exclusive` has a unit test; a unit test of the plan's needs a loaded extension, whose host parts are a session's, which is not small; step 30 needs the same end-to-end test for MCP tools.
+
+## Mechanisms looked for elsewhere
+
+- **A limit looked at only at a start:** the starts let go (`LET_GO`) were counted while a start ran and released when its future was dropped, though a module in a native loop runs on: closed by the same telling. Nothing else found that counts what can still grow after its start.
+- **Blocking work whose future is dropped at a limit while its thread runs on:** `cineris_tools::run_blocking` returns at its cancel and leaves the work running, by design (the work is handed the token). A script's host calls through it are served one at a time a runtime, so a script holds at most one such thread a runtime, not a pool's worth. The provider transports' HTTP client looks names up on the blocking pool the same way, but only for the session's own requests, which no script chooses. Not changed.
+- **A path or glob check that looks only at a string's start:** the command analysis refuses brace expansion outright, the permission rules' globs go through the compiler, which reads each alternative, and a knowledge entry's paths are literal paths, not globs. None found.

@@ -535,25 +535,48 @@ impl Program {
 /// every system. A `\` is refused: a program's write roots and the
 /// manifest's own check would read it differently on Linux, one as a
 /// separator and the other as a name's character (the review of step 28).
+/// Each alternative its braces give is looked at as a glob of its own, read
+/// as the glob's compiler reads them, nested braces included: a look at the
+/// whole text's start let `{/etc/**,src/**}` through, and only the check of
+/// a path against the workspace kept it in (the review of step 28's close).
 /// Whether it compiles is the capability check's to say, against the
 /// workspace.
 fn check_glob(key: &str, glob: &str) -> Result<(), ManifestError> {
+    let refusal = || {
+        let glob = in_code(glob);
+        refused(format!(
+            "`capabilities.{key}` has `{glob}`: a glob of paths in the workspace, written relative to it with `/` between its folders, with no `.` or `..`"
+        ))
+    };
+    if glob.contains('\\') || glob.chars().any(char::is_control) {
+        return Err(refusal());
+    }
+    // Braces the compiler cannot read (one not closed, too many
+    // alternatives) are its to refuse, against the workspace: such a glob
+    // never compiles, so nothing of it is ever matched.
+    let Ok(alternatives) = cineris_policy::glob::brace_alternatives(glob) else {
+        return Ok(());
+    };
+    if alternatives
+        .iter()
+        .all(|alternative| is_relative_glob(alternative))
+    {
+        Ok(())
+    } else {
+        Err(refusal())
+    }
+}
+
+/// Whether one alternative of a glob, its braces expanded, is relative to
+/// the workspace: not empty, no root (`/`, `//server`), no `~`, no drive
+/// (`C:`), and no `.` or `..` name.
+fn is_relative_glob(glob: &str) -> bool {
     let first = glob.chars().next();
     let names_dots = glob.split('/').any(|name| name == "." || name == "..");
-    let bad = glob.trim().is_empty()
+    !(glob.trim().is_empty()
         || matches!(first, Some('/' | '~'))
-        || glob.contains('\\')
         || glob.as_bytes().get(1) == Some(&b':')
-        || names_dots
-        || glob.chars().any(char::is_control);
-    if bad {
-        let glob = in_code(glob);
-        Err(refused(format!(
-            "`capabilities.{key}` has `{glob}`: a glob of paths in the workspace, written relative to it with `/` between its folders, with no `.` or `..`"
-        )))
-    } else {
-        Ok(())
-    }
+        || names_dots)
 }
 
 /// A host pattern: `*`, `*.domain`, or one host (a name or an address).
