@@ -4,8 +4,8 @@
 //!
 //! | | Linux | Windows |
 //! |---|---|---|
-//! | [`Tree::spawn`] | A new session and process group. The command is told to die if the harness does, and the [`Guard`] is told the group. | A new process group inside a Job Object that kills its members when it is closed. |
-//! | [`Tree::interrupt`] | `SIGINT` to the group | A Ctrl-Break event to the group |
+//! | [`Tree::spawn`] | A new session and process group. The command is told to die if the harness does, and the [`Guard`] is told the group. | A new process group, with a console of its own that has no window and never the harness's, inside a Job Object that kills its members when it is closed. |
+//! | [`Tree::interrupt`] | `SIGINT` to the group | A Ctrl-Break event to the group, sent from inside the command's console by the [`Guard`]'s program; with no guard, none |
 //! | [`Tree::terminate`] | `SIGTERM` to the group | Not there: [`io::ErrorKind::Unsupported`] |
 //! | [`Tree::kill`] | `SIGKILL` to the group | The Job Object is terminated |
 //! | [`Tree::wait`] | Blocks until the command itself has exited | The same |
@@ -186,8 +186,10 @@ impl Tree {
     /// Asks the whole tree, politely, to stop. A program may ignore it.
     ///
     /// Fails when the request cannot be made: the tree has ended, or on
-    /// Windows the command itself has exited or there is no console to send
-    /// the event through. The caller then goes on to the next stage.
+    /// Windows the command itself has exited, the tree was started without
+    /// a [`Guard`] (whose program sends the event from inside the command's
+    /// console, which the harness is not on), or the event could not be
+    /// sent there. The caller then goes on to the next stage.
     pub fn interrupt(&self) -> io::Result<()> {
         self.inner.interrupt()
     }
@@ -234,7 +236,10 @@ impl Tree {
     /// the Job Object for its members by process id, and counts the ones
     /// that are not the command and have not exited: a job lists a process
     /// for a moment after its exit, so its own count of active processes
-    /// says that a command which has just exited left itself running.
+    /// says that a command which has just exited left itself running. Nor
+    /// is the console host of the command's own console counted, which
+    /// the job holds and which ends by itself about a millisecond after
+    /// the last process on that console.
     pub fn others_running(&self) -> io::Result<usize> {
         self.inner.others_running()
     }
@@ -395,6 +400,16 @@ fn unopened_is_gone(code: Option<i32>) -> bool {
     /// `ERROR_INVALID_PARAMETER`.
     const NO_SUCH_PROCESS: i32 = 87;
     code == Some(NO_SUCH_PROCESS)
+}
+
+/// The ids of the processes attached to this process's console, this one
+/// among them (Windows). It fails when this process has no console.
+///
+/// For a check that a command has a console of its own: a command a tree
+/// started, asked from inside, never finds the harness's id in the list.
+#[cfg(windows)]
+pub fn console_processes() -> io::Result<Vec<u32>> {
+    imp::console_processes()
 }
 
 /// The error of a call on a tree that has ended.

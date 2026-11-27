@@ -6,6 +6,33 @@
 //! cancel a read another thread is blocked in. Those go through the Windows
 //! API here, and every block says why it is sound.
 //!
+//! **A command has a console of its own, never the harness's**
+//! (`CREATE_NO_WINDOW`; the signed approvals' part "commands without the
+//! harness's console"). A process on the harness's console could read what
+//! the person types there (a password among it), type into a question the
+//! harness asks, or draw a prompt of its own. A console program the command
+//! is gets a console that has no window, which its own children share; its
+//! standard streams are still the pipes the caller gave it. Two things
+//! follow from it:
+//!
+//! - **The console host is one of the tree's processes.** The command
+//!   starts it (`conhost.exe`) as it starts, so the job holds it and the
+//!   tree's kill takes it; the job's limit on processes does not count it.
+//!   It ends by itself once the last process on its console has, about a
+//!   millisecond after the command: it is never counted as something the
+//!   command left running ([`Inner::others_running`]).
+//! - **The interrupt is sent from inside the command's console.** Windows
+//!   sends a console event only to processes on the sender's console. One
+//!   sent from the harness's reaches nothing of the command's, and still
+//!   reports success: the harness's console takes the command's id, which
+//!   is no group there, for one, and keeps an entry for it after the
+//!   command has gone (microsoft/terminal issue 335). So
+//!   [`Inner::interrupt`] starts the harness's own program, the [`Guard`]'s,
+//!   with no console of its own; it attaches to the command's console,
+//!   sends the event there ([`send_ctrl_break`]), and ends. A tree started
+//!   without a guard has no interrupt: it is passed over, and the kill
+//!   follows.
+//!
 //! How it is kept small:
 //!
 //! - **Handles are owned by standard-library types** from the moment they
@@ -23,19 +50,25 @@
               the Windows API; cineris-sandbox is where such calls live"
 )]
 
+use std::ffi::OsString;
 use std::io::{self, PipeReader, Read};
 use std::mem::size_of;
+use std::os::windows::ffi::OsStringExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::os::windows::process::CommandExt;
-use std::process::Command;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use windows_sys::Win32::Foundation::{
     ERROR_MORE_DATA, HANDLE, INVALID_HANDLE_VALUE, WAIT_OBJECT_0,
 };
-use windows_sys::Win32::System::Console::{CTRL_BREAK_EVENT, GenerateConsoleCtrlEvent};
+use windows_sys::Win32::Storage::FileSystem::QueryDosDeviceW;
+use windows_sys::Win32::System::Console::{
+    AttachConsole, CTRL_BREAK_EVENT, FreeConsole, GenerateConsoleCtrlEvent, GetConsoleProcessList,
+};
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
 };
@@ -47,15 +80,19 @@ use windows_sys::Win32::System::JobObjects::{
     JobObjectBasicProcessIdList, JobObjectExtendedLimitInformation, QueryInformationJobObject,
     SetInformationJobObject, TerminateJobObject,
 };
-use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+use windows_sys::Win32::System::SystemInformation::{
+    GetSystemDirectoryW, GlobalMemoryStatusEx, MEMORYSTATUSEX,
+};
 use windows_sys::Win32::System::Threading::{
-    CREATE_NEW_PROCESS_GROUP, CREATE_SUSPENDED, GetExitCodeProcess, INFINITE, OpenProcess,
-    OpenThread, PROCESS_SYNCHRONIZE, ResumeThread, THREAD_SUSPEND_RESUME, WaitForSingleObject,
+    CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, CREATE_SUSPENDED, DETACHED_PROCESS,
+    GetExitCodeProcess, INFINITE, OpenProcess, OpenThread, PROCESS_NAME_NATIVE, PROCESS_NAME_WIN32,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, QueryFullProcessImageNameW,
+    ResumeThread, THREAD_SUSPEND_RESUME, WaitForSingleObject,
 };
 
 use cineris_base::CancelToken;
 
-use super::guard::Guard;
+use super::guard::{CTRL_BREAK, Guard};
 use super::{Exit, Limits, ReadOutcome, ended, others_among, unopened_is_gone};
 
 /// The exit code of a process the harness killed.
@@ -65,6 +102,12 @@ const KILLED: u32 = 1;
 /// was terminated. Termination is asynchronous and takes milliseconds; the
 /// bound is there so that a failure cannot hang the harness.
 const END_WAIT_MS: u32 = 5000;
+
+/// How long [`Inner::interrupt`] waits for the helper that sends the
+/// console event. It starts, attaches, sends and ends in a few
+/// milliseconds; the bound is there so that a failure cannot hang the
+/// harness.
+const HELPER_WAIT_MS: u32 = 5000;
 
 /// One tree: the command, the job it and its descendants are in, and how
 /// far along it is.
@@ -78,6 +121,10 @@ pub(super) struct Inner {
     /// closes, and this is the only handle: it is not inheritable, so no
     /// process of the tree has one.
     job: OwnedHandle,
+    /// The guard, whose program and hidden subcommand send the console
+    /// event from inside the command's console. `None` for a tree started
+    /// without one, which then has no interrupt.
+    helper: Option<Guard>,
     /// Whether the tree has ended.
     state: Mutex<bool>,
     /// How the command ended, once known. The lock is held by the thread
@@ -92,13 +139,15 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 impl Inner {
     pub(super) fn spawn(
         mut command: Command,
-        _guard: Option<&Guard>,
+        guard: Option<&Guard>,
         limits: Limits,
     ) -> io::Result<Self> {
         let job = create_job(limits)?;
         // Suspended, so that it cannot start a process of its own before
         // it is in the job: a process started earlier would be outside it.
-        command.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_SUSPENDED);
+        // With a console of its own, which has no window, and not the
+        // harness's (the module's documentation).
+        command.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW | CREATE_SUSPENDED);
         let mut child = command.spawn()?;
         // The command holds the caller's ends of its pipes. Let go of them
         // now, so that the pipes close when the tree's last writer does.
@@ -114,6 +163,7 @@ impl Inner {
             pid,
             process: OwnedHandle::from(child),
             job,
+            helper: guard.cloned(),
             state: Mutex::new(false),
             exit: Mutex::new(None),
         })
@@ -167,13 +217,52 @@ impl Inner {
                 "the command has exited",
             ));
         }
-        // SAFETY: the call takes two integers. The second is the id of a
-        // process group this process created and whose leader it holds a
-        // handle to.
-        if unsafe { GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, self.pid) } == 0 {
-            return Err(io::Error::last_os_error());
+        // Never from the harness's own console, which the command is not
+        // on (the module's documentation): from inside the command's, by
+        // the helper. The handle held on the command keeps its id from
+        // being given to another process while the helper runs.
+        let Some((program, args)) = self.helper.as_ref().map(Guard::program) else {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "the command's console event is sent by the harness's own program, \
+                 and this tree was started without it",
+            ));
+        };
+        let mut helper = Command::new(program);
+        helper
+            .args(args)
+            .arg(CTRL_BREAK)
+            .arg(self.pid.to_string())
+            // No console at all, so that it can attach to the command's;
+            // and a group of its own, which the event is not addressed to.
+            .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        cineris_base::hook::started(helper.get_program());
+        let described = cineris_base::hook::describe(&helper);
+        let mut child = helper.spawn()?;
+        cineris_base::hook::spawned(child.id(), described);
+        // SAFETY: the handle is the helper's, owned by `child` for the
+        // length of the call.
+        if unsafe { WaitForSingleObject(child.as_raw_handle(), HELPER_WAIT_MS) } != WAIT_OBJECT_0 {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "the helper that sends the command's console event did not end",
+            ));
         }
-        Ok(())
+        match child.wait()?.code() {
+            Some(0) => Ok(()),
+            Some(code) => Err(io::Error::other(format!(
+                "the helper that sends the command's console event ended with {code}: {}",
+                io::Error::from_raw_os_error(code)
+            ))),
+            None => Err(io::Error::other(
+                "the helper that sends the command's console event did not say how it ended",
+            )),
+        }
     }
 
     pub(super) fn terminate(&self) -> io::Result<()> {
@@ -217,8 +306,14 @@ impl Inner {
         // moment said that a command which had just exited, and left
         // nothing, had left one process running: itself. So the command is
         // left out by its id, and so is any member that has exited.
+        // Nor is the console host of the command's console: the command
+        // started it, so the job holds it, and it ends by itself a moment
+        // after the last process on that console. A process the command
+        // left on the console keeps it, and is counted itself.
         let members = self.members()?;
-        Ok(others_among(&members, self.pid, has_exited_by_id))
+        Ok(others_among(&members, self.pid, |member| {
+            is_console_host(member) || has_exited_by_id(member)
+        }))
     }
 
     /// The process ids of the job's members: the command and everything it
@@ -374,6 +469,148 @@ fn has_exited_by_id(pid: u32) -> bool {
     // SAFETY: `process` is an open process handle with the right to wait.
     // A wait of zero milliseconds only reads its state.
     unsafe { WaitForSingleObject(process.as_raw_handle(), 0) == WAIT_OBJECT_0 }
+}
+
+/// Whether the process with this id runs the system's console host
+/// (`conhost.exe` in the system's folder, which only an administrator can
+/// write). One that cannot be asked is not.
+///
+/// Windows names a process's program in two forms: its own
+/// (`\Device\HarddiskVolume3\Windows\System32\conhost.exe`), which it still
+/// gives while the process is ending, and the usual one
+/// (`C:\Windows\System32\conhost.exe`), which it may no longer give then.
+/// Either will do: the console host is asked about at the moment the
+/// command has exited, which is when it is ending too.
+fn is_console_host(pid: u32) -> bool {
+    let Some(host) = console_host() else {
+        return false;
+    };
+    // SAFETY: the call takes three integers: the one right that is needed,
+    // no inheritance, and a process id.
+    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if process.is_null() {
+        return false;
+    }
+    // SAFETY: `process` is a handle that was just opened and that nothing
+    // else owns.
+    let process = unsafe { OwnedHandle::from_raw_handle(process) };
+    let native = host.native.as_deref().is_some_and(|native| {
+        program_of(&process, PROCESS_NAME_NATIVE)
+            .is_some_and(|program| program.to_string_lossy().to_lowercase() == native)
+    });
+    native
+        || program_of(&process, PROCESS_NAME_WIN32)
+            .is_some_and(|program| cineris_base::same_location(Path::new(&program), &host.win32))
+}
+
+/// The path of the program the process `process` names runs, in the form
+/// `form` asks for, if Windows gives it.
+fn program_of(process: &OwnedHandle, form: u32) -> Option<OsString> {
+    let mut path = [0_u16; 1024];
+    let mut length = u32::try_from(path.len()).ok()?;
+    // SAFETY: `process` is open with the limited right to ask, which the
+    // call needs; the buffer holds `length` characters, and the call writes
+    // at most that many and says how many it wrote.
+    let asked = unsafe {
+        QueryFullProcessImageNameW(
+            process.as_raw_handle(),
+            form,
+            path.as_mut_ptr(),
+            &raw mut length,
+        )
+    };
+    (asked != 0).then(|| OsString::from_wide(path.get(..length as usize).unwrap_or_default()))
+}
+
+/// The system's console host, in the two forms a process's program is
+/// named by.
+struct ConsoleHost {
+    /// `C:\Windows\System32\conhost.exe`, or wherever the system is.
+    win32: PathBuf,
+    /// The same in Windows' own form, in lower case: the system's volume
+    /// by its device's name (`\Device\HarddiskVolume3`), then the rest.
+    /// `None` when the volume's device could not be asked for.
+    native: Option<String>,
+}
+
+/// The system's console host: `conhost.exe` in the system's folder.
+fn console_host() -> Option<&'static ConsoleHost> {
+    static HOST: OnceLock<Option<ConsoleHost>> = OnceLock::new();
+    HOST.get_or_init(|| {
+        let mut folder = [0_u16; 512];
+        let room = u32::try_from(folder.len()).ok()?;
+        // SAFETY: the buffer holds `room` characters, and the call writes
+        // at most that many, or none and says how many it needs.
+        let length = unsafe { GetSystemDirectoryW(folder.as_mut_ptr(), room) };
+        let written = folder
+            .get(..length as usize)
+            .filter(|_| length != 0 && length < room)?;
+        let win32 = PathBuf::from(OsString::from_wide(written)).join("conhost.exe");
+        let text = win32.to_string_lossy().into_owned();
+        let native = text.split_once(':').and_then(|(letter, rest)| {
+            let drive: Vec<u16> = format!("{letter}:").encode_utf16().chain([0]).collect();
+            let mut device = [0_u16; 512];
+            let room = u32::try_from(device.len()).ok()?;
+            // SAFETY: `drive` ends with a NUL; the buffer holds `room`
+            // characters, and the call writes at most that many: the
+            // device's names, each ended by a NUL.
+            let written = unsafe { QueryDosDeviceW(drive.as_ptr(), device.as_mut_ptr(), room) };
+            let names = device.get(..written as usize)?;
+            let first = names
+                .split(|unit| *unit == 0)
+                .next()
+                .filter(|name| !name.is_empty())?;
+            Some(format!("{}{rest}", String::from_utf16_lossy(first)).to_lowercase())
+        });
+        Some(ConsoleHost { win32, native })
+    })
+    .as_ref()
+}
+
+/// The ids of the processes attached to this process's console, this one
+/// among them.
+pub(super) fn console_processes() -> io::Result<Vec<u32>> {
+    let mut room = 16_usize;
+    loop {
+        let mut ids = vec![0_u32; room];
+        let length = u32::try_from(ids.len())
+            .map_err(|_| io::Error::other("a console has too many processes to list"))?;
+        // SAFETY: the buffer holds `length` ids, and the call writes at
+        // most that many; it returns how many there are.
+        let count = unsafe { GetConsoleProcessList(ids.as_mut_ptr(), length) } as usize;
+        if count == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if count <= room {
+            ids.truncate(count);
+            return Ok(ids);
+        }
+        room = count + 4;
+    }
+}
+
+/// Sends a Ctrl-Break event to the process group `pid` leads, from inside
+/// the console `pid` is on: the body of the guard's program when it is
+/// asked to ([`super::run_guard`]), in a process started with no console.
+pub(super) fn send_ctrl_break(pid: u32) -> io::Result<()> {
+    // SAFETY: the call takes no arguments. A process with no console is
+    // left as it was.
+    unsafe { FreeConsole() };
+    // SAFETY: the call takes one integer, a process id.
+    if unsafe { AttachConsole(pid) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: the call takes two integers. The group is the one `pid`
+    // leads, on the console this process has just attached to; this
+    // process is in a group of its own, which the event is not sent to.
+    let sent = if unsafe { GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, pid) } == 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    };
+    // SAFETY: the call takes no arguments.
+    unsafe { FreeConsole() };
+    sent
 }
 
 /// How much physical memory the machine has.

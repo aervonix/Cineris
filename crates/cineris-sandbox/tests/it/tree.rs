@@ -101,13 +101,16 @@ fn sys_killing_a_tree_takes_the_grandchild_that_ignores_the_interrupt() {
     tree.end();
 }
 
+/// On Windows the event is sent from inside the command's own console by
+/// the guard's program, so the tree is given the guard there.
 #[test]
 fn sys_the_interrupt_stops_what_listens_and_leaves_what_does_not() {
     let roll = Roll::new();
     let command = ChildSpec::new(&roll, "parent")
         .with_child(ChildSpec::new(&roll, "grandchild").stubborn())
         .command(ENTRY);
-    let tree = Tree::spawn(command, None).expect("start the command");
+    let guard = cfg!(windows).then(crate::guard);
+    let tree = Tree::spawn(command, guard.as_ref()).expect("start the command");
     let both = roll.all(&["parent", "grandchild"], LIMIT);
 
     tree.interrupt().expect("interrupt the tree");

@@ -20,6 +20,8 @@
 
 mod bench;
 mod changes;
+#[cfg(windows)]
+mod console;
 mod editing;
 #[cfg(windows)]
 mod editing_windows;
@@ -75,6 +77,10 @@ fn child_entry() {
     if arguments.iter().any(|argument| argument == GUARD) {
         cineris_sandbox::tree::run_guard();
         return;
+    }
+    #[cfg(windows)]
+    if arguments.iter().any(|argument| argument == console::REPORT) {
+        console::report();
     }
     if let Some(at) = arguments.iter().position(|argument| argument == HARNESS) {
         process::be_a_harness(&arguments[at + 1..]);

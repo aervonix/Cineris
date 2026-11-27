@@ -1,0 +1,43 @@
+# The signed approvals' part "commands without the harness's console"
+# (docs/steps/signed-approvals/parts/windows-console.md): on Windows what
+# the harness starts has a console of its own, never the harness's, so
+# that it cannot read the password the person types there.
+
+[break] a-command-on-the-harnesss-console
+rule: On Windows a command's process tree starts with a console of its own (`CREATE_NO_WINDOW`), never the harness's.
+file: crates/cineris-sandbox/src/tree/windows.rs
+find: CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW | CREATE_SUSPENDED
+replace: CREATE_NEW_PROCESS_GROUP | CREATE_SUSPENDED
+os: windows
+packages: cineris-sandbox,cineris-tools
+caught-by:
+    cineris-sandbox::it console::sys_a_command_has_a_console_of_its_own_and_not_the_harnesss
+    cineris-tools::it console::sys_a_shell_command_does_not_share_the_harnesss_console
+
+[break] the-console-host-counted-as-left-running
+rule: The console host of a command's own console is not something the command left running: the job holds it, and it ends by itself a moment after the command.
+file: crates/cineris-sandbox/src/tree/windows.rs
+find: is_console_host(member) || has_exited_by_id(member)
+replace: has_exited_by_id(member)
+os: windows
+caught-by:
+    cineris-sandbox::it tree::sys_a_command_that_left_nothing_is_never_counted_itself
+
+[break] the-harnesss-git-on-its-console
+rule: The harness's own git, which runs what a repository's configuration names, starts with a console of its own on Windows.
+file: crates/cineris-base/src/git.rs
+find: crate::program::without_console(&mut command);
+replace:
+os: windows
+packages: cineris-tools
+caught-by:
+    cineris-tools::it console::sys_the_harnesss_git_does_not_share_its_console
+
+[break] the-shell-asked-its-version-on-the-harnesss-console
+rule: The shell asked its version, a brief program, starts with a console of its own on Windows.
+file: crates/cineris-tools/src/process/brief.rs
+find: cineris_base::program::without_console(&mut command);
+replace:
+os: windows
+caught-by:
+    cineris-tools process::brief::tests::sys_a_brief_program_does_not_share_the_harnesss_console

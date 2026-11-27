@@ -18,6 +18,8 @@
 
 #[cfg(all(target_os = "linux", feature = "backends"))]
 mod confined;
+#[cfg(windows)]
+mod console;
 #[cfg(target_os = "linux")]
 mod helpers;
 mod perf;
@@ -78,6 +80,10 @@ fn child_entry() {
     if arguments.iter().any(|argument| argument == GUARD) {
         run_guard();
         return;
+    }
+    #[cfg(windows)]
+    if arguments.iter().any(|argument| argument == console::REPORT) {
+        console::report();
     }
     // The first of these words is this process's role: what follows it may
     // hold another, which is the role of the process it starts.

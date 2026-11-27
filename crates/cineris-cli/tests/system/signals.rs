@@ -39,7 +39,7 @@ impl Running {
         command
             .stdout(Stdio::from(File::create(&stdout).unwrap()))
             .stderr(Stdio::from(File::create(&stderr).unwrap()));
-        let tree = Tree::spawn(command, None).expect("the binary starts");
+        let tree = Tree::spawn(command, crate::tree_guard().as_ref()).expect("the binary starts");
         Self {
             tree,
             stdout,
@@ -392,8 +392,9 @@ fn sys_a_killed_harness_leaves_no_command_running() {
 }
 
 /// On Windows a program may be started with no console at all, by a
-/// service or a scheduler. A run then has no console events to watch and
-/// starts its commands with none: it still runs to its end.
+/// service or a scheduler. A run then has no console events to watch, and
+/// its commands have consoles of their own as always: it still runs to its
+/// end.
 #[cfg(windows)]
 #[test]
 fn sys_a_run_with_no_console_completes() {

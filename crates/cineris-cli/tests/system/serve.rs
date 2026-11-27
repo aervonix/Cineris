@@ -341,7 +341,7 @@ fn sys_a_signal_ends_the_server_with_its_code() {
         .stdout(Stdio::from(written));
     // Spawning takes the command, and with it this side's copies of the
     // binary's ends.
-    let tree = Tree::spawn(command, None).expect("the binary starts");
+    let tree = Tree::spawn(command, crate::tree_guard().as_ref()).expect("the binary starts");
     let mut output = BufReader::new(output);
     // The server is serving once it has answered.
     let initialize = serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",

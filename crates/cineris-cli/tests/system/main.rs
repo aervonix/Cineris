@@ -117,6 +117,15 @@ use serde_json::{Value, json};
 /// The binary Cargo built for this test run.
 pub const CINERIS: &str = env!("CARGO_BIN_EXE_cineris");
 
+/// What a test that starts the binary as a process tree of its own gives
+/// the tree, so that it can be sent a console event on Windows: the binary
+/// itself under its hidden subcommand, which sends the event from inside
+/// the binary's own console, as the harness does for its commands. Linux
+/// needs none.
+pub fn tree_guard() -> Option<cineris_sandbox::tree::Guard> {
+    cfg!(windows).then(|| cineris_sandbox::tree::Guard::new(CINERIS, ["__tree-guard"]))
+}
+
 /// The model of the test's configuration: one of the built-in catalog.
 pub const MODEL: &str = "claude-haiku-5-5";
 /// Another model of the built-in catalog.

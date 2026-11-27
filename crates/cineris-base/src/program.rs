@@ -324,6 +324,33 @@ pub fn git() -> Option<&'static Path> {
         .as_deref()
 }
 
+/// Has `command` start without the harness's console: on Windows a
+/// console program gets a console of its own, which has no window
+/// (`CREATE_NO_WINDOW`), and which what it starts shares. Its standard
+/// streams are what the caller set. Elsewhere it does nothing.
+///
+/// A program on the harness's console could read what the person types
+/// there (a password among it), type into a question the harness asks, or
+/// draw a prompt of its own (the signed approvals' part "commands without
+/// the harness's console"). Every program the harness starts that may run
+/// a project's code or the model's is started so: its git (a repository's
+/// configuration names the filters git runs) and the shell asked its
+/// version here; a command's process tree sets the same flag itself
+/// (`cineris_sandbox::tree`). It replaces any creation flags `command` had.
+#[allow(
+    clippy::disallowed_types,
+    reason = "sets a flag on a command its caller starts; nothing here blocks"
+)]
+pub fn without_console(command: &mut std::process::Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
+    }
+    #[cfg(not(windows))]
+    let _ = command;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -298,6 +298,9 @@ pub fn start(
         } else {
             Stdio::null()
         });
+    // A filter the repository names runs inside git: never on the
+    // harness's console.
+    crate::program::without_console(&mut command);
     crate::hook::started(started.program.as_os_str());
     let described = crate::hook::describe(&command);
     let mut child = command.spawn()?;

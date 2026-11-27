@@ -64,6 +64,9 @@ pub(crate) fn run(
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
     }
+    // The program is the session's shell, which runs the model's commands:
+    // never on the harness's console.
+    cineris_base::program::without_console(&mut command);
     let child = command.spawn().map_err(|_| Unanswered::NotStarted)?;
     answer(child, limit)
 }
@@ -109,5 +112,66 @@ pub(crate) fn answer(mut child: Child, limit: Duration) -> Result<Vec<u8>, Unans
     match answer {
         Ok(_) if !status.success() => Err(Unanswered::Failed),
         answer => answer,
+    }
+}
+
+/// On Windows the program asked has a console of its own, not the
+/// harness's (the signed approvals' part "commands without the harness's
+/// console"). The program is this test binary run again.
+#[cfg(all(test, windows))]
+mod tests {
+    use std::time::Duration;
+
+    use super::run;
+
+    /// The argument that makes this test binary say which processes share
+    /// its console.
+    const REPORT: &str = "cin-console";
+
+    /// The test by which this binary is run again as [`REPORT`].
+    const ENTRY: &str = "process::brief::tests::console_entry";
+
+    /// What the test runner runs as an ordinary test, which passes at once,
+    /// and what the test below runs again as the program it asks.
+    #[test]
+    fn console_entry() {
+        if std::env::args().any(|argument| argument == REPORT) {
+            let ids = cineris_sandbox::tree::console_processes()
+                .map(|ids| ids.iter().map(u32::to_string).collect::<Vec<_>>().join(" "))
+                .unwrap_or_default();
+            println!("{REPORT} {ids}");
+            #[expect(clippy::exit, reason = "a child process ends when it has answered")]
+            std::process::exit(0);
+        }
+    }
+
+    #[test]
+    fn sys_a_brief_program_does_not_share_the_harnesss_console() {
+        let own = cineris_sandbox::tree::console_processes()
+            .expect("the test runs on a console, as a harness in a terminal");
+        assert!(own.contains(&std::process::id()), "{own:?}");
+        let env: Vec<_> = std::env::vars_os().collect();
+        let program = std::env::current_exe().expect("the test binary has a path");
+        let said = run(
+            &program,
+            &["--exact", ENTRY, "--nocapture", REPORT],
+            None,
+            &env,
+            Duration::from_secs(30),
+        )
+        .expect("the program answers");
+        let text = String::from_utf8_lossy(&said);
+        let ids: Vec<u32> = text
+            .lines()
+            .find_map(|line| line.strip_prefix(REPORT))
+            .unwrap_or_else(|| panic!("no report: {text:?}"))
+            .split_whitespace()
+            .map(|id| id.parse().expect("a process id"))
+            .collect();
+        assert!(!ids.is_empty(), "the program has a console: {text:?}");
+        assert!(
+            !ids.contains(&std::process::id()),
+            "the program shares the harness's console: {ids:?}"
+        );
     }
 }

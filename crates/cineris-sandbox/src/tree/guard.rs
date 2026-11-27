@@ -25,11 +25,26 @@
 //!   side of that is [`run_guard`].
 //!
 //! Windows needs none of this: a Job Object is closed, and its processes
-//! killed, by the system when the harness's process ends. There a
-//! [`Guard`] is accepted and does nothing.
+//! killed, by the system when the harness's process ends. There no guard
+//! process is kept. The guard's program and subcommand have one use there
+//! instead: a command has a console of its own, which the harness is not
+//! attached to, and a console event can only be sent from inside the
+//! console it is for. So [`Tree::interrupt`](super::Tree::interrupt) starts
+//! the same program, the hidden subcommand, `CTRL_BREAK` and the
+//! command's process id, and [`run_guard`] attaches to the command's
+//! console and sends the event (the signed approvals' part "commands
+//! without the harness's console").
 
 use std::ffi::OsString;
 use std::path::PathBuf;
+
+/// The word after the hidden subcommand that makes the guard's program,
+/// on Windows, send a Ctrl-Break event to a command's process group from
+/// inside that command's console, and exit: [`run_guard`] reads it and the
+/// process id after it as the last two arguments. A word and not an
+/// option, so that a test binary's runner takes it for one more filter.
+#[cfg(not(unix))]
+pub(super) const CTRL_BREAK: &str = "cin-ctrl-break";
 
 /// How to reach the guard process. Clones share the one process.
 ///
@@ -39,6 +54,10 @@ use std::path::PathBuf;
 pub struct Guard {
     #[cfg(unix)]
     shared: std::sync::Arc<imp::Shared>,
+    /// The program and the hidden subcommand, started once for each
+    /// interrupt on Windows, where no guard process is kept.
+    #[cfg(not(unix))]
+    program: std::sync::Arc<(PathBuf, Vec<OsString>)>,
 }
 
 impl Guard {
@@ -60,9 +79,17 @@ impl Guard {
         }
         #[cfg(not(unix))]
         {
-            let _ = (program, args);
-            Self {}
+            Self {
+                program: std::sync::Arc::new((program, args)),
+            }
         }
+    }
+
+    /// The program and the hidden subcommand's arguments, for the helper
+    /// that sends a command's console event (Windows).
+    #[cfg(not(unix))]
+    pub(super) fn program(&self) -> (&std::path::Path, &[OsString]) {
+        (&self.program.0, &self.program.1)
     }
 }
 
@@ -71,13 +98,41 @@ impl Guard {
 /// It reads its standard input until that closes, then kills the process
 /// groups it was told of and not told to forget, and returns. It prints
 /// nothing.
+///
+/// On Windows, when its last two arguments are `cin-ctrl-break` and a
+/// process id, it sends a Ctrl-Break event to that process's group from
+/// inside that process's console, and ends: with code 0 when the event was
+/// sent, and otherwise with the system's error code, which
+/// [`Tree::interrupt`](super::Tree::interrupt) turns back into the error.
+/// It reads nothing and prints nothing. Any program of the user's can do
+/// the same with the three calls it makes, so it gives a command that runs
+/// it no power it did not have.
 pub fn run_guard() {
     #[cfg(unix)]
     imp::run();
     #[cfg(not(unix))]
     {
-        // Nothing starts a guard on this system. If something does, it
-        // waits for its pipe to close like the real one, and does nothing.
+        let words: Vec<OsString> = std::env::args_os().collect();
+        if let [.., word, pid] = words.as_slice()
+            && word == CTRL_BREAK
+        {
+            let sent = pid
+                .to_str()
+                .and_then(|pid| pid.parse::<u32>().ok())
+                .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))
+                .and_then(super::windows::send_ctrl_break);
+            if let Err(error) = sent {
+                #[expect(
+                    clippy::exit,
+                    reason = "the helper's exit code is its answer, as documented"
+                )]
+                std::process::exit(error.raw_os_error().filter(|code| *code != 0).unwrap_or(1));
+            }
+            return;
+        }
+        // Nothing starts a guard process on this system. If something
+        // does, it waits for its pipe to close like the real one, and does
+        // nothing.
         let _ = std::io::copy(&mut std::io::stdin().lock(), &mut std::io::sink());
     }
 }
