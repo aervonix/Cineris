@@ -1072,8 +1072,9 @@ pub(crate) fn unused() -> Result<()> {
     ))
 }
 
-/// `cargo xtask advisories`: the advisory check of every lockfile the
-/// repository keeps, the workspace's and those of the packages outside it.
+/// `cargo xtask advisories`: the advisory check of the lockfile of every
+/// package the repository builds, the workspace's and those of the packages
+/// outside it (`NOT_BUILT`, in the tests, names the lockfiles left out, and why).
 /// Each is checked even when one before it failed, so that one run names
 /// every advisory.
 pub(crate) fn advisories() -> Result<()> {
@@ -1093,6 +1094,13 @@ pub(crate) fn advisories() -> Result<()> {
 /// own. Each reads the root's `deny.toml`.
 pub(crate) const ADVISORIES: [Option<&str>; 2] = [None, Some("fuzz/Cargo.toml")];
 
+/// The lockfiles the repository keeps that the advisory check leaves out,
+/// because nothing builds what they pin: the corpus of real code the
+/// `perf_` tests read as text (it has no manifest), and `mutate`'s fixture
+/// package, which depends on nothing.
+#[cfg(test)]
+const NOT_BUILT: [&str; 2] = ["corpus/Cargo.lock", "xtask/fixtures/mutate/Cargo.lock"];
+
 /// The arguments of `cargo` that check one manifest's lockfile.
 fn advisory_arguments(manifest: Option<&str>) -> Vec<&str> {
     match manifest {
@@ -1111,21 +1119,54 @@ fn advisory_arguments(manifest: Option<&str>) -> Vec<&str> {
 
 #[cfg(test)]
 mod advisory_tests {
-    use super::{ADVISORIES, advisory_arguments};
+    use std::path::{Path, PathBuf};
+
+    use super::{ADVISORIES, NOT_BUILT, advisory_arguments};
+
+    /// Every `Cargo.lock` under the repository's root, but under `target/`
+    /// and hidden folders, relative to the root with `/` between names.
+    fn lockfiles(root: &Path, folder: &Path, found: &mut Vec<String>) {
+        let Ok(entries) = std::fs::read_dir(root.join(folder)) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let path: PathBuf = folder.join(&name);
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            if kind.is_dir() && !name.starts_with('.') && name != "target" {
+                lockfiles(root, &path, found);
+            } else if kind.is_file() && name == "Cargo.lock" {
+                let parts: Vec<String> = path
+                    .iter()
+                    .map(|part| part.to_string_lossy().into_owned())
+                    .collect();
+                found.push(parts.join("/"));
+            }
+        }
+    }
 
     #[test]
-    fn every_lockfile_the_repository_keeps_is_checked_with_the_roots_configuration() {
+    fn every_lockfile_of_a_package_the_repository_builds_is_checked_with_the_roots_configuration() {
+        let root = crate::workspace::root();
         assert_eq!(
             advisory_arguments(ADVISORIES[0]),
             ["deny", "check", "advisories"]
         );
+        let mut checked = vec!["Cargo.lock".to_owned()];
         for manifest in ADVISORIES.iter().flatten() {
-            let lockfile = std::path::Path::new(manifest).with_file_name("Cargo.lock");
             assert!(
-                crate::workspace::root().join(&lockfile).is_file(),
+                root.join(manifest).is_file(),
+                "{manifest} is not a manifest the repository keeps"
+            );
+            let lockfile = Path::new(manifest).with_file_name("Cargo.lock");
+            assert!(
+                root.join(&lockfile).is_file(),
                 "{} is not a lockfile the repository keeps",
                 lockfile.display()
             );
+            checked.push(lockfile.to_string_lossy().replace('\\', "/"));
             let arguments = advisory_arguments(Some(manifest));
             assert!(
                 arguments
@@ -1139,6 +1180,23 @@ mod advisory_tests {
             );
         }
         assert!(ADVISORIES.contains(&Some("fuzz/Cargo.toml")));
+        // A lockfile added anywhere is either checked or named as one that
+        // nothing builds, so that a new package outside the workspace is
+        // not left out of the check unseen.
+        let mut found = Vec::new();
+        lockfiles(&root, Path::new(""), &mut found);
+        for lockfile in &found {
+            assert!(
+                checked.contains(lockfile) || NOT_BUILT.contains(&lockfile.as_str()),
+                "{lockfile} is neither checked for advisories nor named in NOT_BUILT"
+            );
+        }
+        for left_out in NOT_BUILT {
+            assert!(
+                found.iter().any(|lockfile| lockfile == left_out),
+                "{left_out} is no longer kept"
+            );
+        }
     }
 }
 
