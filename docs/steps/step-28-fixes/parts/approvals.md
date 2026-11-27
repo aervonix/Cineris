@@ -69,4 +69,6 @@ Each went to an item, with its `- Owner:` line:
 
 ## Runs
 
-(Filled in below as they finish.)
+- **On `main` (`5eda6204`):** the review's `review_an_indented_profile_is_not_passed_over` failed on a Linux runner (45939147363). Each other fix's test fails with its fix broken: every break below puts back what `main` did (no sentence, no prompt, an indented key passed over, nothing said of the value in force), and is caught.
+- **Breaks:** `cargo xtask mutate step-28-fixes-approvals step-28/add-prompt-not-shown step-28/remove-deletes-outside-the-folder step-28/remove-takes-the-name-as-typed`: 14 breaks, 14 caught as the lists expect. `step-28/add-prompt-not-shown` was moved to `ext add`'s call of `prompt_shown`, the code it named having become that call.
+- **Tests on the runners:** `test -p cineris-ext -p cineris-core -p cineris-cli -p cineris-tui` on Windows and Linux (45944794805, 45944847374: every test passed but the first run's new test, which read the scrollback before the line was drawn; fixed); `test -p cineris-tui -p cineris-cli` on both after the fix (45946107317, 45946109791) and `test --dependents -p cineris-ext` on Linux (45946456296): all passed.
