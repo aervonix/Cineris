@@ -1768,9 +1768,10 @@ fn perf_idle_memory_in_a_workspace_of_real_code() {
 /// cargo test --profile dist --target x86_64-unknown-linux-musl -p cineris-cli --test system perf_two_hundred_turns -- --ignored --nocapture
 /// ```
 ///
-/// `CINERIS_PERF_TURNS` sets the turns, `CINERIS_PERF_FILES` the files and
+/// `CINERIS_PERF_TURNS` sets the turns, `CINERIS_PERF_FILES` the files,
 /// `CINERIS_PERF_REASONING` the bytes of each turn's reasoning (since the
-/// fixes of the review of step 25, which found the test played none).
+/// fixes of the review of step 25, which found the test played none) and
+/// `CINERIS_PERF_PRESENTERS` the presenters (`inline,fullscreen`).
 #[test]
 #[ignore = "a measurement, in a release build"]
 fn perf_two_hundred_turns_in_each_presenter() {
@@ -1837,7 +1838,9 @@ fn perf_two_hundred_turns_in_each_presenter() {
     } else {
         "for i in $(seq 1 200); do echo \"line $i of the build's output, as a compiler prints it\"; done"
     };
-    for presenter in ["inline", "fullscreen"] {
+    let presenters =
+        std::env::var("CINERIS_PERF_PRESENTERS").unwrap_or_else(|_| "inline,fullscreen".to_owned());
+    for presenter in presenters.split(',').map(str::trim) {
         let machine = Machine::new(&format!("perf_turns_{presenter}"));
         let made = Instant::now();
         let linked = real_code(&machine.workspace, files);
@@ -1901,11 +1904,16 @@ fn perf_two_hundred_turns_in_each_presenter() {
             memory(&session)
         ));
         let began = Instant::now();
+        let cpu_before = usage(&session).map(|usage| usage.cpu);
         for n in 1..=turns {
             session.send(format!("turn {n}\r").as_bytes());
             let done = format!("Turn {n} done.");
+            // On the screen, where the answer's last line is when the turn
+            // ends: the virtual terminal's whole history, read at every
+            // piece of output, cost the test time that grew with the
+            // session's square (130 s for 200 turns of reasoning inline).
             session.wait_for(Duration::from_secs(60), "the turn's answer", |t| {
-                shows_ever(t, &done)
+                t.shows(&done)
             });
             turn_ended(&mut session);
             // The reasoning reached the transcript: what the scrollback shows
@@ -1918,8 +1926,25 @@ fn perf_two_hundred_turns_in_each_presenter() {
                 );
             }
         }
+        // The binary's own CPU time over the turns: clock ticks of 10 ms
+        // on Linux, milliseconds on Windows.
+        let cpu = match (cpu_before, usage(&session).map(|usage| usage.cpu)) {
+            (Some(before), Some(after)) if cfg!(windows) => {
+                format!(
+                    ", the binary's CPU {:.1} s",
+                    (after - before) as f64 / 1000.0
+                )
+            }
+            (Some(before), Some(after)) => {
+                format!(
+                    ", the binary's CPU {:.1} s",
+                    (after - before) as f64 / 100.0
+                )
+            }
+            _ => String::new(),
+        };
         report(&format!(
-            "{presenter}: {turns} turns in {:.1} s",
+            "{presenter}: {turns} turns in {:.1} s{cpu}",
             began.elapsed().as_secs_f64()
         ));
         settle(&mut session);
@@ -1928,17 +1953,34 @@ fn perf_two_hundred_turns_in_each_presenter() {
             memory(&session)
         ));
         if presenter == "fullscreen" {
-            // To the top and back, two resizes, and a search: four pages a
-            // turn, and one more for each KiB of its reasoning, which is
-            // about 16 rows of it.
-            let pages = turns * (4 + reasoning_bytes / 1024);
-            for _ in 0..pages {
-                session.send_key("pageup");
-            }
-            session.wait_for(LIMIT, "the top", |t| t.shows(HEADER));
-            for _ in 0..pages {
-                session.send_key("pagedown");
-            }
+            // To the top and back, two resizes, and a search. The pages go
+            // eight at a time, each group's output waited for before the
+            // next: thousands sent at once piled up in the terminal, whose
+            // reads then cut their sequences apart, and their pieces were
+            // typed into the input box (found measuring the fixes of the
+            // review of step 25).
+            let scrolled = Instant::now();
+            let mut groups = 0;
+            let mut page = |session: &mut Session, key: &str, until: &dyn Fn(&VTerm) -> bool| {
+                while !until(session.screen()) {
+                    assert!(
+                        scrolled.elapsed() < Duration::from_secs(600),
+                        "the scroll never ended:\n{}",
+                        session.screen().dump()
+                    );
+                    for _ in 0..8 {
+                        session.send_key(key);
+                    }
+                    let _ = session.step(Duration::from_millis(250));
+                    groups += 1;
+                }
+            };
+            page(&mut session, "pageup", &|t| t.shows(HEADER));
+            page(&mut session, "pagedown", &|t| !t.shows("more below"));
+            report(&format!(
+                "{presenter}: to the top and back in {groups} groups of 8 pages, {:.1} s",
+                scrolled.elapsed().as_secs_f64()
+            ));
             session.resize(70, 30);
             session.resize(100, 30);
             session.send(b"\x06turn 1\r");
