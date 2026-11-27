@@ -28,9 +28,9 @@ fn header(name: &str) -> String {
     )
 }
 
-/// Where else a user's file can hold a key: in a web address, and in a
-/// reserved section, whose keys a later step declares (an MCP server's
-/// environment, a proxy's password). It goes on from the provider's table
+/// Where else a user's file can hold a key: in a web address, an MCP
+/// server's environment (declared since step 30), and a reserved section,
+/// whose keys a later step declares (a proxy's password). It goes on from the provider's table
 /// that [`header`] opens.
 fn elsewhere() -> String {
     format!(
@@ -55,7 +55,7 @@ fn no_debug_or_display_form_holds_a_key() {
             &format!("{}{}", header("azure"), elsewhere()),
         )
         .layer(LayerKind::Project, &header("gateway"))
-        // A project's server, which waits for trust. (A project's values,
+        // A project's server, kept apart. (A project's values,
         // its local file's too, are shown whole to the trust question, but
         // what the formats know, since the review of the step 25 fixes:
         // `imports::the_trust_question_shows_a_projects_command_lines_whole`.
@@ -82,9 +82,14 @@ fn no_debug_or_display_form_holds_a_key() {
     assert_eq!(
         loaded.section("mcp").unwrap()["servers"]["helper"]["env"]["HELPER_TOKEN"].as_str(),
         Some(KEY),
-        "the step that reads a reserved section gets what was written"
+        "the step that reads the section gets what was written"
     );
-    assert_eq!(loaded.withheld.len(), 1, "the project's MCP server waits");
+    assert!(loaded.withheld.is_empty(), "{:?}", loaded.withheld);
+    assert_eq!(
+        loaded.project_mcp_servers.len(),
+        1,
+        "the project's MCP server is read apart"
+    );
     // And it is redacted where the configuration is shown, with the name of
     // a variable, and what is not a secret, left in view.
     let shown = loaded.show(&env, true);
@@ -92,7 +97,7 @@ fn no_debug_or_display_form_holds_a_key() {
         "providers.azure.headers = { X-Team = { env = \"TEAM\" }, api-key = \"[redacted]\" }",
         "providers.azure.base_url = \"https://[redacted]@gateway.example.test/v1\"",
         "mcp.servers.helper.command = \"helper-server\"",
-        "mcp.servers.helper.env.HELPER_TOKEN = \"[redacted]\"",
+        "mcp.servers.helper.env = { HELPER_TOKEN = \"[redacted]\" }",
         "http.proxy = \"http://[redacted]@proxy.example.test:8080\"",
         "tui.theme = \"dusk\"",
     ] {

@@ -540,7 +540,9 @@ fn the_profile_flag_cannot_pass_a_lock_on_the_profile() {
 /// A value replaces whatever is at its key whole. One set where a lock
 /// holds a key further in, by any layer above the managed file, would
 /// remove the locked entry, so it counts as locked. Before, `servers =
-/// "none"` and `audit = false` dropped what the managed file locked.
+/// "none"` and `audit = false` dropped what the managed file locked. (Since
+/// step 30 declares `[mcp]`, `servers` is a table of servers and nothing
+/// else: a locked server's own key is what a layer can set.)
 #[test]
 fn a_value_cannot_replace_a_table_that_holds_a_locked_key() {
     let mut machine = Machine::new("layers_lock_parent");
@@ -555,12 +557,12 @@ fn a_value_cannot_replace_a_table_that_holds_a_locked_key() {
     for (layer, text) in [
         (
             LayerKind::User,
-            "[mcp]\nservers = \"none\"\n[hooks.audit]\ncommand = [\"mine\"]\n\
+            "[mcp.servers.corp]\ncommand = \"mine\"\n[hooks.audit]\ncommand = [\"mine\"]\n\
              [providers.corp]\nheaders = { X-Other = \"1\" }\n",
         ),
         (
             LayerKind::Project,
-            "[mcp]\nservers = []\n[hooks.audit]\ncommand = [\"theirs\"]\n",
+            "[mcp.servers.corp]\ncommand = \"theirs\"\n[hooks.audit]\ncommand = [\"theirs\"]\n",
         ),
     ] {
         machine
@@ -580,8 +582,10 @@ fn a_value_cannot_replace_a_table_that_holds_a_locked_key() {
             "[\"audit-log\"]",
             "{layer}"
         );
-        // A project's hook of a locked name is not read either (step 28).
+        // A project's hook of a locked name is not read either (step 28),
+        // nor its MCP server (step 30).
         assert!(loaded.project_hooks.is_empty(), "{layer}");
+        assert!(loaded.project_mcp_servers.is_empty(), "{layer}");
         assert_eq!(
             loaded.settings.providers["corp"]
                 .headers

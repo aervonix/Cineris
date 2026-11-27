@@ -339,6 +339,12 @@ pub struct Loaded {
     /// does not change them: trust and each entry's approval decide whether
     /// one runs. One whose name the managed file locks is left out.
     pub project_hooks: Vec<ProjectHook>,
+    /// The project's MCP servers, by name, read apart from the user's,
+    /// which are in `settings.mcp.servers` (since step 30), as its hooks
+    /// are. Whether the project is trusted does not change them: trust and
+    /// each entry's approval decide whether one runs. One whose name the
+    /// managed file locks is left out.
+    pub project_mcp_servers: Vec<crate::mcp::ProjectMcpServer>,
     values: toml::Table,
     origins: BTreeMap<KeyPath, Origin>,
     entry_origins: BTreeMap<KeyPath, Vec<Origin>>,
@@ -359,6 +365,7 @@ impl fmt::Debug for Loaded {
             .field("dirs", &self.dirs)
             .field("files", &self.files)
             .field("project_hooks", &self.project_hooks)
+            .field("project_mcp_servers", &self.project_mcp_servers)
             .field(
                 "values",
                 &schema::redact(&KeyPath::root(), &Value::Table(self.values.clone())),
@@ -520,6 +527,7 @@ pub(crate) fn merge_layers(
             return Err(LoadFailure { diagnostics });
         }
     };
+    let project_mcp_servers = mcp_servers(layers, &merger, &settings, &mut diagnostics);
     Ok(Loaded {
         settings,
         diagnostics,
@@ -531,6 +539,7 @@ pub(crate) fn merge_layers(
         dirs: options.dirs.clone(),
         files,
         project_hooks,
+        project_mcp_servers,
         values: merger.values,
         origins: merger.origins,
         entry_origins: merger.entry_origins,
@@ -608,6 +617,124 @@ fn project_hooks(
         }
     }
     hooks
+}
+
+/// The MCP servers of the configuration (since step 30, `crate::mcp`):
+/// each of the user's, merged, judged whole, with a warning naming one
+/// that is not started as it is; and the project's, read apart from every
+/// other layer, as its hooks are ([`project_hooks`]), each judged as a
+/// project's. A project's server whose name the managed file locks, or
+/// every one where it locks `mcp` or `mcp.servers`, is left out, with a
+/// note.
+fn mcp_servers(
+    layers: &[FileLayer],
+    merger: &Merger,
+    settings: &Settings,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Vec<crate::mcp::ProjectMcpServer> {
+    let keys: Vec<String> = settings
+        .providers
+        .values()
+        .filter_map(|provider| provider.key_env.clone())
+        .collect();
+    let env_remove = &settings.shell.env_remove;
+    let refused = |why: &str| format!("this MCP server is not started: {why}");
+    for (name, entry) in &settings.mcp.servers {
+        let Some(why) = crate::mcp::server_problem(name, entry, false, &keys, env_remove) else {
+            continue;
+        };
+        let key = KeyPath::new(["mcp", "servers", name.as_str()]);
+        let origin = merger
+            .origins
+            .iter()
+            .find(|(set, _)| set.is_at_or_under(&key))
+            .map(|(_, origin)| origin.clone());
+        diagnostics.push(Diagnostic {
+            severity: Severity::Warning,
+            layer: origin.as_ref().map(|origin| origin.layer),
+            file: origin.as_ref().and_then(|origin| origin.file.clone()),
+            line: origin.as_ref().and_then(|origin| origin.line),
+            key: Some(key),
+            message: refused(&why),
+        });
+    }
+
+    let mut entries: BTreeMap<String, (toml::Table, Origin)> = BTreeMap::new();
+    for layer in layers.iter().filter(|layer| layer.kind.is_project()) {
+        let Some(Value::Table(servers)) = layer
+            .document
+            .table
+            .get("mcp")
+            .and_then(|mcp| mcp.get("servers"))
+        else {
+            continue;
+        };
+        for (name, entry) in servers {
+            let Value::Table(entry) = entry else {
+                continue;
+            };
+            let key = KeyPath::new(["mcp", "servers", name.as_str()]);
+            let origin = Origin {
+                layer: layer.kind,
+                defined_in: None,
+                file: Some(layer.file.clone()),
+                line: layer.document.line_of(&key),
+                detail: None,
+            };
+            if merger.is_locked(&key) {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Note,
+                    layer: Some(layer.kind),
+                    file: origin.file.clone(),
+                    line: origin.line,
+                    key: Some(key),
+                    message: "locked by the managed configuration; this MCP server is not used"
+                        .to_owned(),
+                });
+                continue;
+            }
+            let (merged, _) = entries
+                .entry(name.clone())
+                .or_insert_with(|| (toml::Table::new(), origin));
+            for (field, value) in entry {
+                merged.insert(field.clone(), value.clone());
+            }
+        }
+    }
+    let mut servers = Vec::with_capacity(entries.len());
+    for (name, (entry, origin)) in entries {
+        let key = KeyPath::new(["mcp", "servers", name.as_str()]);
+        match schema::McpServerSettings::read(&Value::Table(entry.clone())) {
+            Ok(settings) => {
+                let problem = crate::mcp::server_problem(&name, &settings, true, &keys, env_remove);
+                if let Some(why) = &problem {
+                    diagnostics.push(Diagnostic {
+                        severity: Severity::Warning,
+                        layer: Some(origin.layer),
+                        file: origin.file.clone(),
+                        line: origin.line,
+                        key: Some(key),
+                        message: refused(why),
+                    });
+                }
+                servers.push(crate::mcp::ProjectMcpServer::new(
+                    name, settings, origin, problem, entry,
+                ));
+            }
+            // Each layer was checked already, so each entry reads.
+            Err(message) => diagnostics.push(Diagnostic {
+                severity: Severity::Warning,
+                layer: Some(origin.layer),
+                file: origin.file.clone(),
+                line: origin.line,
+                key: Some(key),
+                message: format!(
+                    "the project's MCP server could not be read, and is not used: {message}"
+                ),
+            }),
+        }
+    }
+    servers
 }
 
 /// Reads, parses and checks one file, named `file` and read from
@@ -1263,6 +1390,8 @@ impl Loaded {
             // A hook is read when a session opens: a reload leaves the
             // session's as they were.
             project_hooks: self.project_hooks.clone(),
+            // A project's servers are read live (13-mcp): the newer ones.
+            project_mcp_servers: newer.project_mcp_servers.clone(),
             values,
             origins,
             entry_origins,

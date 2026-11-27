@@ -282,7 +282,22 @@ mod tests {
             properties["tui"]["properties"]["glyphs"]["x-cineris-trust"],
             "user only"
         );
-        assert_eq!(properties["mcp"]["x-cineris-trust"], "runs code");
+        // MCP's section is enforced (since step 30), each of a server's keys
+        // kept apart.
+        let server = &properties["mcp"]["properties"]["servers"]["additionalProperties"];
+        assert_eq!(properties["mcp"]["additionalProperties"], false);
+        assert_eq!(server["additionalProperties"], false);
+        assert!(
+            server["properties"]["command"]["x-cineris-trust"]
+                .as_str()
+                .is_some_and(|trust| trust.starts_with("kept apart")),
+            "{}",
+            server["properties"]["command"]
+        );
+        assert_eq!(
+            server["properties"]["expose"]["enum"],
+            json!(["search", "direct"])
+        );
         // A hook's entry is enforced, and each of its keys kept apart.
         let hook = &properties["hooks"]["additionalProperties"];
         assert_eq!(hook["additionalProperties"], false);

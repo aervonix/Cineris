@@ -436,10 +436,10 @@ rule: A server with an argument that is not text is refused.
 file: crates/cineris-config/src/import.rs
 in: server
 find:
-    } else if not_text {
+    } else if not_text || !givable(&server) {
         Some(Refusal::NotUnderstood)
 replace:
-    } else if false && not_text {
+    } else if false && not_text || !givable(&server) {
         Some(Refusal::NotUnderstood)
 caught-by:
     cineris-config import::tests::an_argument_that_is_not_text_refuses_and_is_never_shown

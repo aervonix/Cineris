@@ -18,6 +18,8 @@ index.pass_time = "2s"
 limits.day.cost = 20.0
 log.level = "info,cineris_llm=debug"
 managed.locked = ["sandbox.enabled"]
+mcp.direct_share = 5
+mcp.start_timeout_ms = 10000
 model.effort = "high"
 model.fast = "claude-haiku-5-5"
 model.judge = "claude-opus-5-5"

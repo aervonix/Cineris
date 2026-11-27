@@ -25,9 +25,11 @@
 //!   provider has too, which needs it, and never without a model: written
 //!   always, it held every later `model.main` (`--model`, a hand edit) to
 //!   that provider's models.
-//! - **`[mcp]` is checked as the loader does not check it:** the section is
-//!   reserved in this version, so the strict read-back passes over it. A
-//!   server's name must be settable ([`settable_name`]), two servers picked
+//! - **`[mcp]` is checked beyond what the loader checks:** since step 30
+//!   the section is declared, so the strict read-back reads each key's
+//!   type, and refuses a key it does not know; this check holds the table
+//!   to the first run's own form besides. A server's name must be settable
+//!   ([`settable_name`], the loader's rule for a server's name), two servers picked
 //!   may not share a name, and at most [`MAX_SERVERS`] are written; the
 //!   table read back must hold exactly those servers, each in 13-mcp's
 //!   form ([`WriteError::NotRead`] otherwise). *Since the step 25 fixes (the
@@ -446,8 +448,8 @@ fn reads_back(text: &str, meant: &Table) -> Result<(), WriteError> {
     Ok(())
 }
 
-/// The `[mcp]` table as it reads back, checked as the loader does not check
-/// it (the section is reserved in this version): only servers, at most
+/// The `[mcp]` table as it reads back, held to the first run's own form
+/// beyond the loader's reading of it: only servers, at most
 /// [`MAX_SERVERS`] of them, each with a settable name and in 13-mcp's form,
 /// a command (with text arguments) or an address, and its environment and
 /// headers each a reference to a variable.
@@ -691,16 +693,38 @@ mod tests {
     }
 
     /// A name from another tool's file cannot leave its table: whatever it
-    /// holds, it is one key, and the file reads back as one server.
+    /// holds, it is one key, and the file reads back as one server. Since
+    /// step 30 a server's name is the registry's rule, so a name that holds
+    /// anything but the ASCII letters, digits, `_`, `-` and `.` is not
+    /// written at all.
     #[test]
     fn a_hostile_name_stays_one_server() {
         for name in [
             "a] [permissions] mode = \"unrestricted\"",
             "x\" = 1 [y",
             "with space",
-            "dotted.name",
             "# a comment",
         ] {
+            let choices = FirstRunChoices {
+                imports: Some(Imports {
+                    servers: vec![server(
+                        name,
+                        Launch::Command {
+                            program: "run".to_owned(),
+                            args: Vec::new(),
+                        },
+                    )],
+                    ..Imports::default()
+                }),
+                ..FirstRunChoices::default()
+            };
+            let refused = user_config_text(&choices).unwrap_err();
+            assert!(
+                refused.to_string().contains("cannot be a setting's"),
+                "{name:?}: {refused}"
+            );
+        }
+        for name in ["dotted.name", "with-dash_and.dot"] {
             let choices = FirstRunChoices {
                 imports: Some(Imports {
                     servers: vec![server(

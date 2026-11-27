@@ -8,6 +8,7 @@
 //! | [`credentials`] | The credential stores (an owner-only file, Windows Credential Manager) and the lookup order: flag, environment variable, store. |
 //! | [`state`] | [`StateDir`]: where the state files live. |
 //! | [`discover`] | What other tools left on the machine that could be imported. Reported, never read. |
+//! | [`mcp`] | What an MCP server's entry must be to start, and a project's servers read apart from the user's (since step 30). |
 //! | [`env`], [`dirs`] | The environment and the directories, passed in, never read from the process behind the caller's back. |
 //!
 //! # What this crate does not do
@@ -42,6 +43,7 @@ pub mod import;
 pub mod key;
 pub mod layer;
 pub mod load;
+pub mod mcp;
 pub mod reload;
 pub mod schema;
 pub mod state;

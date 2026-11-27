@@ -13,8 +13,13 @@
 //! rules:
 //!
 //! 1. **A declared key that can hold a secret** (its kind is text or
-//!    `{ env = "NAME" }`: today a provider's headers) shows its literal
-//!    text as `[redacted]`. The typed settings keep it as a `Secret`.
+//!    `{ env = "NAME" }`: a provider's headers, and since step 30 an MCP
+//!    server's `env` and `headers`) shows its literal text as `[redacted]`.
+//!    The typed settings keep it as a `Secret`. **An MCP server's `args`,
+//!    `url` and `command`,** declared since step 30, are shown by the first
+//!    run's import's rule, as rule 2 shows a command line (13-mcp's rule,
+//!    kept for the declared keys), wherever a view shows them: the
+//!    section, a server's table, the key alone, a profile's.
 //! 2. **In a reserved section**, whose keys a later step declares and which
 //!    holds anything until then, a value is redacted whole when a key on
 //!    its way names a secret by its look: `env` or `headers`; a name a word
@@ -56,10 +61,25 @@ fn redacted() -> Value {
 #[must_use]
 pub(crate) fn redact(key: &KeyPath, value: &Value) -> Value {
     let shown = match lookup(key) {
+        // An MCP server's `args`, `url` and `command`, declared since step
+        // 30: by the first run's import's rule, as when the section was
+        // reserved (rule 2).
+        Lookup::Setting { .. } if a_servers_command_line(key) => {
+            command_line(key.last(), value).unwrap_or_else(|| redact_all(value))
+        }
         Lookup::Setting { child, .. } => match &child.node {
             Node::Leaf(kind) => redact_kind(kind, value),
             _ => value.clone(),
         },
+        // Inside a server's command line, a value cannot be judged apart
+        // from the flag before it.
+        Lookup::InsideSetting { .. }
+            if key
+                .parent()
+                .is_some_and(|parent| a_servers_command_line(&parent)) =>
+        {
+            redact_all(value)
+        }
         // One entry of such a setting: a single header.
         Lookup::InsideSetting { child } => match &child.node {
             Node::Leaf(kind) if may_hold_secret(kind) => redact_kind(&Kind::EnvText, value),
@@ -355,6 +375,22 @@ fn command_line(name: Option<&str>, value: &Value) -> Option<Value> {
     }
 }
 
+/// Whether `key` is an MCP server's `args`, `url` or `command`
+/// (`mcp.servers.<name>.args`), at the root of a file or in a profile: the
+/// keys whose values the views show by the first run's import's rule.
+fn a_servers_command_line(key: &KeyPath) -> bool {
+    let parts = key.parts();
+    let parts = match parts {
+        [first, _, rest @ ..] if first == "profiles" => rest,
+        _ => parts,
+    };
+    matches!(
+        parts,
+        [mcp, servers, _, last]
+            if mcp == "mcp" && servers == "servers" && matches!(last.as_str(), "args" | "url" | "command")
+    )
+}
+
 /// Arguments, each shown by the import's rule in place, a value that is not
 /// text standing as the mask among them and redacted whole.
 fn shown_in_place<'a>(items: impl Iterator<Item = &'a Value>) -> Vec<Value> {
@@ -600,11 +636,12 @@ mod tests {
             assert!(!names_a_secret(name), "{name}");
         }
 
+        // In a section still reserved (MCP's is declared since step 30).
         let servers = toml(
             "{ x = { command = \"srv\", env = { TOKEN = \"k\", MODE = \"m\" }, api_key = \"k\" } }",
         );
         assert_eq!(
-            redact(&key("mcp.servers"), &servers),
+            redact(&key("skills.servers"), &servers),
             toml(
                 "{ x = { command = \"srv\", env = { TOKEN = \"[redacted]\", MODE = \
                  \"[redacted]\" }, api_key = \"[redacted]\" } }"

@@ -13,9 +13,10 @@ use cineris_protocol::lease::{NetworkAccess, Rule};
 use cineris_protocol::{Level, ModelRole, Speed};
 
 use super::types::{
-    BackspaceChoice, Bindings, ColorChoice, DensityChoice, GlyphChoice, Headers, HookEventName,
-    PresenterChoice, Profiles, ReasoningShown, ReasoningVisibility, Reserved, SessionDurability,
-    StoreChoice, ToolOutputChoice, UsageRanges, VerifyMode, Weekday,
+    BackspaceChoice, Bindings, ColorChoice, DensityChoice, ExposeChoice, GlyphChoice, Headers,
+    HookEventName, PresenterChoice, Profiles, ReasoningShown, ReasoningVisibility, Reserved,
+    ServerAddress, ServerArgs, ServerProgram, SessionDurability, StoreChoice, ToolOutputChoice,
+    UsageRanges, Variables, VerifyMode, Weekday,
 };
 use super::{CONFIG_VERSION, settings};
 
@@ -159,9 +160,127 @@ settings! {
         /// Where skills are looked for.
         [reserved UserOnly]
         pub skills: Reserved,
-        /// MCP servers by name, and MCP settings.
-        [reserved RunsCode]
-        pub mcp: Reserved,
+        /// MCP servers by name, and the client's own settings (since step
+        /// 30, `docs/architecture/13-mcp.md`, "Configuration"). The user's
+        /// layers merge as any setting's do; **a project's servers are kept
+        /// apart**, as its hooks are: never merged with the user's, each
+        /// proposed and started only once the project is trusted and the
+        /// entry, as it is now, approved, and one with the name of one of
+        /// the user's is refused. Enforced: a key this build does not know
+        /// refuses the file.
+        [enforced]
+        pub mcp: McpSettings,
+    }
+}
+
+settings! {
+    /// MCP's own settings, and its servers by name.
+    pub struct McpSettings {
+        /// How long a server's start may take before it is given up on, in
+        /// milliseconds: 10 seconds by default. A `tool_search` or
+        /// `tool_call` that needs a server still starting waits up to this.
+        /// A server's own `start_timeout_ms` takes its place. A project's
+        /// file may lower it and may not raise it: the wait is the
+        /// session's.
+        [TightenOnly, NextSession, 100..=600_000]
+        pub start_timeout_ms: u64 = 10_000,
+        /// The share of the context window that directly exposed tools'
+        /// definitions may take, in percent, past which the harness warns.
+        /// A project's file may lower it and may not raise it.
+        [TightenOnly, NextEpoch, 0..=100]
+        pub direct_share: u64 = 5,
+        /// Servers by name: `[mcp.servers.<name>]`. A name is one to 64 of
+        /// the ASCII letters, digits, `_`, `-` and `.`. Each is local (it
+        /// has `command`) or remote (it has `url`), never both; an entry
+        /// that has neither, or a key of the other kind, is refused with a
+        /// warning, and the server is not started.
+        [nested]
+        pub servers: BTreeMap<String, McpServerSettings>,
+    }
+}
+
+settings! {
+    /// One MCP server (`docs/architecture/13-mcp.md`, "Configuration").
+    /// Every key is kept apart from a project's files: a project's servers
+    /// are its own, each approved as it is.
+    pub struct McpServerSettings {
+        /// A local server's program: a bare name, found in `PATH`'s
+        /// absolute folders outside the workspace and the writable roots
+        /// (on Windows a `.exe`, `.cmd` or `.bat`), or an absolute path
+        /// outside them. Spoken to over its standard input and output.
+        [KeptApart, NextSession]
+        pub command: Option<ServerProgram>,
+        /// A local server's arguments, each one argument. On Windows an
+        /// argument a `.cmd` or `.bat` cannot carry (a `"`, `%`, `!`, `&`,
+        /// `|`, `<`, `>`, `^`, a parenthesis, a line break) refuses the
+        /// server's start.
+        [KeptApart, NextSession]
+        pub args: ServerArgs,
+        /// The folder a local server runs in: relative to the workspace, or
+        /// absolute, or under the home folder with a leading `~`. Without
+        /// it, the workspace. **In a project that is not trusted, a server
+        /// runs in an empty folder of its own in place of the workspace or
+        /// any folder inside it,** so that nothing a repository holds is run
+        /// through it: there `args = ["--root", "."]` is that empty folder,
+        /// not the project.
+        [KeptApart, NextSession]
+        pub cwd: Option<String>,
+        /// The variables a local server is given besides its base list
+        /// (`PATH`, the home folder, the locale, the user's name, and the
+        /// system's own on Windows): a table from a name to text or to
+        /// `{ env = "NAME" }`, a variable of yours read when the server
+        /// starts. Nothing else of your environment is given. A provider's
+        /// key, a variable whose name begins `CINERIS_` and one of
+        /// `shell.env_remove` cannot be a value's source. Text is held as a
+        /// secret and shown as `[redacted]`.
+        [KeptApart, NextSession]
+        pub env: Variables,
+        /// A remote server's address, over Streamable HTTP: `https`, or
+        /// `http` to this machine's own loopback.
+        [KeptApart, NextSession]
+        pub url: Option<ServerAddress>,
+        /// The headers sent with every request to a remote server: a table
+        /// from a header's name to `{ env = "NAME" }`, read when it
+        /// connects, or text, held as a secret. **A project's server takes
+        /// a header only from the variable named for its server and the
+        /// header,** both in capitals, joined by `_`, each other character
+        /// `_` (`Authorization` of the server `tracker` from
+        /// `TRACKER_AUTHORIZATION`), never from a variable the project
+        /// chose or as text: a repository cannot send a token of yours to
+        /// a host it picked.
+        [KeptApart, NextSession]
+        pub headers: Headers,
+        /// Whether a local server may reach the network where the sandbox
+        /// confines it. It writes nothing but its own temporary folder in
+        /// any case.
+        [KeptApart, NextSession]
+        pub network: bool = false,
+        /// One line for the system prompt's list of sources, beside the
+        /// server's name and its tool count. Never the server's own text.
+        [KeptApart, NextSession]
+        pub description: Option<String>,
+        /// Whether it runs. `false` keeps it out of new sessions.
+        [KeptApart, NextSession]
+        pub enabled: bool = true,
+        /// How the model reaches its tools: `search`, through `tool_search`
+        /// and `tool_call`, or `direct`, declared like the built-in tools
+        /// from the next context epoch.
+        [KeptApart, NextSession]
+        pub expose: ExposeChoice = ExposeChoice::Search,
+        /// The only tools offered, by name. Without it, every tool.
+        [KeptApart, NextSession]
+        pub tools: Option<Vec<String>>,
+        /// Tools never offered, by name.
+        [KeptApart, NextSession]
+        pub deny_tools: Vec<String>,
+        /// How long its start may take, in milliseconds, in place of
+        /// `mcp.start_timeout_ms`.
+        [KeptApart, NextSession, 100..=600_000]
+        pub start_timeout_ms: Option<u64>,
+        /// How long one call may take, in milliseconds: a minute by
+        /// default, at most an hour.
+        [KeptApart, NextSession, 100..=3_600_000]
+        pub timeout_ms: u64 = 60_000,
     }
 }
 

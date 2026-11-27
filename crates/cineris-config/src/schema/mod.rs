@@ -46,15 +46,16 @@ pub(crate) use redact::{redact, redact_for_consent};
 pub use reference::reference_page;
 pub use sections::{
     AdaptSettings, CompatSettings, CredentialSettings, HookSettings, KeySettings, LimitSet,
-    LimitSettings, LogSettings, ManagedSettings, ModelSettings, PermissionSettings,
-    ProviderSettings, RetrySettings, RoleSettings, RpcSettings, SandboxSettings, SessionSettings,
-    Settings, StatsSettings, TerminalSettings, TuiSettings, UsageSettings, VariantSettings,
-    VerifySettings,
+    LimitSettings, LogSettings, ManagedSettings, McpServerSettings, McpSettings, ModelSettings,
+    PermissionSettings, ProviderSettings, RetrySettings, RoleSettings, RpcSettings,
+    SandboxSettings, SessionSettings, Settings, StatsSettings, TerminalSettings, TuiSettings,
+    UsageSettings, VariantSettings, VerifySettings,
 };
 pub use types::{
-    BackspaceChoice, Bindings, ColorChoice, DensityChoice, EnvText, GlyphChoice, Headers,
-    HookEventName, PresenterChoice, Profiles, ReasoningShown, ReasoningVisibility, Reserved,
-    SessionDurability, StoreChoice, ToolOutputChoice, UsageRanges, VerifyMode, Weekday,
+    BackspaceChoice, Bindings, ColorChoice, DensityChoice, EnvText, ExposeChoice, GlyphChoice,
+    Headers, HookEventName, PresenterChoice, Profiles, ReasoningShown, ReasoningVisibility,
+    Reserved, ServerAddress, ServerArgs, ServerProgram, SessionDurability, StoreChoice,
+    ToolOutputChoice, UsageRanges, Variables, VerifyMode, Weekday,
 };
 pub(crate) use types::{magnitude, milliseconds_as_text};
 

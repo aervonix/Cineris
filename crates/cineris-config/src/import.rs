@@ -413,13 +413,13 @@ impl Masked {
 }
 
 /// Whether `name` can be a server's name in the user's file: one to
-/// [`MAX_NAME`] characters, none a control character or one that acts
-/// unseen.
+/// [`MAX_NAME`] of the ASCII letters, digits, `_`, `-` and `.`, the rule the
+/// loader holds a server's name to since step 30
+/// ([`crate::mcp::server_name_ok`]), so that the first run never writes a
+/// server the loader would not start.
 #[must_use]
 pub fn settable_name(name: &str) -> bool {
-    !name.is_empty()
-        && name.chars().count() <= MAX_NAME
-        && !name.chars().any(cineris_base::acts_unseen)
+    crate::mcp::server_name_ok(name)
 }
 
 /// `part` as an argument is shown: in double quotes, its `"` and `\`
@@ -565,7 +565,9 @@ pub enum Refusal {
     /// Its name, command or address holds a control character or one
     /// that acts unseen.
     Unseen,
-    /// Its name cannot be a setting's: empty, or longer than [`MAX_NAME`].
+    /// Its name cannot be a server's: empty, longer than [`MAX_NAME`], or
+    /// holding a character besides the ASCII letters, digits, `_`, `-` and
+    /// `.` (since step 30).
     Name,
     /// A value whose name says it is a credential cannot be imported
     /// unseen, and belongs in a variable (since the review of the fixes of
@@ -581,7 +583,11 @@ pub enum Refusal {
     NamedValue,
     /// It is neither a command nor an address this version reads: neither
     /// is given, or an argument is not text, or the arguments are not a
-    /// list (the last two since the step 25 fixes).
+    /// list (the last two since the step 25 fixes); or, since step 30, a
+    /// variable's or a header's name cannot be one (it holds `=` or begins
+    /// with a digit), or a variable it takes from the environment is a
+    /// provider's key or one of the harness's own, which no server is
+    /// given.
     NotUnderstood,
 }
 
@@ -803,6 +809,24 @@ impl HeaderVariables {
         }
         name
     }
+}
+
+/// Whether a server's variables and headers can be given as the loader
+/// gives them (since step 30, `crate::mcp::server_problem`): each name one,
+/// and no variable it takes from the environment by its own name a
+/// provider's key, one of the harness's own, or one that tells the system's
+/// loader what to run (`crate::mcp::loads_code`).
+fn givable(server: &ImportedServer) -> bool {
+    let named = server
+        .env
+        .iter()
+        .chain(server.headers.iter().map(|header| &header.name))
+        .all(|name| crate::mcp::bad_variable_name(name).is_none());
+    named
+        && !server
+            .env
+            .iter()
+            .any(|name| harnesss_variable(name) || crate::mcp::loads_code(name))
 }
 
 /// Whether `name` is a variable the harness reads, whatever the
@@ -1345,7 +1369,7 @@ fn server(filter: &SecretFilter, name: &str, entry: &serde_json::Value) -> Impor
         Some(Refusal::Unseen)
     } else if !settable_name(&server.name) {
         Some(Refusal::Name)
-    } else if not_text {
+    } else if not_text || !givable(&server) {
         Some(Refusal::NotUnderstood)
     } else if masked {
         Some(Refusal::HoldsCredential)
@@ -2503,13 +2527,22 @@ mod tests {
             !trackers.contains(&variable(&later, "my-tracker", "Authorization")),
             "{later:?}"
         );
-        // Every one of them can be written, and reads back.
+        // Every one of them can be written, and reads back, but the two
+        // whose names hold letters other than ASCII ones, which since step
+        // 30 cannot be a server's (the dynamic-tool registry's rule).
         let importable: Vec<ImportedServer> = servers
             .iter()
             .filter(|server| server.refused.is_none())
             .cloned()
             .collect();
-        assert_eq!(importable.len(), servers.len(), "{servers:?}");
+        assert_eq!(importable.len(), servers.len() - 2, "{servers:?}");
+        for name in ["ñ-x", "ü-x"] {
+            let refused = servers.iter().find(|server| server.name == name);
+            assert_eq!(
+                refused.and_then(|server| server.refused),
+                Some(Refusal::Name)
+            );
+        }
         crate::write::user_config_text(&crate::write::FirstRunChoices {
             imports: Some(crate::write::Imports {
                 servers: importable,

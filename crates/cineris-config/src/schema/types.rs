@@ -384,6 +384,119 @@ impl Setting for Headers {
     }
 }
 
+/// The variables an MCP server is given besides its base list: a table
+/// from a variable's name to its value, each text or `{ env = "NAME" }`
+/// (since step 30). It is one setting, as a provider's headers are.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Variables(pub BTreeMap<String, EnvText>);
+
+impl Setting for Variables {
+    fn node() -> Node {
+        Node::Leaf(Kind::Map(Box::new(Kind::EnvText)))
+    }
+
+    fn read(value: &Value) -> Result<Self, String> {
+        if !value.is_table() {
+            return Err("expected a table from variable names to values".to_owned());
+        }
+        Headers::read(value).map(|headers| Self(headers.0))
+    }
+
+    fn write(&self) -> Option<Value> {
+        Headers(self.0.clone()).write()
+    }
+}
+
+/// An MCP server's program, as its entry names it (since step 30). Its
+/// `Debug` form is the first run's import's (`crate::import`): a key of a
+/// known format in it is shown `[redacted]`, as `cineris config show`
+/// shows it.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct ServerProgram(pub String);
+
+impl std::fmt::Debug for ServerProgram {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", crate::import::shown_program(&self.0))
+    }
+}
+
+impl Setting for ServerProgram {
+    fn node() -> Node {
+        Node::Leaf(Kind::Text)
+    }
+
+    fn read(value: &Value) -> Result<Self, String> {
+        String::read(value).map(Self)
+    }
+
+    fn write(&self) -> Option<Value> {
+        self.0.write()
+    }
+}
+
+/// An MCP server's arguments (since step 30). Their `Debug` form is the
+/// first run's import's: a value whose name says it is a credential, a key
+/// of a known format and an address's user part each `[redacted]`.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct ServerArgs(pub Vec<String>);
+
+impl std::fmt::Debug for ServerArgs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", crate::import::shown_args(&self.0))
+    }
+}
+
+impl Setting for ServerArgs {
+    fn node() -> Node {
+        <Vec<String>>::node()
+    }
+
+    fn read(value: &Value) -> Result<Self, String> {
+        <Vec<String>>::read(value).map(Self)
+    }
+
+    fn write(&self) -> Option<Value> {
+        (!self.0.is_empty()).then(|| self.0.write()).flatten()
+    }
+}
+
+/// An MCP server's address (since step 30). Its `Debug` form is the first
+/// run's import's: its user part, a field of its query named as a
+/// credential's and a key of a known format each `[redacted]`.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct ServerAddress(pub String);
+
+impl std::fmt::Debug for ServerAddress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", crate::import::shown_address(&self.0))
+    }
+}
+
+impl Setting for ServerAddress {
+    fn node() -> Node {
+        Node::Leaf(Kind::Text)
+    }
+
+    fn read(value: &Value) -> Result<Self, String> {
+        String::read(value).map(Self)
+    }
+
+    fn write(&self) -> Option<Value> {
+        self.0.write()
+    }
+}
+
+choice! {
+    /// How the model reaches an MCP server's tools (since step 30).
+    pub enum ExposeChoice {
+        /// Through `tool_search` and `tool_call`.
+        Search => "search",
+        /// Declared to the model like the built-in tools, from the next
+        /// context epoch.
+        Direct => "direct",
+    }
+}
+
 /// A section whose keys are not declared yet: the build step that owns the
 /// section declares them. Until then whatever a file holds there is kept as
 /// it was written and not checked.

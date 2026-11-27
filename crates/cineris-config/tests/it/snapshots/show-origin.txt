@@ -18,6 +18,8 @@ index.pass_time = "2s"                      # default
 limits.day.cost = 20.0                      # user: ~/cineris/config.toml:29
 log.level = "info,cineris_llm=debug"        # environment: CINERIS_LOG
 managed.locked = ["sandbox.enabled"]        # managed: ~/managed/config.toml:3
+mcp.direct_share = 5                        # default
+mcp.start_timeout_ms = 10000                # default
 model.effort = "high"                       # profile review (user: ~/cineris/config.toml:32)
 model.fast = "claude-haiku-5-5"             # user: ~/cineris/config.toml:6
 model.judge = "claude-opus-5-5"             # command-line: --judge-model
