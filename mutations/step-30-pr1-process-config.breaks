@@ -287,6 +287,15 @@ replace: if !self.ended_within(Duration::ZERO).await {
 caught-by:
     cineris-core::it mcp_servers::sys_a_server_that_ignores_its_closed_input_is_killed_after_its_grace
 
+[break] server-end-asked-twice-runs-twice
+rule: A server's end asked for twice at once runs once: the second waits for the first.
+file: crates/cineris-core/src/mcp/process.rs
+in: Running::shutdown
+find: let _one = self.ending.lock().await;
+replace: let _one = &self.ending;
+caught-by:
+    cineris-core::it mcp_servers::sys_a_servers_end_asked_for_twice_at_once_ends_it_once
+
 # C. `[mcp]` in the configuration.
 
 [break] server-name-not-the-registrys

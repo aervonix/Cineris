@@ -20,6 +20,10 @@
 //! - **Its end** ([`ServerProcess::shutdown`]): its input is closed, it is
 //!   given its grace on the session's timer, and then its tree is stopped
 //!   in stages, as a command's is: interrupted, told to terminate, killed.
+//!   It may be asked for twice, and from two tasks at once (the client
+//!   stops a server that misbehaves, and the lifecycle then shuts the
+//!   client down): the second waits for the first, and then returns at
+//!   once, the server having ended.
 //!
 //! The client's queues are bounded ([`LINES_QUEUED`] lines each way): a
 //! client that does not read holds the server, and a server that does not
@@ -196,6 +200,7 @@ pub(crate) fn start(
         shared,
         filter,
         timer,
+        ending: tokio::sync::Mutex::new(()),
     };
     if let Some(Err(error)) = threads.into_iter().find(Result::is_err) {
         // Dropped, the handle kills what it started.
@@ -316,6 +321,11 @@ struct Running {
     shared: Arc<Shared>,
     filter: Arc<RwLock<SecretFilter>>,
     timer: SharedTimer,
+    /// Held by a call of `shutdown` from its start to its end: a second
+    /// call, from the client that stopped a misbehaving server and then
+    /// from the lifecycle, or from two tasks at once, waits for the first,
+    /// and then finds the server ended and returns.
+    ending: tokio::sync::Mutex<()>,
 }
 
 impl Running {
@@ -392,6 +402,9 @@ impl ServerProcess for Running {
 
     fn shutdown(&self, grace: Duration) -> BoxFuture<'_, ()> {
         Box::pin(async move {
+            // One end at a time; one that comes after it finds the server
+            // ended, and its output read, and returns at once.
+            let _one = self.ending.lock().await;
             self.close_input();
             if !self.ended_within(grace).await {
                 // As a command's tree is stopped: a stage that cannot be

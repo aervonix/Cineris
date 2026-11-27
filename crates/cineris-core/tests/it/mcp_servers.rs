@@ -633,6 +633,57 @@ fn sys_a_server_that_ignores_its_closed_input_is_killed_after_its_grace() {
     });
 }
 
+/// The end may be asked for twice, from two tasks at once (the client stops
+/// a server that misbehaves, and the lifecycle then shuts the client down):
+/// the second waits for the first, which alone gives the grace and stops
+/// the tree, and both end; a third, once the server has ended, returns at
+/// once.
+#[test]
+fn sys_a_servers_end_asked_for_twice_at_once_ends_it_once() {
+    const GRACE: Duration = Duration::from_secs(2);
+    let place = Place::new("twice");
+    let (program, args) = this_server("ignore", &[]);
+    let mut pipes = place
+        .spawner(true)
+        .spawn(&local(program, args, Vec::new()))
+        .expect("the server starts");
+    runtime().block_on(async {
+        said(&mut pipes.output).await.expect("its child");
+        assert_eq!(said(&mut pipes.output).await.as_deref(), Some("ready"));
+        let mut first = std::pin::pin!(pipes.process.shutdown(GRACE));
+        let mut second = std::pin::pin!(pipes.process.shutdown(GRACE));
+        std::future::poll_fn(|context| {
+            assert!(first.as_mut().poll(context).is_pending());
+            assert!(second.as_mut().poll(context).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+        assert_eq!(said(&mut pipes.output).await.as_deref(), Some("eof"));
+        assert_eq!(place.timer.running(), [GRACE], "one grace, the first's");
+        place.timer.advance(GRACE);
+        let (mut one, mut two) = (false, false);
+        std::future::poll_fn(|context| {
+            one = one || first.as_mut().poll(context).is_ready();
+            two = two || second.as_mut().poll(context).is_ready();
+            if one && two {
+                Poll::Ready(())
+            } else {
+                Poll::Pending
+            }
+        })
+        .await;
+        let how = pipes.process.exited().await;
+        assert!(!how.contains("code 0"), "{how}");
+        // Once it has ended, at once, with no wait of its own.
+        let mut third = std::pin::pin!(pipes.process.shutdown(GRACE));
+        std::future::poll_fn(|context| {
+            assert!(third.as_mut().poll(context).is_ready(), "it waited");
+            Poll::Ready(())
+        })
+        .await;
+    });
+}
+
 /// Standard error is drained whatever it holds, its end kept and shown
 /// through the session's secret filter, where a value the server was given
 /// from the environment is masked.
