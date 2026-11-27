@@ -388,7 +388,7 @@ caught-by:
 [break] a-thread-waiting-for-an-answer-is-not-woken
 rule: A call that must end now wakes a thread waiting for a host call's answer, which no interrupt reaches.
 file: crates/cineris-ext/src/engine/mod.rs
-in: ScriptRuntime::stopped
+in: ScriptRuntime::stop_thread
 find: let _ = self.inbox.send(ToThread::Shutdown);
 replace: let _ = &self.inbox;
 caught-by:
@@ -1432,9 +1432,9 @@ caught-by:
 [break] a-thread-left-running-is-not-counted
 rule: A runtime's thread that does not stop within its grace is counted among the process's threads left running.
 file: crates/cineris-ext/src/engine/mod.rs
-in: ScriptRuntime::stopped
-find: if !self.abandoned.swap(true, Ordering::SeqCst) {
-replace: if self.abandoned.swap(true, Ordering::SeqCst) {
+in: Watched::leave
+find: ABANDONED.fetch_add(1, Ordering::SeqCst);
+replace: let _ = &ABANDONED;
 caught-by:
     cineris-ext::it engine::a_loop_the_interrupt_never_reaches_leaves_its_thread_and_is_counted
 
@@ -1442,8 +1442,8 @@ caught-by:
 rule: A main module that does not stop within its grace is said so, and counted.
 file: crates/cineris-ext/src/engine/mod.rs
 in: ScriptRuntime::start_watched
-find: None if grace.is_some() => {
-replace: None if grace.is_some() && false => {
+find: None if grace.is_some() && watched.leave() => Err(LoadError::Abandoned),
+replace: None if grace.is_some() && false => Err(LoadError::Abandoned),
 caught-by:
     cineris-ext::it engine::past_the_cap_of_threads_left_running_no_extension_starts
 
@@ -1503,7 +1503,7 @@ caught-by:
 rule: A call whose future is dropped before it ends stops its runtime.
 file: crates/cineris-ext/src/engine/mod.rs
 in: StopIfDropped::drop
-find: runtime.stop.store(true, Ordering::SeqCst);
+find: runtime.stop_thread();
 replace: let _ = &runtime.stop;
 caught-by:
     cineris-ext::it engine::a_call_given_up_before_its_end_stops_its_runtime
@@ -1559,8 +1559,8 @@ caught-by:
 rule: A manifest's glob splits its folders by `/` alone: a backslash is refused on every system.
 file: crates/cineris-ext/src/manifest.rs
 in: check_glob
-find: || glob.contains('\\')
-replace: || glob.contains('\\') && glob.is_empty()
+find: if glob.contains('\\') || glob.chars().any(char::is_control) {
+replace: if glob.chars().any(char::is_control) {
 caught-by:
     cineris-ext::it manifest::globs_are_relative_to_the_workspace
 
@@ -1808,9 +1808,9 @@ caught-by:
 [break] a-thread-left-running-disables-nothing
 rule: An extension whose thread was left running is marked so for the whole process.
 file: crates/cineris-ext/src/engine/mod.rs
-in: ScriptRuntime::stopped
-find: disable(self.loaded.hash);
-replace: let _ = self.loaded.hash;
+in: Watched::leave
+find: disable(self.hash);
+replace: let _ = self.hash;
 caught-by:
     cineris-ext::it engine::a_loop_the_interrupt_never_reaches_leaves_its_thread_and_is_counted
 
@@ -8682,8 +8682,8 @@ caught-by:
 rule: A runtime's start dropped before it ends tells its thread to stop, as a call's does, so that a main module in a loop is interrupted rather than left to run for ever unnoticed (the fourth look at the script hooks, (a)).
 file: crates/cineris-ext/src/engine/mod.rs
 in: Starting::drop
-find: if let Some(stop) = &self.stop {
-replace: if let Some(stop) = self.stop.as_ref().filter(|_| false) {
+find: if let Some((stop, watched)) = &self.stop {
+replace: if let Some((stop, watched)) = self.stop.as_ref().filter(|_| false) {
 caught-by:
     cineris-ext::it engine::a_start_dropped_before_its_end_stops_its_thread
 
