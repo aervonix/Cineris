@@ -1284,23 +1284,34 @@ impl TrustStore {
             path: self.file.display().to_string(),
             source,
         };
-        let size = match std::fs::metadata(&self.file) {
-            Ok(found) => found.len(),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+        // Opened as the pin store is (the OS layer's review, F2): a link at
+        // its name is not followed, a FIFO or a device there is refused
+        // without being waited on, and no more than the cap is read
+        // whatever the file system says its size is.
+        let (opened, found) = match cineris_base::open_regular(&self.file) {
+            Ok(opened) => opened,
+            Err(cineris_base::OpenError::NotFound) => {
                 return Ok(File {
                     version: VERSION,
                     projects: Vec::new(),
                     refused: Vec::new(),
                 });
             }
-            Err(error) => return Err(read_error(error)),
+            Err(cineris_base::OpenError::Io(error)) => return Err(read_error(error)),
+            Err(other) => return Err(read_error(io::Error::other(other.to_string()))),
         };
+        let size = found.len();
         if size > MAX_BYTES {
             return Err(self.not_understood(format!(
                 "it is {size} bytes, more than a trust store could be"
             )));
         }
-        let text = std::fs::read_to_string(&self.file).map_err(read_error)?;
+        let mut text = String::new();
+        io::Read::read_to_string(&mut io::Read::take(opened, MAX_BYTES + 1), &mut text)
+            .map_err(read_error)?;
+        if text.len() as u64 > MAX_BYTES {
+            return Err(self.not_understood("it is more than a trust store could be".to_owned()));
+        }
         let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
         let file: File = toml::from_str(text)
             .map_err(|error| self.not_understood(error.message().to_owned()))?;

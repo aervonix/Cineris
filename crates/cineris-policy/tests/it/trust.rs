@@ -643,3 +643,49 @@ fn a_version_1_store_is_read_as_unsigned_and_written_as_version_3() {
     assert!(read(&store, &ProjectKey::new("cccc3333")).is_refused());
     assert!(private::is_private(&file).unwrap());
 }
+
+/// The OS layer's review of the signed approvals step, F2: a link or a FIFO
+/// at the trust store's name is refused at once, as at the pin store's, not
+/// followed or waited on (a FIFO there would hang every session's start and
+/// a reset; a link to `/dev/zero` would read until memory ran out).
+#[cfg(unix)]
+#[test]
+fn sys_a_link_or_a_fifo_at_the_trust_stores_name_is_refused_at_once() {
+    use cineris_policy::{ApprovalStore, TrustStore};
+    use cineris_protocol::ids::ProjectKey;
+
+    let scratch = cineris_testkit::scratch!("trust_link_fifo");
+    let state = scratch.join("state");
+    std::fs::create_dir_all(&state).unwrap();
+    let elsewhere = scratch.join("elsewhere.toml");
+    std::fs::write(&elsewhere, "version = 3\n").unwrap();
+    std::os::unix::fs::symlink(&elsewhere, state.join("trust.toml")).unwrap();
+    let linked = TrustStore::new(state.join("trust.toml"), crate::clock());
+    assert!(linked.project(&ProjectKey::new("k"), None).is_err());
+    assert!(linked.strip_signatures().is_err());
+    std::os::unix::fs::symlink("/dev/zero", state.join("approvals.toml")).unwrap();
+    let zeros = ApprovalStore::new(state.join("approvals.toml"), crate::clock());
+    assert!(zeros.load().is_err(), "a link to a device is not read");
+
+    let fifo = state.join("fifo-trust.toml");
+    let _stall = cineris_testkit::stalled_file(&fifo);
+    let (send, receive) = std::sync::mpsc::channel();
+    let path = fifo.clone();
+    let reader = std::thread::spawn(move || {
+        let refused = TrustStore::new(&path, crate::clock())
+            .project(&ProjectKey::new("k"), None)
+            .is_err();
+        let _ = send.send(refused);
+    });
+    let answered = receive.recv_timeout(std::time::Duration::from_secs(2));
+    if answered.is_err() {
+        // Let the reader go before failing, so that the test ends.
+        drop(std::fs::OpenOptions::new().write(true).open(&fifo).unwrap());
+    }
+    reader.join().unwrap();
+    assert_eq!(
+        answered,
+        Ok(true),
+        "a FIFO at the trust store's name is refused at once"
+    );
+}

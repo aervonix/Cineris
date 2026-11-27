@@ -99,14 +99,22 @@ impl Cost {
         lanes: 1,
     };
 
-    /// The most memory a file may ask for: 1 GiB.
-    pub const MAX_MEMORY_KIB: u32 = 1024 * 1024;
+    /// The most memory a file may ask for: 256 MiB, four times the
+    /// standard.
+    pub const MAX_MEMORY_KIB: u32 = 256 * 1024;
 
     /// The most passes a file may ask for.
-    pub const MAX_PASSES: u32 = 16;
+    pub const MAX_PASSES: u32 = 12;
 
     /// The most lanes a file may ask for.
-    pub const MAX_LANES: u32 = 8;
+    pub const MAX_LANES: u32 = 4;
+
+    /// The most work (memory times passes, in KiB) a file may ask for: four
+    /// times the standard. Set-up and reset always write the standard, so
+    /// this leaves room to raise it later and keeps a planted file from
+    /// making each unlock and each yes take seconds (the OS layer's
+    /// review, F4: at the old caps, about 14 s and 1 GiB).
+    pub const MAX_WORK_KIB: u64 = 4 * 64 * 1024 * 3;
 
     /// A cost, within the caps above and Argon2's own floor (8 KiB for each
     /// lane, one pass). The caps keep a planted file from making a session
@@ -133,6 +141,13 @@ impl Cost {
             return Err(format!(
                 "{memory_kib} KiB of memory, where {floor} to {} are read",
                 Self::MAX_MEMORY_KIB
+            ));
+        }
+        let work = u64::from(memory_kib) * u64::from(passes);
+        if work > Self::MAX_WORK_KIB {
+            return Err(format!(
+                "{memory_kib} KiB over {passes} passes, more work than {} KiB",
+                Self::MAX_WORK_KIB
             ));
         }
         Ok(Self {
@@ -537,7 +552,13 @@ mod tests {
 
     #[test]
     fn a_cost_past_its_caps_is_refused() {
-        assert!(Cost::new(Cost::MAX_MEMORY_KIB, Cost::MAX_PASSES, Cost::MAX_LANES).is_ok());
+        assert!(Cost::new(Cost::MAX_MEMORY_KIB, 3, Cost::MAX_LANES).is_ok());
+        assert!(Cost::new(64 * 1024, Cost::MAX_PASSES, 1).is_ok());
+        assert!(
+            Cost::new(Cost::MAX_MEMORY_KIB, Cost::MAX_PASSES, 1).is_err(),
+            "the most memory and the most passes together are more work than the cap"
+        );
+        assert!(Cost::new(Cost::STANDARD.memory_kib(), Cost::STANDARD.passes(), 1).is_ok());
         assert!(Cost::new(Cost::MAX_MEMORY_KIB + 1, 1, 1).is_err());
         assert!(Cost::new(64, Cost::MAX_PASSES + 1, 1).is_err());
         assert!(Cost::new(64, 1, Cost::MAX_LANES + 1).is_err());
