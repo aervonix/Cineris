@@ -148,9 +148,13 @@ fn turn(app: &mut App, link: &Scripted, n: u64, reasoning: &str, answer: &str, n
     }
 }
 
-/// The heap the application holds after `turns` turns, each reasoning
-/// `reasoning` bytes (ASCII, in lines), less what it held before them.
-fn held(presenter: Presenter, turns: u64, reasoning: usize) -> isize {
+/// The heap the application holds after `turns` turns more than it held
+/// after the first `turns`, each turn reasoning `reasoning` bytes (ASCII,
+/// in lines). Both are read in one session, each after a change of width,
+/// which drops every row the full screen made: it makes again only those
+/// of the window at the end, the same after any number of turns, so they
+/// drop out of the difference.
+fn held_by_later_turns(presenter: Presenter, turns: u64, reasoning: usize) -> isize {
     let now = Instant::now();
     let settings = Settings {
         presenter,
@@ -162,22 +166,25 @@ fn held(presenter: Presenter, turns: u64, reasoning: usize) -> isize {
     let words = "the scanner reads each digit and an underscore between two of them\n";
     let reasoning: String = words.repeat(reasoning / words.len() + 1)[..reasoning].to_owned();
     let answer = "Paragraph: the scanner now treats an underscore as a separator.\n\n".repeat(12);
-    let before = LIVE.load(Ordering::Relaxed);
+    let held_at = |app: &mut App, width: usize| {
+        app.resize(width, 40);
+        if app.full_screen() {
+            let _ = app.screen_frame(now);
+        } else {
+            let _ = app.frame(now);
+        }
+        LIVE.load(Ordering::Relaxed)
+    };
     for n in 1..=turns {
         turn(&mut app, &link, n, &reasoning, &answer, now);
     }
-    // Another width, which drops every row the full screen made: it makes
-    // again only those of the window at the end, the same after any number
-    // of turns.
-    app.resize(98, 40);
-    if app.full_screen() {
-        let _ = app.screen_frame(now);
-    } else {
-        let _ = app.frame(now);
+    let first = held_at(&mut app, 98);
+    for n in turns + 1..=turns * 2 {
+        turn(&mut app, &link, n, &reasoning, &answer, now);
     }
-    let after = LIVE.load(Ordering::Relaxed);
+    let later = held_at(&mut app, 97);
     drop(app);
-    after - before
+    later - first
 }
 
 /// What each further turn's reasoning of `bytes` adds to what each
@@ -190,9 +197,7 @@ fn per_turn(bytes: usize) -> Vec<(Presenter, isize)> {
     [Presenter::Inline, Presenter::Fullscreen]
         .into_iter()
         .map(|presenter| {
-            let more = |reasoning| {
-                held(presenter, TURNS * 2, reasoning) - held(presenter, TURNS, reasoning)
-            };
+            let more = |reasoning| held_by_later_turns(presenter, TURNS, reasoning);
             let per_turn = (more(bytes) - more(0)) / isize::try_from(TURNS).unwrap_or(1);
             println!(
                 "{presenter:?}: {bytes} bytes of reasoning a turn hold {per_turn} bytes a turn \
