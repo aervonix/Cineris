@@ -53,7 +53,7 @@ side's round:
           as a Windows test job extracts it (`ci test PART --from-archive`)
   tests   the job's runs of them, as its own job makes them (tiers 1 and 2,
           then tier 3), each timed; from the archive on its side, as the
-          Windows test jobs run them
+          Windows test jobs run them (without the system job's start probe)
   tier N  each tier's tests' time summed above their processes' start, from
           the report
 
@@ -821,8 +821,8 @@ fn clean(tree: &Path) -> Result<()> {
 }
 
 /// Where an archive side's build of the tests is set aside while its
-/// archive is extracted in its place, under `target/`: put back before the
-/// side's next build, so that `--keep-build` keeps it.
+/// archive is extracted in its place, under `target/`: put back at the end
+/// of the side's round, so that `--keep-build` keeps it.
 const BUILT_ASIDE: &str = "ci-built";
 
 /// The archive an archive side's build writes, under its tree.
@@ -1117,6 +1117,8 @@ impl SidePhases for RealSide<'_> {
 
     fn build(&mut self) -> Result<()> {
         if self.from_archive {
+            // Already done at the end of the side's last round, unless that
+            // round stopped before its runs.
             put_back(self.tree)?;
             let file = ready_for_archive(self.tree)?;
             let archive = crate::checks::archive_command(&file);
@@ -1144,7 +1146,7 @@ impl SidePhases for RealSide<'_> {
                 })
                 .and_then(|()| {
                     // As the test jobs make it: the archive does not hold it.
-                    let tmp = tree.join("target").join("ci").join("tmp");
+                    let tmp = crate::checks::tests_tmp_dir(tree);
                     std::fs::create_dir_all(&tmp)
                         .map_err(|error| format!("could not make {}: {error}", tmp.display()))
                 }),
@@ -1171,7 +1173,17 @@ impl SidePhases for RealSide<'_> {
     }
 
     fn tiers(&mut self) -> Result<[f64; 3]> {
+        // The archive side's build back in its place, after its runs and
+        // outside the job's time (which ends before this phase): the other
+        // side does no such work, and the real build job never does it.
+        // After the last round the tree is left as it was built.
+        let put = if self.from_archive {
+            put_back(self.tree)
+        } else {
+            Ok(())
+        };
         let report = workspace::nextest_report(self.tree, "ci");
+        put?;
         let cases = junit::read(&report)?;
         let (start, _) = tiers::start_of(&cases);
         let kept = self
