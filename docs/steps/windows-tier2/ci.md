@@ -1,4 +1,4 @@
-# The Windows tier 2 fix: CI times
+# After the Windows tier 2 fix: the integration tier made cheaper, and the layout measured
 
 The runs that measured each change, both trees on one Windows runner, `main` at `0ce319cc` as the base. What was built and decided is in [answered.md](answered.md).
 
