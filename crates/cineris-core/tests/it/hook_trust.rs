@@ -16,9 +16,9 @@
 //!   the model's.
 
 use cineris_core::ext::HookOutcome;
+use cineris_policy::Definition;
 use cineris_protocol::event::{Event, Notice, TurnOutcome};
 use cineris_protocol::methods::{ConfigReloadParams, Op, TrustResourceKind};
-use cineris_policy::Definition;
 use serde_json::json;
 
 use crate::extensions_found::{open_answering, project_key, state, trust_store, yes};
@@ -122,9 +122,21 @@ fn an_approved_projects_gate_holds_whatever_its_file_does_to_it() {
             "has changed",
         ),
         ("its tools", gate("\"edit\"", ""), "has changed"),
-        ("its time", gate("\"read\"", "timeout = \"6s\""), "has changed"),
-        ("taken out", String::new(), "is no longer in the project's file"),
-        ("turned off", gate("\"read\"", "enabled = false"), "turned off"),
+        (
+            "its time",
+            gate("\"read\"", "timeout = \"6s\""),
+            "has changed",
+        ),
+        (
+            "taken out",
+            String::new(),
+            "is no longer in the project's file",
+        ),
+        (
+            "turned off",
+            gate("\"read\"", "enabled = false"),
+            "turned off",
+        ),
         (
             "broken",
             "[hooks.gate]\nevent = \"tool.before\"\ncommand = [\"check\", \"--file={path}\"]\n"
@@ -176,7 +188,11 @@ fn an_approved_projects_gate_holds_whatever_its_file_does_to_it() {
             (&listed.kind, listed.name.as_str()),
             (&TrustResourceKind::Hook, "gate")
         );
-        for words in ["Removed:", "is no longer in the project's file", "A yes takes its approval away"] {
+        for words in [
+            "Removed:",
+            "is no longer in the project's file",
+            "A yes takes its approval away",
+        ] {
             assert!(listed.detail.contains(words), "{words}: {}", listed.detail);
         }
         front.turn("read it").await;
@@ -210,7 +226,13 @@ fn an_approved_projects_gate_holds_whatever_its_file_does_to_it() {
 #[test]
 fn trusting_a_project_again_takes_away_the_approvals_shown_as_removed() {
     let world = World::new("hook_trust_dropping", []);
-    world.project_config(&[gate("\"read\"", ""), entry("lint", "turn.end", &this_binary("fail", &[]), "")].concat());
+    world.project_config(
+        &[
+            gate("\"read\"", ""),
+            entry("lint", "turn.end", &this_binary("fail", &[]), ""),
+        ]
+        .concat(),
+    );
     let _ = state(&world);
     let core = world.core();
     let key = core.project(&world.workspace).unwrap();
@@ -221,9 +243,19 @@ fn trusting_a_project_again_takes_away_the_approvals_shown_as_removed() {
     trust_store(&world)
         .approve(&project_key(&world), std::slice::from_ref(&gone), false)
         .unwrap();
-    assert_eq!(core.project_removed(&key).unwrap().len(), 1, "the extension alone");
+    assert_eq!(
+        core.project_removed(&key).unwrap().len(),
+        1,
+        "the extension alone"
+    );
 
-    world.project_config(&[gate("\"read\"", "enabled = false"), entry("lint", "turn.end", &this_binary("fail", &[]), "")].concat());
+    world.project_config(
+        &[
+            gate("\"read\"", "enabled = false"),
+            entry("lint", "turn.end", &this_binary("fail", &[]), ""),
+        ]
+        .concat(),
+    );
     let removed = core.project_removed(&key).unwrap();
     let listed: Vec<(TrustResourceKind, &str)> = removed
         .iter()
@@ -236,9 +268,23 @@ fn trusting_a_project_again_takes_away_the_approvals_shown_as_removed() {
             (TrustResourceKind::Hook, "gate")
         ]
     );
-    assert!(removed[0].detail.contains("is no longer in its folder of extensions"), "{}", removed[0].detail);
-    assert!(removed[0].detail.contains("What it gated is not known"), "{}", removed[0].detail);
-    assert!(removed[1].detail.contains("turned off"), "{}", removed[1].detail);
+    assert!(
+        removed[0]
+            .detail
+            .contains("is no longer in its folder of extensions"),
+        "{}",
+        removed[0].detail
+    );
+    assert!(
+        removed[0].detail.contains("What it gated is not known"),
+        "{}",
+        removed[0].detail
+    );
+    assert!(
+        removed[1].detail.contains("turned off"),
+        "{}",
+        removed[1].detail
+    );
     let (trusted, dropped) = core
         .trust_project_dropping(&key, &[], &[], &removed)
         .unwrap();
@@ -382,7 +428,8 @@ fn sys_a_users_hook_is_handed_a_secret_file_only_after_the_yes() {
     world.put("a.txt", "plain\n");
     let program = std::env::current_exe().expect("the test binary has a path");
     let report = world.dir.join("report.json");
-    let scanner = crate::hook_commands::script(&world.dir.join("hooks"), "scanner", Some(&report), "");
+    let scanner =
+        crate::hook_commands::script(&world.dir.join("hooks"), "scanner", Some(&report), "");
     let hook = |mode: &str| {
         let command = if mode == "report" {
             vec![scanner.display().to_string(), "{path}".to_owned()]

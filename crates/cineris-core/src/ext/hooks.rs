@@ -877,7 +877,10 @@ mod tests {
         let as_approved = session(approved.clone(), true);
         assert_eq!(as_approved.hooks.len(), 1);
         assert!(gates_held(&as_approved).is_empty());
-        assert!(gates_held(&session(approved, false)).is_empty(), "untrusted");
+        assert!(
+            gates_held(&session(approved, false)).is_empty(),
+            "untrusted"
+        );
 
         let cases: [(&str, Vec<ProjectHook>, &str); 7] = [
             ("observe", vec![gate(|it| it.observe = true)], "has changed"),
@@ -893,14 +896,26 @@ mod tests {
             ),
             (
                 "its time",
-                vec![gate(|it| it.timeout = Some(std::time::Duration::from_secs(6)))],
+                vec![gate(|it| {
+                    it.timeout = Some(std::time::Duration::from_secs(6))
+                })],
                 "has changed",
             ),
-            ("taken out", Vec::new(), "is no longer in the project's file"),
-            ("turned off", vec![gate(|it| it.enabled = false)], "turned off"),
+            (
+                "taken out",
+                Vec::new(),
+                "is no longer in the project's file",
+            ),
+            (
+                "turned off",
+                vec![gate(|it| it.enabled = false)],
+                "turned off",
+            ),
             (
                 "no longer compiling",
-                vec![gate(|it| it.command = vec!["check".to_owned(), "--file={path}".to_owned()])],
+                vec![gate(|it| {
+                    it.command = vec!["check".to_owned(), "--file={path}".to_owned()]
+                })],
                 "no longer compiles",
             ),
         ];
@@ -960,7 +975,12 @@ mod tests {
         let listed: Vec<(&str, bool)> = asked
             .resources
             .iter()
-            .map(|resource| (resource.name.as_str(), resource.detail.starts_with("Removed:")))
+            .map(|resource| {
+                (
+                    resource.name.as_str(),
+                    resource.detail.starts_with("Removed:"),
+                )
+            })
             .collect();
         assert_eq!(listed, [("lint", false), ("gone", true)]);
         assert!(asked.resources[0].changed);

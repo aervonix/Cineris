@@ -326,15 +326,11 @@ impl SessionHooks {
     /// commands), since its text would be refused.
     #[cfg(feature = "scripts")]
     pub(crate) fn prompt_gate_held(&self) -> Option<String> {
-        if let Some(refused) = self
-            .refused
-            .iter()
-            .find(|refused| {
-                refused.event == Some(Event::PromptSubmit)
-                    && !refused.observe
-                    && self.commands.in_force(refused.source)
-            })
-        {
+        if let Some(refused) = self.refused.iter().find(|refused| {
+            refused.event == Some(Event::PromptSubmit)
+                && !refused.observe
+                && self.commands.in_force(refused.source)
+        }) {
             return Some(format!(
                 "the hook `{}` on `prompt.submit` cannot run",
                 in_code(&refused.name)

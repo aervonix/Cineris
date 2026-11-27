@@ -734,9 +734,7 @@ pub(crate) fn look(
         peeked = Some(load);
         confined
     };
-    let pinned_extensions = !stored
-        .pinned_of(&TrustResourceKind::Extension)
-        .is_empty();
+    let pinned_extensions = !stored.pinned_of(&TrustResourceKind::Extension).is_empty();
     let users = (!found.found.is_empty() || pinned_extensions).then(|| {
         crate::ext::found::UserNames::listed(&place.resolver, place.load.dirs.config.as_deref())
     });
