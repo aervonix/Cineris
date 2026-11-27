@@ -436,6 +436,15 @@ pub(crate) fn check_built_at(metadata: &Path, root: &Path) -> Result<()> {
     }
 }
 
+/// The folder cargo gives the integration tests as `CARGO_TARGET_TMPDIR`
+/// in a checkout at `root`: `target/tmp`, the target directory's own and
+/// not a profile's (the review of the Windows tier 2 fix found the test
+/// jobs making `target/ci/tmp`, which no test reads). The archive does not
+/// hold it, so a test job that runs from the archive makes it.
+pub(crate) fn tests_tmp_dir(root: &Path) -> PathBuf {
+    root.join("target").join("tmp")
+}
+
 /// `cargo nextest run` of the tests `filter` chooses, from the archive
 /// [`extract_command`] extracted at `root`, in the `ci` profile. A filter
 /// that chooses no test fails the run.
@@ -484,7 +493,7 @@ fn ci_part_steps(part: tiers::Part, dir: PathBuf) -> Vec<Step> {
         )?;
         // Cargo makes the folder of `CARGO_TARGET_TMPDIR` as it builds the
         // tests, and the archive does not hold it.
-        let tmp = root.join("target").join("ci").join("tmp");
+        let tmp = tests_tmp_dir(&root);
         std::fs::create_dir_all(&tmp)
             .map_err(|error| format!("could not make {}: {error}", tmp.display()))?;
         once.set(true);
@@ -1904,6 +1913,14 @@ mod tests {
         for word in build.iter().filter(|word| word.as_str() != "nextest") {
             assert!(command.contains(word), "{word} of {build:?}");
         }
+    }
+
+    #[test]
+    fn the_tests_scratch_folder_is_the_target_directorys_own() {
+        // Cargo gives integration tests `<target-dir>/tmp` as
+        // `CARGO_TARGET_TMPDIR`, whatever the profile: not `target/ci/tmp`.
+        let root = std::path::Path::new("work");
+        assert_eq!(super::tests_tmp_dir(root), root.join("target").join("tmp"));
     }
 
     #[test]
