@@ -19,6 +19,7 @@ file: crates/cineris-sandbox/src/launch.rs
 in: options
 find: if live.is_some() {
 replace: if live.is_some() && live.is_none() {
+packages: cineris-sandbox, cineris-core
 caught-by:
     cineris-sandbox launch::tests::a_policy_length_not_written_as_the_harness_writes_it_is_refused
     cineris-sandbox::it confined::sys_a_live_policy_length_that_is_wrong_runs_nothing
@@ -29,6 +30,7 @@ file: crates/cineris-sandbox/src/launch.rs
 in: parse_length
 find: if length > MAX_BYTES {
 replace: if length > MAX_BYTES * 2 {
+packages: cineris-sandbox, cineris-core
 caught-by:
     cineris-sandbox launch::tests::a_policy_length_not_written_as_the_harness_writes_it_is_refused
     cineris-sandbox::it confined::sys_a_live_policy_length_that_is_wrong_runs_nothing
@@ -39,6 +41,7 @@ file: crates/cineris-sandbox/src/launch.rs
 in: options
 find: if argument != POLICY_BYTES {
 replace: if argument != POLICY_BYTES && argument == "-x" {
+packages: cineris-sandbox, cineris-core
 caught-by:
     cineris-sandbox launch::tests::a_policy_length_not_written_as_the_harness_writes_it_is_refused
     cineris-sandbox::it confined::sys_a_live_policy_length_that_is_wrong_runs_nothing
@@ -49,6 +52,7 @@ file: crates/cineris-sandbox/src/launch.rs
 in: read_exactly
 find: input.read_exact(&mut bytes)
 replace: std::io::stdin().lock().read_exact(&mut bytes)
+packages: cineris-sandbox, cineris-core
 caught-by:
     cineris-sandbox::it confined::sys_a_policy_written_after_the_live_policy_is_only_input
 
@@ -58,6 +62,7 @@ file: crates/cineris-sandbox/src/launch.rs
 in: launch
 find: match Policy::decode_with_input(&bytes).map_err(Failure::sandbox)? {
 replace: match Policy::decode_with_input(&bytes).map(|(policy, _)| (policy, None::<Vec<u8>>)).map_err(Failure::sandbox)? {
+packages: cineris-sandbox, cineris-core
 caught-by:
     cineris-sandbox::it confined::sys_a_live_length_that_is_not_the_policys_runs_nothing
 
@@ -77,6 +82,7 @@ in: become_command
 find: Given::Live => std::process::Stdio::inherit()
 replace: Given::Live => std::process::Stdio::null()
 os: linux
+packages: cineris-sandbox, cineris-core
 caught-by:
     cineris-sandbox::it confined::sys_a_confined_command_reads_its_live_input_line_by_line
 
@@ -89,6 +95,7 @@ in: become_command
 find: close_on_exec();
 replace:
 os: linux
+packages: cineris-sandbox, cineris-core
 caught-by:
     cineris-sandbox::it confined::sys_a_descriptor_the_launcher_inherited_never_reaches_the_command
 
@@ -99,6 +106,7 @@ in: become_command
 find: Given::Closed => std::process::Stdio::null()
 replace: Given::Closed => std::process::Stdio::inherit()
 os: linux
+packages: cineris-sandbox, cineris-core
 caught-by:
     cineris-sandbox::it confined::sys_a_confined_command_with_no_input_reads_its_end_at_once
 
@@ -108,6 +116,7 @@ file: crates/cineris-sandbox/src/launch.rs
 in: launch
 find: (policy, None) => (policy, Given::Live)
 replace: (policy, None) => (policy, Given::Live), (policy, Some(input)) if input.is_empty() => (policy, Given::Live)
+packages: cineris-sandbox, cineris-core
 caught-by:
     cineris-sandbox::it confined::sys_a_live_length_that_is_not_the_policys_runs_nothing
 
@@ -117,6 +126,7 @@ file: crates/cineris-config/src/mcp.rs
 in: loads_code
 find: name.starts_with("LD_") || name.starts_with("DYLD_") || name == "GLIBC_TUNABLES"
 replace: name.is_empty()
+packages: cineris-config, cineris-core
 caught-by:
     cineris-config mcp::tests::a_name_or_a_source_no_server_may_have_refuses_it
     cineris-core mcp::env::tests::a_name_that_cannot_be_given_refuses_the_start
@@ -323,6 +333,7 @@ file: crates/cineris-config/src/mcp.rs
 in: server_problem
 find: EnvText::Env(source) if project && *source != derived =>
 replace: EnvText::Env(source) if project && *source != derived && source.is_empty() =>
+packages: cineris-config, cineris-core
 caught-by:
     cineris-config mcp::tests::a_projects_header_is_taken_only_from_its_derived_variable
     cineris-core mcp::definitions::tests::the_users_and_a_projects_servers_become_definitions
@@ -332,6 +343,7 @@ rule: A project's server is kept apart: never merged with the user's.
 file: crates/cineris-config/src/schema/sections.rs
 find: [KeptApart, NextSession] pub command: Option<ServerProgram>
 replace: [Preference, NextSession] pub command: Option<ServerProgram>
+packages: cineris-config, cineris-core
 caught-by:
     cineris-core mcp::definitions::tests::the_users_and_a_projects_servers_become_definitions
     cineris-config::it trust::the_documented_classes_hold

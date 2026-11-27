@@ -327,7 +327,7 @@ mod tests {
     fn inherited() -> Vec<(OsString, OsString)> {
         env(&[
             ("PATH", "/usr/bin:relative:/work/bin:/bin"),
-            ("HOME", "/home/u"),
+            ("HOME", "/srv/profile"),
             ("USER", "u"),
             ("LANG", "C.UTF-8"),
             ("LC_ALL", "C"),
@@ -517,13 +517,13 @@ mod tests {
         let inherited = env(&[
             ("Path", r"C:\Windows\System32;.;C:\tools"),
             ("SYSTEMROOT", r"C:\Windows"),
-            ("USERPROFILE", r"C:\Users\u"),
-            ("APPDATA", r"C:\Users\u\AppData\Roaming"),
+            ("USERPROFILE", r"D:\Profile"),
+            ("APPDATA", r"D:\Profile\AppData\Roaming"),
             ("ComSpec", r"C:\evil\cmd.exe"),
             ("PATHEXT", ".PS1;.EXE"),
             ("OPENAI_API_KEY", "sk"),
             ("PSModulePath", r"C:\ps"),
-            ("TEMP", r"C:\Users\u\AppData\Local\Temp"),
+            ("TEMP", r"D:\Profile\AppData\Local\Temp"),
         ]);
         let made = server_env(
             &[],
