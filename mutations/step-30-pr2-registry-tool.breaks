@@ -241,12 +241,12 @@ replace: .permission(RuleAction::Allow)
 caught-by:
     cineris-mcp::it tool::the_spec_is_cleaned_asks_and_runs_alone_whatever_the_server_says
 
-[break] unseen-text-in-a-description-is-shown
-rule: What acts unseen in a server's description is written as an escape.
+[break] a-description-is-shown-as-the-server-wrote-it
+rule: A tool's title and description are made one line each, what acts unseen taken out, cut at 2 KiB.
 file: crates/cineris-mcp/src/tool.rs
-in: clean
-find: visible_keeping(&lines, &['\n', '\t']).into_owned()
-replace: lines
+in: description_of
+find: let one = |text: &str| one_line(text, MAX_DESCRIPTION_BYTES);
+replace: let one = |text: &str| if MAX_DESCRIPTION_BYTES > 0 { text.to_owned() } else { one_line(text, 0) };
 caught-by:
     cineris-mcp::it tool::the_spec_is_cleaned_asks_and_runs_alone_whatever_the_server_says
 

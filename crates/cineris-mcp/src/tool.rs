@@ -10,11 +10,13 @@
 //!   left out is said, with why ([`LeftOut`]), for `cineris mcp inspect` and
 //!   a notice.
 //! - **What the model is shown** ([`McpTool`]'s spec): the title, when
-//!   given, as the first line, then the description; and the input schema.
-//!   In every string of them, what acts unseen is written as an escape
-//!   ([`cineris_base::visible`]), line breaks and tabs kept. The registry
-//!   cuts each at 2 KiB where a search shows it, and shows a held tool by
-//!   its name alone ([`Hold`]). The annotations are not read: the tool asks
+//!   given, as the first line, then the description, each made one line by
+//!   [`cineris_base::one_line`] (what acts unseen taken out, white space
+//!   folded); and the input schema, in every string of which what acts
+//!   unseen is written as an escape ([`cineris_base::visible`]), so that a
+//!   value can be given back as it is shown. The registry cuts each at
+//!   2 KiB where a search shows it, and shows a held tool by its name
+//!   alone ([`Hold`]). The annotations are not read: the tool asks
 //!   by default, and **always runs alone** (`Exclusive`), whatever the
 //!   server says of it.
 //! - **A call** ([`McpTool`]'s run): the arguments checked against the
@@ -28,9 +30,9 @@ use std::collections::BTreeSet;
 use std::sync::{Arc, LazyLock};
 
 use cineris_base::text::truncate_bytes;
-use cineris_base::{CancelToken, in_code, visible, visible_keeping};
+use cineris_base::{CancelToken, in_code, one_line, visible, visible_keeping};
 use cineris_protocol::lease::RuleAction;
-use cineris_tools::registry::shown_schema;
+use cineris_tools::registry::{MAX_DESCRIPTION_BYTES, shown_schema};
 use cineris_tools::{
     BoxFuture, Concurrency, ConcurrencyClass, DynamicTool, Hold, Json, Plan, PlanCx, RegistryError,
     RunCx, SourceKind, Tool, ToolError, ToolOutput, ToolRegistry, ToolResult, ToolSpec,
@@ -336,6 +338,9 @@ impl McpTool {
 
     /// The first line of every result: the server's output, named as its.
     fn label(&self) -> String {
+        // after 0ce319cc: the names through `cineris_base::visible_to_the_model`
+        // inside `in_code`'s escaping of a backtick (an admitted tool's name
+        // is ASCII, and the server's is the registry's, so neither changes).
         format!(
             "Output of the tool `{}` of the MCP server `{}`, written by the server, not by the \
              harness:",
@@ -457,6 +462,9 @@ impl Tool for McpTool {
                     "The arguments for `{}/{}` do not fit its schema:\n{}\nIts schema is:\n{}",
                     in_code(&self.server),
                     in_code(&self.spec.name),
+                    // after 0ce319cc: each line through
+                    // `cineris_base::visible_to_the_model`: it quotes the
+                    // server's schema.
                     visible_keeping(&mismatch.to_string(), &['\n']),
                     shown_schema(&self.spec.parameters)
                 ));
@@ -480,19 +488,20 @@ impl Tool for McpTool {
 }
 
 /// The text the model is shown of a tool: the title, when given, as the
-/// first line, then the description, each as [`clean`] makes it.
+/// first line, then the description, each made one line by
+/// [`one_line`]: what acts unseen taken out, white space folded, cut at
+/// 2 KiB.
 fn description_of(definition: &ToolDefinition) -> String {
+    let one = |text: &str| one_line(text, MAX_DESCRIPTION_BYTES);
     let title = definition
         .title
         .as_deref()
-        .map(str::trim)
-        .filter(|title| !title.is_empty())
-        // A title is one line: a line break in it is an escape.
-        .map(|title| visible(title).into_owned());
+        .map(one)
+        .filter(|title| !title.is_empty());
     let description = definition
         .description
         .as_deref()
-        .map(|text| clean(text.trim()))
+        .map(one)
         .filter(|text| !text.is_empty());
     match (title, description) {
         (Some(title), Some(description)) => format!("{title}\n{description}"),
@@ -501,12 +510,13 @@ fn description_of(definition: &ToolDefinition) -> String {
     }
 }
 
-/// A server's text as the model is shown it: what acts unseen written as
-/// an escape, line breaks (a carriage return before one dropped) and tabs
-/// kept.
+/// A string of a server's schema as the model is shown it: what acts
+/// unseen written as an escape, a line break and a tab among them, so that
+/// a value the model must give back can be written as it is shown.
 fn clean(text: &str) -> String {
-    let lines = text.replace("\r\n", "\n");
-    visible_keeping(&lines, &['\n', '\t']).into_owned()
+    // after 0ce319cc: `cineris_base::visible_to_the_model`, which also
+    // writes a variation selector after a character as its escape.
+    visible(text).into_owned()
 }
 
 /// `schema` with every string in it [`clean`]ed. Its keys are not changed:
@@ -543,6 +553,7 @@ fn as_received(text: &str) -> Cow<'_, str> {
 
 /// A server's text on a line of a result's own: escaped, and cut.
 fn line(text: &str) -> Cow<'_, str> {
+    // after 0ce319cc: `cineris_base::visible_to_the_model`.
     let shown = visible(text);
     if shown.len() <= MAX_SHOWN {
         shown
@@ -563,6 +574,8 @@ fn cut(text: &str, max: usize) -> String {
 
 /// A tool's name as a message about it shows it.
 fn shown_name(name: &str) -> String {
+    // after 0ce319cc: through `cineris_base::visible_to_the_model` inside
+    // `in_code`'s escaping of a backtick: a name left out holds anything.
     cut(&in_code(name), 200)
 }
 
@@ -601,6 +614,8 @@ fn check_schema(schema: &Json) -> Result<(), WhyLeftOut> {
         return Err(WhyLeftOut::SchemaTooLarge);
     }
     if let Some(key) = unseen_key(schema) {
+        // after 0ce319cc: through `cineris_base::visible_to_the_model` inside
+        // `in_code`'s escaping of a backtick, as a name left out is.
         return Err(WhyLeftOut::UnseenKey(cut(&in_code(key), 200)));
     }
     Ok(())
