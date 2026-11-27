@@ -365,7 +365,7 @@ caught-by:
 [break] review-job-failed-build-goes-on
 rule: A failed build ends the side's round: what would follow would measure something else.
 file: xtask/src/job_ab.rs
-in: drive_side
+in: timed_phases
 find: if !phase(&mut side, &named("build"), took, outcome) {
 replace: if !phase(&mut side, &named("build"), took, outcome) && false {
 caught-by:
@@ -374,7 +374,7 @@ caught-by:
 [break] review-job-failed-run-ends-the-round
 rule: A failed run of the tests does not end the side's round: the job's next run is still made.
 file: xtask/src/job_ab.rs
-in: drive_side
+in: timed_phases
 find: runs_passed &= phase(&mut side, &named(&run_name(index, runs)), took, outcome);
 replace: runs_passed &= phase(&mut side, &named(&run_name(index, runs)), took, outcome); if !runs_passed { break; }
 caught-by:
