@@ -176,6 +176,24 @@ fn what_a_strict_reader_refuses_is_told_and_a_skill_reads_as_before() {
     assert_eq!(front.unread(), ["  title: x", "  Note: works offline"]);
 }
 
+/// A key after a quoted value or less indented than a block is told in
+/// `unread`, as a quote never closed is, and a skill reads its fields as
+/// before (the pre-push review of the fixes of step 28's full review).
+#[test]
+fn a_key_after_a_quote_or_a_block_is_told_and_a_skill_reads_as_before() {
+    let quoted = read("---\nname: pdf\ndescription: \"Fill in forms.\"\n  profile: x\n---");
+    assert_eq!(quoted.get("description"), Some("Fill in forms."));
+    assert_eq!(quoted.unread(), ["  profile: x"]);
+    let open = read("---\nname: pdf\ndescription: \"Fill in\n  forms.\n---");
+    assert_eq!(open.get("description"), Some("Fill in forms."));
+    assert_eq!(open.unread(), ["description: \"Fill in"]);
+    let block = read("---\nname: pdf\ndescription: |\n    Fill in\n  forms: all\n---");
+    assert_eq!(block.get("description"), Some("Fill in\nforms: all"));
+    assert_eq!(block.unread(), ["  forms: all"]);
+    let flow = read("---\nname: [a,\n  b: c]\n---");
+    assert_eq!(flow.unread(), Vec::<String>::new());
+}
+
 #[test]
 fn what_is_and_is_not_front_matter() {
     for none in [
