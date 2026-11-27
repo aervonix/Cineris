@@ -283,10 +283,9 @@ fn namespaces_allowed() -> bool {
 #[test]
 fn sys_a_harness_that_is_process_1_is_seen() {
     if !namespaces_allowed() {
-        let restricted = std::fs::read_to_string(
-            "/proc/sys/kernel/apparmor_restrict_unprivileged_userns",
-        )
-        .is_ok_and(|value| value.trim() == "1");
+        let restricted =
+            std::fs::read_to_string("/proc/sys/kernel/apparmor_restrict_unprivileged_userns")
+                .is_ok_and(|value| value.trim() == "1");
         assert!(
             restricted || std::env::var_os("CI").is_none(),
             "this runner refuses user namespaces, and AppArmor's restriction is not why"
