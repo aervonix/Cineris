@@ -1,11 +1,12 @@
-//! The Windows half of [`super`]: access lists.
+//! The Windows half of [`super`]: access lists, and (since the signed
+//! approvals step) Windows's own check of what the user may do to a file.
 //!
-//! **This is the one module of `cineris-base` that may use `unsafe`**
-//! (`docs/decisions/0029-owner-only-files-on-windows.md`). The standard
-//! library can create a file and cannot say who may open it, so the access
-//! list goes through the Windows API. Everything unsafe in the crate is in
-//! this file, every block says why it is sound, and nothing here is generic:
-//! each function does one fixed thing.
+//! **This is the first of the three modules of `cineris-base` that may use
+//! `unsafe`** (`docs/decisions/0029-owner-only-files-on-windows.md`; the
+//! crate's own documentation names the others). The standard library can
+//! create a file and cannot say who may open it, so the access list goes
+//! through the Windows API. Every block says why it is sound, and nothing
+//! here is generic: each function does one fixed thing.
 //!
 //! How it is kept small:
 //!
@@ -24,8 +25,7 @@
 
 #![allow(
     unsafe_code,
-    reason = "decision 0029: an access list can only be set through the Windows API; \
-              this is the one module of cineris-base where unsafe is allowed"
+    reason = "decision 0029: an access list can only be set or checked through the Windows API"
 )]
 
 use std::ffi::c_void;
@@ -47,19 +47,23 @@ use windows_sys::Win32::Security::Authorization::{
     SDDL_REVISION_1, SE_FILE_OBJECT,
 };
 use windows_sys::Win32::Security::{
-    ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_SIZE_INFORMATION, AclSizeInformation,
-    DACL_SECURITY_INFORMATION, GetAce, GetAclInformation, GetLengthSid,
+    ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_SIZE_INFORMATION, AccessCheck, AclSizeInformation,
+    CreateRestrictedToken, CreateWellKnownSid, DACL_SECURITY_INFORMATION, DuplicateToken,
+    GENERIC_MAPPING, GROUP_SECURITY_INFORMATION, GetAce, GetAclInformation, GetLengthSid,
     GetSecurityDescriptorControl, GetTokenInformation, INHERITED_ACE, IsValidSid,
-    OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SE_DACL_PROTECTED, SECURITY_ATTRIBUTES,
-    SECURITY_MAX_SID_SIZE, SID_AND_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER, TokenUser,
+    LUID_AND_ATTRIBUTES, OWNER_SECURITY_INFORMATION, PRIVILEGE_SET, PSECURITY_DESCRIPTOR, PSID,
+    SE_DACL_PROTECTED, SECURITY_ATTRIBUTES, SECURITY_MAX_SID_SIZE, SID_AND_ATTRIBUTES,
+    SecurityIdentification, TOKEN_DUPLICATE, TOKEN_QUERY, TOKEN_USER, TokenUser,
+    WinBuiltinAdministratorsSid,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     BY_HANDLE_FILE_INFORMATION, CREATE_NEW, CreateDirectoryW, CreateFileW, FILE_ALL_ACCESS,
     FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT,
-    FILE_ATTRIBUTE_TAG_INFO, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_128,
-    FILE_ID_INFO, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FileAttributeTagInfo,
-    FileIdInfo, GetDriveTypeW, GetFileAttributesW, GetFileInformationByHandle,
-    GetFileInformationByHandleEx, INVALID_FILE_ATTRIBUTES, READ_CONTROL,
+    FILE_ATTRIBUTE_TAG_INFO, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+    FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_ID_128, FILE_ID_INFO,
+    FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FileAttributeTagInfo, FileIdInfo,
+    GetDriveTypeW, GetFileAttributesW, GetFileInformationByHandle, GetFileInformationByHandleEx,
+    INVALID_FILE_ATTRIBUTES, READ_CONTROL,
 };
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
@@ -751,6 +755,219 @@ pub fn access_list_of(object: &File) -> io::Result<AccessList> {
     };
     drop(descriptor);
     Ok(read)
+}
+
+/// Who owns a file or a directory, and what the user this process runs as
+/// may do to it with the Administrators group set aside: what
+/// [`standing_without_administrators`] reads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Standing {
+    /// The owner, as a security identifier in text.
+    pub owner: String,
+    /// The rights Windows would grant the user, as an access mask: 0 when
+    /// it grants none.
+    pub granted: u32,
+}
+
+/// What [`AccessCheck`] is asked for: every right the object's access list
+/// gives the token.
+const MAXIMUM_ALLOWED: u32 = 0x0200_0000;
+
+/// Who owns the file or the directory at `path`, and what the user this
+/// process runs as may do to it, asked of Windows's own access check
+/// (`AccessCheck`) with the process's token and the Administrators group
+/// set aside (since the signed approvals step, for the managed
+/// configuration: `docs/architecture/08-configuration.md`, "The managed
+/// file is an administrator's").
+///
+/// **The group is set aside** (made deny-only, as the token a user's
+/// unelevated programs run with has it), so that the answer is the same
+/// for an administrator's elevated run as for their ordinary one: what the
+/// person can change without elevating. Every other group of the token
+/// counts, `Users`, `Authenticated Users` and `Everyone` among them, and so
+/// does an object's owner's implicit right to change its access list when
+/// the owner is the user.
+///
+/// A link or a junction at `path` is not followed: its own entry is asked
+/// about.
+///
+/// # Errors
+///
+/// When the object cannot be opened to read its permissions, or Windows
+/// refuses to report them or to check them.
+pub fn standing_without_administrators(path: &Path) -> io::Result<Standing> {
+    let object = std::fs::OpenOptions::new()
+        .access_mode(READ_CONTROL)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)?;
+
+    let mut owner: PSID = ptr::null_mut();
+    let mut descriptor: PSECURITY_DESCRIPTOR = ptr::null_mut();
+    // SAFETY: `object` is an open handle with the right to read
+    // permissions, alive for the call. `owner` and `descriptor` are live,
+    // writable locations for the pointers the call returns. The group and
+    // the access list are asked for, since the access check needs them in
+    // the descriptor, and their own outputs are null: they are read from
+    // the descriptor. The audit list is not asked for.
+    let status = unsafe {
+        GetSecurityInfo(
+            object.as_raw_handle(),
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+            &raw mut owner,
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            &raw mut descriptor,
+        )
+    };
+    if status != ERROR_SUCCESS {
+        // This call returns its error; it does not set the thread's.
+        return Err(io::Error::from_raw_os_error(status.cast_signed()));
+    }
+    // `owner` points into this allocation, which is alive until the end of
+    // the function, after its last use.
+    let descriptor = LocalMemory(descriptor);
+    let owner = if owner.is_null() {
+        String::new()
+    } else {
+        // SAFETY: a non-null owner from a successful `GetSecurityInfo` is a
+        // valid identifier inside `descriptor`, which is alive.
+        unsafe { identifier_text(owner) }?
+    };
+
+    let token = token_without_administrators()?;
+    let mapping = GENERIC_MAPPING {
+        GenericRead: FILE_GENERIC_READ,
+        GenericWrite: FILE_GENERIC_WRITE,
+        GenericExecute: FILE_GENERIC_EXECUTE,
+        GenericAll: FILE_ALL_ACCESS,
+    };
+    /// Room for the privileges the check reports using. It uses none for
+    /// the rights asked here, and a set too small for what it would report
+    /// is an error, not a wrong answer.
+    #[repr(C)]
+    struct Privileges {
+        set: PRIVILEGE_SET,
+        more: [LUID_AND_ATTRIBUTES; 8],
+    }
+    // SAFETY: the structure is plain numbers, for which all zeroes is a
+    // valid value.
+    let mut privileges: Privileges = unsafe { std::mem::zeroed() };
+    let mut length = u32::try_from(size_of::<Privileges>()).unwrap_or(u32::MAX);
+    let mut granted = 0_u32;
+    let mut allowed = 0;
+    // SAFETY: `descriptor` holds a valid, self-relative security descriptor
+    // with an owner, a group and an access list, which the check requires.
+    // `token` is an identification token open with `TOKEN_QUERY`, the
+    // right the check needs. `mapping` is alive for the call. `privileges`
+    // is writable for `length` bytes, its whole size, and begins with the
+    // set the call fills. `granted` and `allowed` are live locations of the
+    // types the call writes.
+    let checked = unsafe {
+        AccessCheck(
+            descriptor.0,
+            token.as_raw_handle(),
+            MAXIMUM_ALLOWED,
+            &raw const mapping,
+            (&raw mut privileges).cast(),
+            &raw mut length,
+            &raw mut granted,
+            &raw mut allowed,
+        )
+    };
+    if checked == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    drop(descriptor);
+    Ok(Standing {
+        owner,
+        granted: if allowed == 0 { 0 } else { granted },
+    })
+}
+
+/// The process's token with the Administrators group made deny-only, as an
+/// identification token, which is what the access check takes.
+fn token_without_administrators() -> io::Result<OwnedHandle> {
+    let mut process: HANDLE = ptr::null_mut();
+    // SAFETY: `GetCurrentProcess` returns a pseudo-handle that is always
+    // valid and is never closed. `process` is a live, writable location
+    // for the one handle the call returns.
+    if unsafe {
+        OpenProcessToken(
+            GetCurrentProcess(),
+            TOKEN_DUPLICATE | TOKEN_QUERY,
+            &raw mut process,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: the call succeeded, so `process` is an open handle that
+    // nothing else knows about. `OwnedHandle` takes sole ownership.
+    let process = unsafe { OwnedHandle::from_raw_handle(process) };
+
+    let mut administrators = [0_u8; SECURITY_MAX_SID_SIZE as usize];
+    let mut size = SECURITY_MAX_SID_SIZE;
+    // SAFETY: `administrators` is writable for `size` bytes, its whole
+    // length, which is enough for any identifier. The domain is optional
+    // and null: the group is the machine's own.
+    if unsafe {
+        CreateWellKnownSid(
+            WinBuiltinAdministratorsSid,
+            ptr::null_mut(),
+            administrators.as_mut_ptr().cast(),
+            &raw mut size,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    let disable = SID_AND_ATTRIBUTES {
+        Sid: administrators.as_mut_ptr().cast(),
+        Attributes: 0,
+    };
+    let mut restricted: HANDLE = ptr::null_mut();
+    // SAFETY: `process` is open with `TOKEN_DUPLICATE`, which the call
+    // needs. `disable` is one valid entry, whose identifier `administrators`
+    // holds, alive for the call; a group the token does not hold is passed
+    // over. No privilege is deleted and no identifier restricts: their
+    // lists are empty and null. `restricted` is a live location for the
+    // handle the call returns, which has the access `process` has.
+    if unsafe {
+        CreateRestrictedToken(
+            process.as_raw_handle(),
+            0,
+            1,
+            &raw const disable,
+            0,
+            ptr::null(),
+            0,
+            ptr::null(),
+            &raw mut restricted,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: as for `process` above.
+    let restricted = unsafe { OwnedHandle::from_raw_handle(restricted) };
+
+    let mut identification: HANDLE = ptr::null_mut();
+    // SAFETY: `restricted` is open with `TOKEN_DUPLICATE`. `identification`
+    // is a live location for the handle the call returns.
+    if unsafe {
+        DuplicateToken(
+            restricted.as_raw_handle(),
+            SecurityIdentification,
+            &raw mut identification,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: as for `process` above.
+    Ok(unsafe { OwnedHandle::from_raw_handle(identification) })
 }
 
 /// Reads one entry of an access list.

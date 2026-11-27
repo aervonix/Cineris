@@ -16,6 +16,7 @@
 //! | [`lock_within`] | The same lock's bounded wait, for a store that opens its lock file itself. |
 //! | [`access_list`] | Windows only: the access list, read back; `access_list_of` reads it through an open handle. |
 //! | [`current_user_sid`] | Windows only: the security identifier of the user the process runs as, in text. |
+//! | [`standing_without_administrators`] | Windows only: who owns a file or a directory, and what the user may do to it with the Administrators group set aside, by Windows's own access check (since the signed approvals step, for the managed configuration). |
 //!
 //! [`write_atomic`](crate::write_atomic) with
 //! [`owner_only`](crate::AtomicWriteOptions::owner_only) is the third way to
@@ -80,8 +81,8 @@ mod windows;
 
 #[cfg(windows)]
 pub use windows::{
-    AccessEntry, AccessKind, AccessList, FULL_CONTROL, access_list, access_list_of,
-    current_user_sid,
+    AccessEntry, AccessKind, AccessList, FULL_CONTROL, Standing, access_list, access_list_of,
+    current_user_sid, standing_without_administrators,
 };
 
 #[cfg(windows)]

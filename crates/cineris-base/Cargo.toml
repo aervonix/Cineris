@@ -28,16 +28,24 @@ unicode-width.workspace = true
 libc.workspace = true
 
 # Owner-only files: an access list can only be set through the Windows API
-# (docs/decisions/0029-owner-only-files-on-windows.md). Used by one module,
-# `private::windows`, the only place in this crate where `unsafe` is allowed.
-# The no-follow open (`nofollow`) uses the flag constants of the last family
-# but one, and that module's one function that reads a reparse tag.
+# (docs/decisions/0029-owner-only-files-on-windows.md). Used by
+# `private::windows`, one of the three modules of this crate where `unsafe`
+# is allowed; `zone::windows` reads the time zone (`Win32_System_Time`). The
+# no-follow open (`nofollow`) uses the flag constants of the storage family,
+# and that module's one function that reads a reparse tag. Since the signed
+# approvals step, `program_data::windows` reads the program data folder as
+# the system records it, from the registry and the Windows directory
+# (`Win32_System_Registry`, `Win32_System_SystemInformation`), so that the
+# managed configuration's folder is not the `ProgramData` variable's. Both
+# calls are in libraries every start loads already (advapi32, kernel32).
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",
+    "Win32_System_Registry",
+    "Win32_System_SystemInformation",
     "Win32_System_Threading",
     "Win32_System_Time",
 ] }

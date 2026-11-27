@@ -22,6 +22,7 @@
 //! | [`framing`] | The newline-delimited JSON reader and writer of the RPC protocol. |
 //! | [`watch`] | [`WatchList`]: the modification-time check behind hot-reload. |
 //! | [`zone`] | [`Zone`] and [`LocalDate`]: the local date at a moment, for the usage view's days. |
+//! | [`program_data`] | Windows only: the folder of every user's program data (`C:\ProgramData`), as the system records it and not as a variable says (since the signed approvals step). |
 //!
 //! # Blocking and async
 //!
@@ -41,14 +42,17 @@
 //!
 //! # Unsafe code
 //!
-//! Two modules of this crate may use `unsafe`, both on Windows only:
+//! Three modules of this crate may use `unsafe`, all on Windows only:
 //! `private::windows`, which sets access lists through the Windows API,
 //! reads the reparse tag and the identity of an open file for [`nofollow`],
 //! and a name's attributes and whether its drive is a fixed disk for the
 //! path resolver's walk
-//! (`docs/decisions/0029-owner-only-files-on-windows.md`); and
-//! `zone::windows`, which reads the system's time zone, which only that API
-//! can give. Everywhere else in the crate the workspace's
+//! (`docs/decisions/0029-owner-only-files-on-windows.md`), and asks
+//! Windows's own access check what the user may do to a file (since the
+//! signed approvals step); `zone::windows`, which reads the system's time
+//! zone, which only that API can give; and, since the signed approvals
+//! step, `program_data::windows`, which reads the program data folder as
+//! the system records it. Everywhere else in the crate the workspace's
 //! `unsafe_code = "deny"` holds.
 
 pub mod address;
@@ -68,6 +72,7 @@ pub mod nofollow;
 pub mod path;
 pub mod private;
 pub mod program;
+pub mod program_data;
 pub mod redact;
 pub mod rng;
 pub mod secret;

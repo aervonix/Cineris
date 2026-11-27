@@ -29,6 +29,7 @@ use crate::document::{self, Document};
 use crate::env::Env;
 use crate::key::KeyPath;
 use crate::layer::{Diagnostic, LayerKind, Origin, Severity, Withheld};
+use crate::managed::{self, Verdict};
 use crate::merge::{self, LayerView, Merger, Source};
 use crate::schema::{self, Effect, Lookup, Meta, Setting, Settings};
 use crate::validate::{self, Checked};
@@ -108,7 +109,8 @@ pub struct LoadOptions {
     pub env: Env,
     /// Where the files are. [`LoadOptions::new`] works it out from the
     /// environment. A test points the managed file, which has a fixed place
-    /// on Linux, somewhere of its own.
+    /// on Linux, somewhere of its own, where it is read without the check
+    /// that it is an administrator's ([`Dirs::check_managed_config`]).
     pub dirs: Dirs,
     /// The workspace root, for the two project layers. `None` loads none,
     /// and a selected profile no other layer defines is then not an error:
@@ -414,7 +416,16 @@ pub(crate) fn load_layers(options: &LoadOptions) -> Result<(Loaded, Vec<FileLaye
     let locator = options.project_locator();
     for (kind, file, location) in options.locations(locator.as_ref()) {
         let before = diagnostics.len();
-        let document = read_layer(kind, &file, &location, options.strict, &mut diagnostics);
+        let administrators_only =
+            kind == LayerKind::Managed && options.dirs.managed_config_is_checked();
+        let document = read_layer(
+            kind,
+            &file,
+            &location,
+            options.strict,
+            administrators_only,
+            &mut diagnostics,
+        );
         files.push((kind, file.clone(), document.is_some()));
         if let Some(Some(document)) = document {
             layers.push(FileLayer {
@@ -612,14 +623,50 @@ fn project_hooks(
 
 /// Reads, parses and checks one file, named `file` and read from
 /// `location`. `None`: the file is not there. `Some(None)`: it is there and
-/// has an error, which was reported.
+/// is not a layer: it has an error, or, with `administrators_only`, the
+/// user could change it (`crate::managed`); either was reported.
 fn read_layer(
     kind: LayerKind,
     file: &Path,
     location: &Location,
     strict: bool,
+    administrators_only: bool,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<Option<Document>> {
+    // The managed file outranks the user's, so one the user could change
+    // is not used: the load says so and goes on without it. Stopping would
+    // let the model's code stop every later run by writing one.
+    if administrators_only && let Location::At(path) = location {
+        let refused = |severity, message| Diagnostic {
+            severity,
+            layer: Some(kind),
+            file: Some(file.to_path_buf()),
+            line: None,
+            key: None,
+            message,
+        };
+        match managed::check(path) {
+            Verdict::Missing => return None,
+            Verdict::Administrators => {}
+            Verdict::NotAdministrators(why) => {
+                diagnostics.push(refused(
+                    Severity::Warning,
+                    format!(
+                        "is not used: {why}. A managed file must be one only an administrator \
+                         can change"
+                    ),
+                ));
+                return Some(None);
+            }
+            Verdict::Unreadable(error) => {
+                diagnostics.push(refused(
+                    Severity::Error,
+                    format!("could not be read: {error}"),
+                ));
+                return Some(None);
+            }
+        }
+    }
     let mut report = |line: Option<u32>, message: String| {
         diagnostics.push(Diagnostic {
             severity: Severity::Error,

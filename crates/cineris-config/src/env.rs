@@ -7,6 +7,14 @@
 //! points at a temporary directory, so no test can read the real home
 //! directory by accident, and two tests cannot disturb each other through
 //! process-wide state.
+//!
+//! **One thing an `Env` holds is not a variable:** on Windows, the folder of
+//! every user's program data (`C:\ProgramData`), where the managed
+//! configuration is. [`Env::from_process`] asks the system for it
+//! ([`cineris_base::program_data`]), since the `ProgramData` variable is the
+//! process's own and `setx ProgramData …` moves it for every later run of
+//! the user's (since the signed approvals step). A test gives a folder of
+//! its own with [`Env::with_program_data`].
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -18,7 +26,8 @@ use std::path::{Path, PathBuf};
 pub enum Platform {
     /// Linux and other Unix systems: the XDG base directories.
     Unix,
-    /// Windows: `%APPDATA%`, `%LOCALAPPDATA%` and `%ProgramData%`.
+    /// Windows: `%APPDATA%`, `%LOCALAPPDATA%`, and the program data folder
+    /// the system records.
     Windows,
 }
 
@@ -41,6 +50,9 @@ impl Platform {
 pub struct Env {
     platform: Platform,
     variables: BTreeMap<String, String>,
+    /// The program data folder on Windows, as the system records it: never
+    /// a variable's value ([`Env::program_data`]).
+    program_data: Option<PathBuf>,
 }
 
 impl fmt::Debug for Env {
@@ -48,13 +60,16 @@ impl fmt::Debug for Env {
         f.debug_struct("Env")
             .field("platform", &self.platform)
             .field("variables", &self.variables.keys().collect::<Vec<_>>())
+            .field("program_data", &self.program_data)
             .finish()
     }
 }
 
 impl Env {
     /// The real environment of this process. A variable whose name or value
-    /// is not Unicode is left out.
+    /// is not Unicode is left out. On Windows the program data folder is
+    /// asked of the system, a read of the registry; where it cannot be
+    /// read there is no managed file.
     #[must_use]
     pub fn from_process() -> Self {
         let mut env = Self::empty(Platform::CURRENT);
@@ -62,6 +77,10 @@ impl Env {
             if let (Some(name), Some(value)) = (name.to_str(), value.to_str()) {
                 env.set(name, value);
             }
+        }
+        #[cfg(windows)]
+        {
+            env.program_data = cineris_base::program_data::folder().ok();
         }
         env
     }
@@ -72,6 +91,7 @@ impl Env {
         Self {
             platform,
             variables: BTreeMap::new(),
+            program_data: None,
         }
     }
 
@@ -133,6 +153,27 @@ impl Env {
         absolute.then(|| PathBuf::from(value))
     }
 
+    /// The folder of every user's program data on Windows (`C:\ProgramData`),
+    /// as the system records it, where the managed configuration is: never
+    /// the `ProgramData` variable, which the user can set
+    /// ([`cineris_base::program_data`]). `None` on Linux; on Windows when
+    /// the system could not say; and in an environment made with
+    /// [`empty`](Self::empty) until
+    /// [`with_program_data`](Self::with_program_data) gives one.
+    #[must_use]
+    pub fn program_data(&self) -> Option<&Path> {
+        self.program_data.as_deref()
+    }
+
+    /// The same environment with the program data folder given: for a test
+    /// of the Windows layout, on any system. The binary's comes from the
+    /// system, in [`from_process`](Self::from_process); no variable gives it.
+    #[must_use]
+    pub fn with_program_data(mut self, folder: impl Into<PathBuf>) -> Self {
+        self.program_data = Some(folder.into());
+        self
+    }
+
     /// The user's home directory: `HOME`, or on Windows `USERPROFILE`.
     #[must_use]
     pub fn home(&self) -> Option<PathBuf> {
@@ -167,7 +208,7 @@ impl Env {
     }
 
     /// The form a name is stored under: as written on Unix, upper case on
-    /// Windows, where `ProgramData` and `PROGRAMDATA` are one variable.
+    /// Windows, where `AppData` and `APPDATA` are one variable.
     fn name(&self, name: &str) -> String {
         match self.platform {
             Platform::Unix => name.to_owned(),
@@ -195,9 +236,9 @@ mod tests {
 
     #[test]
     fn names_ignore_case_on_windows_only() {
-        let windows = Env::empty(Platform::Windows).with("ProgramData", r"C:\ProgramData");
-        assert_eq!(windows.get("PROGRAMDATA"), Some(r"C:\ProgramData"));
-        assert_eq!(windows.get("programdata"), Some(r"C:\ProgramData"));
+        let windows = Env::empty(Platform::Windows).with("AppData", r"C:\Roaming");
+        assert_eq!(windows.get("APPDATA"), Some(r"C:\Roaming"));
+        assert_eq!(windows.get("appdata"), Some(r"C:\Roaming"));
 
         let unix = Env::empty(Platform::Unix).with("Home", "/Profiles/other");
         assert_eq!(unix.get("HOME"), None);

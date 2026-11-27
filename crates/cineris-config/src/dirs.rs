@@ -5,12 +5,18 @@
 //! | Configuration | `$XDG_CONFIG_HOME/cineris`, usually `~/.config/cineris` | `%APPDATA%\cineris` |
 //! | State | `$XDG_STATE_HOME/cineris`, usually `~/.local/state/cineris` | `%LOCALAPPDATA%\cineris\state` |
 //! | Data (sessions) | `$XDG_DATA_HOME/cineris`, usually `~/.local/share/cineris` | `%LOCALAPPDATA%\cineris` |
-//! | Managed configuration | `/etc/cineris/config.toml` | `%ProgramData%\cineris\config.toml` |
+//! | Managed configuration | `/etc/cineris/config.toml` | `C:\ProgramData\cineris\config.toml`: the program data folder the system records, never `%ProgramData%` |
 //!
 //! One variable of our own moves a file here: `CINERIS_CONFIG` names the
-//! user's configuration file. `CINERIS_DATA_DIR` is not read here: it is
-//! the environment layer's `session.data_dir`, so that a managed lock on
-//! that key holds against it, and [`Dirs::data`] is the platform's place.
+//! user's configuration file. **No variable moves the managed file** (since
+//! the signed approvals step): on Linux its place is fixed, and on Windows
+//! its folder is the one the system records, which [`Env::program_data`]
+//! gives. The `ProgramData` variable is the user's to set, and a managed
+//! file the user chose would be no administrator's.
+//!
+//! `CINERIS_DATA_DIR` is not read here: it is the environment layer's
+//! `session.data_dir`, so that a managed lock on that key holds against
+//! it, and [`Dirs::data`] is the platform's place.
 //!
 //! Everything is worked out from an [`Env`], never from the process's real
 //! environment, and nothing here touches the file system.
@@ -57,7 +63,13 @@ pub struct Dirs {
     /// The user's configuration file: `config.toml` in the configuration
     /// directory, unless `CINERIS_CONFIG` names another file.
     pub user_config: Option<PathBuf>,
-    /// The managed configuration file, for shared machines.
+    /// The managed configuration file, for shared machines: an
+    /// administrator's (`docs/architecture/08-configuration.md`, "The
+    /// managed file is an administrator's"). Where [`Dirs::from_env`] puts
+    /// it, it is checked before it is read, and one the user could change is
+    /// not used. A test that points it at a file of its own, which no test
+    /// can make an administrator's, has it read unchecked, unless it asks
+    /// for the check with [`Dirs::check_managed_config`].
     pub managed_config: Option<PathBuf>,
     /// The state directory: trust, approvals, caches, logs. Nothing in it
     /// is needed to run.
@@ -67,6 +79,11 @@ pub struct Dirs {
     /// `CINERIS_DATA_DIR` variable sets, is the other way to it:
     /// [`Loaded::data_dir`](crate::Loaded::data_dir) gives the answer.
     pub data: Option<PathBuf>,
+    /// The managed file that is checked before it is read: the one
+    /// [`Dirs::from_env`] found, or the one a test named with
+    /// [`Dirs::check_managed_config`]. Code that moves `managed_config`
+    /// elsewhere leaves this behind, so that file is read unchecked.
+    checked_managed: Option<PathBuf>,
 }
 
 impl Dirs {
@@ -110,7 +127,8 @@ impl Dirs {
                         .or_else(|| under_home(&["AppData", "Roaming"]))),
                     local.as_ref().map(|local| local.join("state")),
                     local.clone(),
-                    app(env.absolute_path("ProgramData")).map(|dir| dir.join(CONFIG_FILE)),
+                    // The folder the system records, never the variable.
+                    app(env.program_data().map(Path::to_path_buf)).map(|dir| dir.join(CONFIG_FILE)),
                     local.as_ref().map(|local| local.join(CREDENTIALS_DIR)),
                 )
             }
@@ -127,9 +145,26 @@ impl Dirs {
             home,
             config,
             credentials,
+            checked_managed: managed_config.clone(),
             managed_config,
             state,
         }
+    }
+
+    /// Whether the managed file is checked before it is read: it is the
+    /// one [`Dirs::from_env`] found, or one a test asked to have checked
+    /// with [`Dirs::check_managed_config`].
+    #[must_use]
+    pub fn managed_config_is_checked(&self) -> bool {
+        self.managed_config.is_some() && self.managed_config == self.checked_managed
+    }
+
+    /// Checks the managed file where it is now as the one the system gives
+    /// is checked: for a test of the check, which can only point it at a
+    /// file of its own. The binary never needs it: the managed file it reads
+    /// is the one [`Dirs::from_env`] found, which is checked already.
+    pub fn check_managed_config(&mut self) {
+        self.checked_managed.clone_from(&self.managed_config);
     }
 
     /// The credentials file: `credentials.toml` in
@@ -428,7 +463,7 @@ mod tests {
             .with("USERPROFILE", r"C:\People\someone")
             .with("APPDATA", r"C:\People\someone\AppData\Roaming")
             .with("LOCALAPPDATA", r"C:\People\someone\AppData\Local")
-            .with("ProgramData", r"C:\ProgramData");
+            .with_program_data(r"C:\ProgramData");
         let dirs = Dirs::from_env(&env);
         let roaming = PathBuf::from(r"C:\People\someone\AppData\Roaming").join("cineris");
         let local = PathBuf::from(r"C:\People\someone\AppData\Local").join("cineris");
@@ -454,8 +489,11 @@ mod tests {
             )
         );
 
+        assert!(dirs.managed_config_is_checked());
+
         // Without the two variables the usual places under the profile are
-        // used, and without `ProgramData` there is no managed file.
+        // used, and without the system's program data folder there is no
+        // managed file.
         let bare = Dirs::from_env(
             &Env::empty(Platform::Windows).with("USERPROFILE", r"C:\People\someone"),
         );
@@ -466,6 +504,53 @@ mod tests {
         expected.extend(["AppData", "Local", "cineris", "credentials"]);
         assert_eq!(bare.credentials, Some(expected));
         assert_eq!(bare.managed_config, None);
+        assert!(!bare.managed_config_is_checked());
+    }
+
+    /// The `ProgramData` variable is the user's: `setx ProgramData …` sets
+    /// it for every later process of theirs. It moves no managed file, nor
+    /// do the variables of the same folder, `ALLUSERSPROFILE` and the
+    /// system's drive.
+    #[test]
+    fn no_variable_moves_the_managed_file() {
+        let usual = PathBuf::from(r"C:\ProgramData")
+            .join("cineris")
+            .join("config.toml");
+        let env = Env::empty(Platform::Windows)
+            .with("USERPROFILE", r"C:\People\someone")
+            .with_program_data(r"C:\ProgramData")
+            .with("ProgramData", r"C:\People\someone\mine")
+            .with("ALLUSERSPROFILE", r"C:\People\someone\mine")
+            .with("SystemDrive", "D:");
+        assert_eq!(Dirs::from_env(&env).managed_config, Some(usual));
+        let without = Env::empty(Platform::Windows)
+            .with("USERPROFILE", r"C:\People\someone")
+            .with("ProgramData", r"C:\People\someone\mine");
+        assert_eq!(Dirs::from_env(&without).managed_config, None);
+
+        // On Linux the place is fixed.
+        let unix = Env::empty(Platform::Unix)
+            .with("HOME", "/users/someone")
+            .with("XDG_CONFIG_DIRS", "/users/someone/etc")
+            .with("CINERIS_CONFIG", "/users/someone/etc/cineris/config.toml");
+        assert_eq!(
+            Dirs::from_env(&unix).managed_config,
+            Some(PathBuf::from("/etc/cineris/config.toml"))
+        );
+    }
+
+    /// The managed file the environment gives is checked; one that code put
+    /// elsewhere is not, unless a test asks for the check.
+    #[test]
+    fn the_managed_file_the_environment_gives_is_the_one_checked() {
+        let mut dirs = Dirs::from_env(&Env::empty(Platform::Unix).with("HOME", "/users/someone"));
+        assert!(dirs.managed_config_is_checked());
+        dirs.managed_config = Some(PathBuf::from("/users/someone/managed.toml"));
+        assert!(!dirs.managed_config_is_checked());
+        dirs.check_managed_config();
+        assert!(dirs.managed_config_is_checked());
+        dirs.managed_config = None;
+        assert!(!dirs.managed_config_is_checked());
     }
 
     #[test]

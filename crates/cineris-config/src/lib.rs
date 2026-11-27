@@ -48,6 +48,7 @@ pub mod state;
 pub mod write;
 
 mod document;
+mod managed;
 mod merge;
 mod validate;
 

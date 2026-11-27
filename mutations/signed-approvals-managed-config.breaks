@@ -1,0 +1,44 @@
+# Signed approvals, part: the managed configuration is the administrator's
+# (docs/steps/signed-approvals/parts/managed-config.md). The managed file's
+# folder on Windows is the one the system records, and a managed file the
+# user could change is not used.
+
+[break] programdata-variable-moves-the-managed-file
+rule: On Windows the managed file's folder is the program data folder the system records, never the `ProgramData` variable, which the user can set for every later run.
+file: crates/cineris-config/src/dirs.rs
+in: Dirs::from_env
+find: app(env.program_data().map(Path::to_path_buf))
+replace: app(env.absolute_path("ProgramData"))
+caught-by:
+    cineris-config dirs::tests::no_variable_moves_the_managed_file
+    cineris-config dirs::tests::windows_follows_its_own_folders
+
+[break] load-reads-the-managed-file-unchecked
+rule: A load checks that the managed file the environment gives is an administrator's before it reads it, and leaves out one the user could change.
+file: crates/cineris-config/src/load.rs
+in: load_layers
+find: kind == LayerKind::Managed && options.dirs.managed_config_is_checked()
+replace: false
+caught-by:
+    cineris-config::it managed::a_managed_file_the_user_owns_is_not_used
+
+[break] linux-owner-not-asked
+rule: On Linux the managed file and every folder on the way to it must be root's: a file or folder of the user's is refused.
+file: crates/cineris-config/src/managed.rs
+in: unix_refusal
+find: if entry.owner != 0 {
+replace: if entry.owner != 0 && entry.kind == Kind::Link {
+caught-by:
+    cineris-config managed::tests::on_linux_root_owns_the_file_and_every_folder_and_no_one_else_writes_them
+    cineris-config managed::tests::on_linux_the_users_own_file_is_refused_and_roots_passes
+    cineris-config managed::tests::on_linux_a_file_of_the_users_is_refused_and_one_of_roots_passes
+    cineris-config::it managed::a_managed_file_the_user_owns_is_not_used
+
+[break] windows-folder-delete-child-not-asked
+rule: On Windows a managed file in a folder the user may delete files from is refused: the user could delete it and put one of their own there.
+file: crates/cineris-config/src/managed.rs
+in: windows_refusal
+find: (rights::DELETE_CHILD, "delete files in")
+replace: (0, "delete files in")
+caught-by:
+    cineris-config managed::tests::on_windows_each_right_to_change_the_file_or_its_folder_is_refused
