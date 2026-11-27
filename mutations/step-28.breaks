@@ -6807,9 +6807,9 @@ caught-by:
 [break] trust-for-the-run-reads-no-pin-of-a-hook
 rule: Under `--trust-project` a project's hook pinned as it is runs, the store read for it.
 file: crates/cineris-core/src/assemble.rs
-in: assemble
-find: None if options.trust_project && !configured.project.is_empty() => {
-replace: None if false && !configured.project.is_empty() => {
+in: trust
+find: let stored = state.and_then(|state| {
+replace: let stored = state.filter(|_| false).and_then(|state| {
 caught-by:
     cineris-core::it hook_wiring::a_projects_hooks_reach_a_session_only_through_trust
 

@@ -2340,7 +2340,7 @@ export interface ToolTime {
 
 /** `trust/request`: may this project's executable resources be used? */
 export interface TrustRequest {
-  /** What a yes would write, which the person signs (since the signed approvals step): the project's whole entry as it would then be. A front end that answers yes rebuilds the bytes signed from it, checks that it holds what it shows, asks the person for their password, and answers with the signature. Absent when nothing a yes would write can be kept (no state directory): a yes then holds for the session alone. */
+  /** What a yes would write, which the person signs (since the signed approvals step): the project's whole entry as it would then be. A front end that answers yes rebuilds the bytes signed from it, checks that it holds what it shows, asks the person for their password, and answers with the signature. The core puts no trust question without one; a yes to a question that had none would trust nothing, not even for the session. */
   proposal?: ApprovalProposal | null;
   /** What it asks to be trusted with. */
   resources: Array<TrustResource>;

@@ -833,6 +833,17 @@ impl TrustProposal {
     pub fn view(&self) -> ApprovalProposal {
         self.next.view()
     }
+
+    /// Whether this proposal was worked out against the project's entry as
+    /// `trust` holds it, signed or not: a question shaped by one reading of
+    /// the store is put only with a proposal made from that same reading
+    /// (the review of the permission path: an older signed entry put back
+    /// between the two readings would be signed again, at a new revision, by
+    /// a yes to what is new).
+    #[must_use]
+    pub fn is_against(&self, trust: &ProjectTrust) -> bool {
+        self.base == trust.project
+    }
 }
 
 /// The trust store: which projects the user has trusted, and the hashes of
@@ -1973,6 +1984,55 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    /// A proposal is against the reading it was worked out from, and no
+    /// other: one made after the entry was put back as it was before (an
+    /// older signed entry, copied) is not against the reading taken before
+    /// that, whatever it would write (the review of the permission path).
+    #[test]
+    fn a_proposal_is_against_the_entry_it_was_worked_out_from() {
+        let scratch = crate::store_lock::tests::Scratch::new();
+        let store = store_in(&scratch);
+        let key = ProjectKey::new("k");
+        let person = Person::new();
+        let mine = person.verifier();
+        let approve = |definition: Definition| TrustChange::Approve {
+            approved: vec![definition.into()],
+            git_shown: false,
+        };
+        // Nothing stored: a first trust is against no entry.
+        let none = store.project(&key, Some(&mine)).unwrap();
+        let first = TrustChange::Trust {
+            root: "~/app".to_owned(),
+            approved: Vec::new(),
+            git_shown: false,
+            lift_refusal: false,
+        };
+        let proposal = store.propose(&key, first, None).unwrap().unwrap();
+        assert!(proposal.is_against(&none));
+        person.trust(&store, &key, "~/app", &[hook("a", &["x"])], false);
+        let older = std::fs::read(store.path()).unwrap();
+        let before = store.project(&key, Some(&mine)).unwrap();
+        assert!(!proposal.is_against(&before));
+        person.approve(&store, &key, &[hook("b", &["y"])], false);
+        let read = store.project(&key, Some(&mine)).unwrap();
+        let proposal = store
+            .propose(&key, approve(hook("c", &["z"])), Some(&mine))
+            .unwrap()
+            .unwrap();
+        assert!(proposal.is_against(&read));
+        assert!(!proposal.is_against(&before));
+        // The older entry put back between the reading and the proposal.
+        std::fs::write(store.path(), older).unwrap();
+        let rolled = store
+            .propose(&key, approve(hook("c", &["z"])), Some(&mine))
+            .unwrap()
+            .unwrap();
+        assert!(!rolled.is_against(&read));
+        assert!(rolled.is_against(&before));
+        // The same entry read with no key is the same entry.
+        assert!(rolled.is_against(&store.project(&key, None).unwrap()));
     }
 
     #[test]

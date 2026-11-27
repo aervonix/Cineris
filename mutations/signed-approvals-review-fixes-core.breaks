@@ -1,0 +1,256 @@
+# The signed approvals step, part: fixes from the permission path's review
+# (docs/steps/signed-approvals/parts/review-fixes-core.md), and the two of
+# the system layer's review that are in the reset. What a store pins
+# restricts under --trust-project too, and while the user's pins do not
+# count; nothing another program does blocks the person's reset; a key
+# signs only when it opens the key file and is the open key; a question is
+# put only with a proposal from its own reading, three times at most; a yes
+# signs only its own project's trust.
+
+# ---------------------------------------- what restricts under --trust-project
+
+[break] trust-project-reads-no-entry
+rule: Under --trust-project the project's entry is read with the session's key, so that what an entry that does not count pins holds its gates.
+file: crates/cineris-core/src/assemble.rs
+in: trust
+find: .project(&root.project_key(), inner.person.verifier().as_ref()).ok()
+replace: .project(&root.project_key(), inner.person.verifier().as_ref()).ok().filter(|_| false)
+caught-by:
+    cineris-core::it signed::under_trust_project_without_the_key_a_pinned_hooks_gate_holds
+    cineris-core::it signed::under_trust_project_without_the_key_a_pinned_extensions_gate_holds
+
+[break] trust-project-builds-no-uncounted
+rule: An entry that does not count holds the gates of the extensions it pins whether the project is not trusted or trusted for the run by --trust-project.
+file: crates/cineris-core/src/assemble.rs
+in: assemble
+find: let uncounted = stored.as_ref().and_then(crate::ext::found::Uncounted::of);
+replace: let uncounted = stored.as_ref().filter(|_| !projects_looked_in).and_then(crate::ext::found::Uncounted::of);
+caught-by:
+    cineris-core::it signed::under_trust_project_without_the_key_a_pinned_extensions_gate_holds
+
+[break] trust-project-hook-of-an-uncounted-entry-runs-or-lapses
+rule: In a project trusted for the run, a hook the entry pins, where the entry does not count, is on its event, failing.
+file: crates/cineris-core/src/ext/hooks.rs
+in: in_session
+find: let uncounted = stored.filter(|entry| entry.has_entry() && !entry.is_trusted());
+replace: let uncounted = stored.filter(|_| false);
+caught-by:
+    cineris-core ext::hooks::tests::under_trust_project_a_hook_an_entry_that_does_not_count_pins_holds_its_event
+    cineris-core::it signed::under_trust_project_without_the_key_a_pinned_hooks_gate_holds
+
+# ---------------------------------------- the user's pins that do not count
+
+[break] uncounted-pins-gone-hold-nothing
+rule: While the user's pins do not count, an extension they pin that is gone is still found missing, and holds its gates.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: not_found
+find: Err(unused) => unused.held.iter().map(|(name, _)| name.clone()).collect()
+replace: Err(_) => Vec::new()
+caught-by:
+    cineris-core::it signed::a_pinned_users_extension_gone_holds_its_gates_without_the_key
+
+[break] uncounted-pins-give-no-hash
+rule: While the user's pins do not count, an extension they pin that does not stand as pinned holds its gates at the hash pinned.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: decide
+find: Err(unused) => unused.held.iter().find(|(pinned, _)| *pinned == name).map(|(_, hash)| *hash)
+replace: Err(_) => None
+caught-by:
+    cineris-core::it signed::a_pinned_users_extension_gone_holds_its_gates_without_the_key
+
+[break] without-engine-uncounted-pins-list-nothing-gone
+rule: In a build without the script engine, while the user's pins do not count, an extension they pin that is gone is listed gone, and holds its gates.
+file: crates/cineris-core/src/ext/manage.rs
+in: judged
+find: (Source::User, Err(_)) => judging.pins_held.iter()
+replace: (Source::User, Err(_)) => judging.pins_held.iter().take(0)
+caught-by:
+    cineris-core ext::without_engine::tests::a_pinned_extension_gone_holds_its_gates_while_the_pins_do_not_count
+
+[break] without-engine-uncounted-pins-give-no-hash
+rule: In a build without the script engine, while the user's pins do not count, the gates of one they pin are held at the hash pinned.
+file: crates/cineris-core/src/ext/without_engine.rs
+in: pin_of
+find: Err(_) => judging.pins_held.iter().find(
+replace: Err(_) => judging.pins_held.iter().take(0).find(
+caught-by:
+    cineris-core ext::without_engine::tests::a_pinned_extension_gone_holds_its_gates_while_the_pins_do_not_count
+
+[break] without-engine-holds-no-uncounted-gate
+rule: A build without the script engine holds the gates of what a project's entry that does not count pins.
+file: crates/cineris-core/src/ext/without_engine.rs
+in: in_session
+find: if let Some(uncounted) = &view.uncounted {
+replace: if let Some(uncounted) = view.uncounted.as_ref().filter(|_| false) {
+caught-by:
+    cineris-core ext::without_engine::tests::a_session_without_the_engine_holds_what_an_uncounted_entry_pins
+
+[break] disable-finds-gates-only-by-a-counted-pin
+rule: The gates `cineris ext disable` asks about are found by the extension's pin, signed or not: a subcommand's core has no key, and a pin that does not count there still gates every session.
+file: crates/cineris-core/src/ext/manage.rs
+in: Core::extension_gates
+find: let Some(hash) = pins.held().iter()
+replace: let Some(hash) = pins.list().iter()
+caught-by:
+    cineris-core::it signed::the_gates_a_disable_lets_go_are_found_without_the_key
+
+# ---------------------------------------- the reset
+
+[break] reset-leaves-a-folder-at-a-locks-name
+rule: A folder or a link at a lock's name is moved aside at a reset, so that it does not keep the reset from taking the lock.
+file: crates/cineris-core/src/person.rs
+in: Core::reset_approvals_within
+find: if !is_file(&lock) {
+replace: if false && !is_file(&lock) {
+caught-by:
+    cineris-core::it signed::a_folder_at_a_locks_name_does_not_block_a_reset
+
+[break] reset-moves-an-unreadable-store-aside
+rule: A store the reset cannot read is left as it is: never moved aside, which would leave no store and lift its gates.
+file: crates/cineris-core/src/person.rs
+in: Core::reset_approvals_within
+find: let pins_file = state.pins_file();
+replace: let pins_file = state.pins_file(); let _ = set_aside(&pins_file);
+caught-by:
+    cineris-core::it signed::a_store_not_understood_does_not_block_a_reset
+
+[break] reset-waits-for-a-held-lock
+rule: A store's lock held by another program is waited for no longer than the reset's wait, and the store is then left as it is and said.
+file: crates/cineris-core/src/person.rs
+in: Core::reset_approvals_within
+find: let pins = free_within(&pins_file, wait)
+replace: let pins = free_within(&pins_file, LOCK_WAIT)
+caught-by:
+    cineris-core::it signed::a_held_lock_is_waited_for_no_longer_than_the_wait
+
+[break] reset-leaves-the-key-files-name-as-it-is
+rule: Whatever stands at the key file's name (a read-only file, a folder, a link) is moved aside at a reset, and the new key put in its place.
+file: crates/cineris-core/src/person.rs
+in: Core::reset_approvals_within
+find: let in_place = set_aside(&key_file).and_then(|_| {
+replace: let in_place = Ok::<Option<PathBuf>, String>(None).and_then(|_| {
+caught-by:
+    cineris-core::it signed::what_stands_at_the_key_files_name_is_moved_aside_at_a_reset
+
+[break] reset-writes-a-cheaper-cost
+rule: A reset the person makes writes the standard cost.
+file: crates/cineris-core/src/person.rs
+in: Core::reset_cost
+find: Cost::STANDARD
+replace: Cost::new(64, 1, 1).unwrap_or(Cost::STANDARD)
+caught-by:
+    cineris-core::it signed::a_reset_writes_the_standard_cost
+
+# ---------------------------------------- the key
+
+[break] person-key-takes-another-password
+rule: A password that does not make the key file's key is refused (NotThePassword).
+file: crates/cineris-core/src/person.rs
+in: Core::person_key
+find: if !file.opens(&key) {
+replace: if false && !file.opens(&key) {
+caught-by:
+    cineris-core::it signed::the_cores_key_refusals
+
+[break] open-approvals-takes-another-key
+rule: Approvals open with one key are not opened with another (NotTheOpenKey).
+file: crates/cineris-core/src/person.rs
+in: Core::open_approvals
+find: Some(open) if open != key.verifier() => Err(KeyRefusal::NotTheOpenKey),
+replace: Some(open) if false && open != key.verifier() => Err(KeyRefusal::NotTheOpenKey),
+caught-by:
+    cineris-core::it signed::the_cores_key_refusals
+
+[break] set-up-replaces-a-key
+rule: Set-up does not replace a key that is set up (KeyExists).
+file: crates/cineris-core/src/person.rs
+in: Core::set_up_approvals
+find: if self.approval_key()?.is_some() {
+replace: if self.approval_key()?.is_some() && false {
+caught-by:
+    cineris-core::it signed::the_cores_key_refusals
+
+[break] a-key-that-does-not-open-the-file-signs
+rule: The core signs only with a key that opens the person's key file.
+file: crates/cineris-core/src/manage.rs
+in: Core::signing_key_refusal
+find: if !file.opens(key) {
+replace: if false && !file.opens(key) {
+caught-by:
+    cineris-core::it signed::a_key_that_may_not_sign_writes_nothing
+
+[break] a-key-not-open-signs
+rule: The core signs only with the key its approvals are open with, when they are.
+file: crates/cineris-core/src/manage.rs
+in: Core::signing_key_refusal
+find: Some(open) if open != key.verifier() => Some(KeyRefusal::NotTheOpenKey),
+replace: Some(open) if false && open != key.verifier() => Some(KeyRefusal::NotTheOpenKey),
+caught-by:
+    cineris-core::it signed::a_key_that_may_not_sign_writes_nothing
+
+[break] trust-project-signs-before-checking-the-key
+rule: trust_project_with refuses a key that may not sign before it proposes or writes anything.
+file: crates/cineris-core/src/manage.rs
+in: Core::trust_project_with
+find: if let Some(refusal) = self.signing_key_refusal(key) {
+replace: if let Some(refusal) = self.signing_key_refusal(key).filter(|_| false) {
+caught-by:
+    cineris-core::it signed::a_key_that_may_not_sign_writes_nothing
+
+[break] add-extension-signs-before-checking-the-key
+rule: add_extension refuses a key that may not sign before it evaluates, writes or pins anything.
+file: crates/cineris-core/src/ext/manage.rs
+in: Core::add_extension
+find: if let Some(refusal) = self.signing_key_refusal(key) {
+replace: if let Some(refusal) = self.signing_key_refusal(key).filter(|_| false) {
+caught-by:
+    cineris-core::it signed::an_extension_is_neither_added_nor_removed_with_a_key_that_may_not_sign
+
+[break] remove-extension-signs-before-checking-the-key
+rule: remove_extension refuses a key given that may not sign before it unpins or deletes anything.
+file: crates/cineris-core/src/ext/manage.rs
+in: Core::remove_extension
+find: if let Some(refusal) = key.and_then(|key| self.signing_key_refusal(key)) {
+replace: if let Some(refusal) = key.and_then(|key| self.signing_key_refusal(key)).filter(|_| false) {
+caught-by:
+    cineris-core::it signed::an_extension_is_neither_added_nor_removed_with_a_key_that_may_not_sign
+
+# ---------------------------------------- the question
+
+[break] a-question-from-another-reading-is-put
+rule: The trust question is put only with a proposal worked out against the entry it is shaped by.
+file: crates/cineris-core/src/assemble.rs
+in: look
+find: .is_none_or(|proposal| proposal.is_against(&stored))
+replace: .is_none_or(|_| true)
+caught-by:
+    cineris-core::it signed::a_question_is_put_only_with_a_proposal_from_its_own_reading
+
+[break] a-proposal-is-against-any-entry
+rule: A proposal is against the reading it was worked out from, and no other.
+file: crates/cineris-policy/src/trust.rs
+in: TrustProposal::is_against
+find: self.base == trust.project
+replace: self.base == self.base
+packages: cineris-policy,cineris-core
+caught-by:
+    cineris-policy trust::tests::a_proposal_is_against_the_entry_it_was_worked_out_from
+    cineris-core::it signed::a_question_is_put_only_with_a_proposal_from_its_own_reading
+
+[break] the-question-is-put-without-end
+rule: A question whose entry moves under each signed yes is put three times at most, and the session then opens with the trust as it stands.
+file: crates/cineris-core/src/core.rs
+in: Core::trust_for
+find: for _ in 0..TRUST_ASKED_AT_MOST {
+replace: for _ in 0..usize::MAX {
+caught-by:
+    cineris-core::it signed::the_question_is_put_three_times_at_most_when_the_entry_moves_under_each_yes
+
+[break] a-yes-signs-another-unit
+rule: A yes to a trust question is taken only over a proposal of the trust of the project it was asked for: never another project's, nor the user's pins.
+file: crates/cineris-core/src/clients.rs
+in: trust_answer_problem
+find: if !of_the_project {
+replace: if false && !of_the_project {
+caught-by:
+    cineris-core clients::tests::a_trust_yes_is_taken_only_over_the_asking_projects_trust

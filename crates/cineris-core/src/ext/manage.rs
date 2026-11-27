@@ -38,7 +38,7 @@ use cineris_ext::folder::Snapshot;
 use cineris_ext::manifest::Manifest;
 use cineris_ext::source::Source;
 use cineris_policy::signed::{PersonKey, Verifier};
-use cineris_policy::{Definition, PinChange, PinError, PinStore, ProjectTrust, UserPins};
+use cineris_policy::{Definition, PinChange, PinError, PinStore, ProjectTrust, UserPin, UserPins};
 use cineris_protocol::ErrorKind;
 use cineris_protocol::methods::TrustResourceKind;
 
@@ -195,6 +195,11 @@ pub(crate) struct Judging<'a> {
     pub(crate) project: Option<&'a Discovered>,
     pub(crate) project_trusted: bool,
     pub(crate) pins: Result<&'a UserPins, String>,
+    /// Every pin of the user's, signed or not, while their pins do not count
+    /// (`pins` is an error): what restricts, so that one gone or left out
+    /// holds its gates as it does while they count (the review of the
+    /// permission path). Empty while they count, or cannot be read.
+    pub(crate) pins_held: &'a [UserPin],
     pub(crate) trust: Result<&'a ProjectTrust, String>,
     pub(crate) for_the_run: &'a [Definition],
     pub(crate) disabled: &'a [String],
@@ -333,6 +338,12 @@ pub(crate) fn judged(judging: &Judging<'_>) -> Vec<ExtensionListed> {
         let pinned: Vec<(String, ContentHash, String)> = match (source, &judging.pins) {
             (Source::User, Ok(pins)) => pins
                 .list()
+                .iter()
+                .filter(|pin| pin.kind == TrustResourceKind::Extension)
+                .map(|pin| (pin.name.clone(), pin.hash, pin.at.as_str().to_owned()))
+                .collect(),
+            (Source::User, Err(_)) => judging
+                .pins_held
                 .iter()
                 .filter(|pin| pin.kind == TrustResourceKind::Extension)
                 .map(|pin| (pin.name.clone(), pin.hash, pin.at.as_str().to_owned()))
@@ -814,9 +825,9 @@ impl Core {
         let home = options.env.home();
         let file_shown = |path: &Path| in_code(&shown_path(path, home.as_deref())).into_owned();
         let verifier = self.verifier();
-        let pins_read = match &state {
+        let (pins_read, pins_held) = match &state {
             Some(state) => pins_judged(state, &options.clock, verifier.as_ref(), home.as_deref()),
-            None => Ok(UserPins::default()),
+            None => (Ok(UserPins::default()), Vec::new()),
         };
         let trust_read = match &state {
             Some(state) => {
@@ -884,6 +895,7 @@ impl Core {
             project: Some(&project_found),
             project_trusted: listing.project_trusted,
             pins: pins_read.as_ref().map_err(Clone::clone),
+            pins_held: &pins_held,
             trust: trust_read.as_ref().map_err(Clone::clone),
             for_the_run: &[],
             disabled: &disabled,
@@ -1188,9 +1200,12 @@ impl Core {
     ///
     /// # Errors
     ///
-    /// When its evaluation fails (nothing is written or pinned then), its
-    /// folder cannot be written, or the pin cannot be kept (the pins changed
-    /// while the person was asked among the reasons: add it again).
+    /// When `key` may not sign (`Core::signing_key_refusal`: no key is set
+    /// up, it does not open the key file, or the approvals are open with
+    /// another; nothing is evaluated, written or pinned then), its
+    /// evaluation fails (nothing is written or pinned then), its folder
+    /// cannot be written, or the pin cannot be kept (the pins changed while
+    /// the person was asked among the reasons: add it again).
     #[cfg(feature = "scripts")]
     pub async fn add_extension(
         &self,
@@ -1199,6 +1214,17 @@ impl Core {
     ) -> Result<Added, OpError> {
         let failed = |message: String| error(ErrorKind::Internal, "extension_not_added", message);
         let code = in_code(&to_add.name).into_owned();
+        // A key that may not sign is refused before anything is evaluated,
+        // written or pinned (the review of the permission path).
+        if let Some(refusal) = self.signing_key_refusal(key) {
+            return Err(error(
+                ErrorKind::Usage,
+                "key_refused",
+                format!(
+                    "The extension `{code}` was not added, and nothing was written: {refusal}."
+                ),
+            ));
+        }
         if to_add.registration.is_none() {
             self.evaluate_extension(&mut to_add).await?;
         }
@@ -1281,25 +1307,51 @@ impl Core {
     /// early review's M1): its hooks on a gating event, as the registration
     /// cache keeps them at its pin. One not pinned holds none.
     ///
+    /// The pin is looked for among every pin the store holds, signed or
+    /// not, as a session holds its gates whatever the pin's signature: a
+    /// subcommand's core never has the person's approvals open, and a pin
+    /// that does not count there still gates every session (the front-end
+    /// part's finding on the review of the permission path). A store that
+    /// cannot be read says nothing of what is pinned: what the extension
+    /// holds is then not known.
+    ///
     /// # Errors
     ///
-    /// When the listing cannot be made.
-    pub fn extension_gates(&self, project: &Project, name: &str) -> Result<Gates, OpError> {
-        let listing = self.extensions(project)?;
-        let mine = listing
-            .extensions
-            .iter()
-            .find(|one| one.source == Source::User && one.name == name);
-        let Some((one, (hash, _))) = mine.and_then(|one| one.pin.as_ref().map(|pin| (one, pin)))
+    /// None today: with no state directory nothing is pinned.
+    pub fn extension_gates(&self, _project: &Project, name: &str) -> Result<Gates, OpError> {
+        let none = Gates {
+            held: Vec::new(),
+            unknown: false,
+            hash: None,
+        };
+        let Some(state) = self.state_dir() else {
+            return Ok(none);
+        };
+        let Ok(pins) =
+            PinStore::new(state.pins_file(), Arc::clone(&self.inner.options.clock)).pins(None)
         else {
             return Ok(Gates {
-                held: Vec::new(),
-                unknown: false,
-                hash: None,
+                unknown: true,
+                ..none
             });
         };
-        let held: Vec<String> = one
-            .registered
+        let Some(hash) = pins
+            .held()
+            .iter()
+            .find(|pin| pin.kind == TrustResourceKind::Extension && pin.name == name)
+            .map(|pin| pin.hash)
+        else {
+            return Ok(none);
+        };
+        // What it registered at the hash pinned, as the cache keeps it.
+        let registered = RegistrationCache::new(state.registration_cache_file())
+            .with_clock(Arc::clone(&self.inner.options.clock))
+            .load()
+            .cache
+            .get(&hash)
+            .filter(|entry| entry.name == name)
+            .map(Registered::of);
+        let held: Vec<String> = registered
             .iter()
             .flat_map(|registered| registered.hooks.iter())
             .filter(|hook| {
@@ -1312,8 +1364,8 @@ impl Core {
             .collect();
         Ok(Gates {
             held,
-            unknown: one.registered.is_none(),
-            hash: Some(*hash),
+            unknown: registered.is_none(),
+            hash: Some(hash),
         })
     }
 
@@ -1504,9 +1556,10 @@ impl Core {
     ///
     /// # Errors
     ///
-    /// When it is a project's, it is pinned and no key is given, the pin
-    /// store cannot be written (nothing is deleted then), or the folder is
-    /// not where it should be or cannot be deleted.
+    /// When it is a project's, it is pinned and no key is given, the key
+    /// given may not sign (`Core::signing_key_refusal`; nothing is unpinned
+    /// or deleted then), the pin store cannot be written (nothing is deleted
+    /// then), or the folder is not where it should be or cannot be deleted.
     pub fn remove_extension(
         &self,
         removal: &Removal,
@@ -1526,6 +1579,15 @@ impl Core {
             ));
         }
         let failed = |message: String| error(ErrorKind::Internal, "extension_not_removed", message);
+        // A key given that may not sign is refused before anything is
+        // unpinned or deleted (the review of the permission path).
+        if let Some(refusal) = key.and_then(|key| self.signing_key_refusal(key)) {
+            return Err(error(
+                ErrorKind::Usage,
+                "key_refused",
+                format!("`{code}` was not removed, and nothing was deleted: {refusal}."),
+            ));
+        }
         let unpinned = if removal.pin.is_some() {
             let Some(key) = key else {
                 return Err(error(
@@ -1703,9 +1765,9 @@ pub(crate) fn judge<R>(
     let clock = from.clock;
     let home = from.home;
     let mut problems = Vec::new();
-    let pins = match from.state {
+    let (pins, pins_held) = match from.state {
         Some(state) => pins_judged(state, clock, from.verifier, home),
-        None => Ok(UserPins::default()),
+        None => (Ok(UserPins::default()), Vec::new()),
     };
     let trust = match (from.state, from.project) {
         (Some(state), Some(key)) => {
@@ -1742,6 +1804,7 @@ pub(crate) fn judge<R>(
         project: project_found.as_ref(),
         project_trusted: from.project.is_some(),
         pins: pins.as_ref().map_err(Clone::clone),
+        pins_held: &pins_held,
         trust: trust.as_ref().map_err(Clone::clone),
         for_the_run: from.for_the_run,
         disabled: from.disabled,
@@ -1756,26 +1819,34 @@ pub(crate) fn judge<R>(
 /// that cannot be read, and pins that do not count (no key, unsigned, or not
 /// the person's), leave each of the user's extensions unjudged: not loaded,
 /// and holding the gates its cached registration or manifest names (the
-/// signed approvals step).
+/// signed approvals step). With pins that do not count, every pin the store
+/// holds, signed or not, is given too ([`Judging::pins_held`]): one gone or
+/// left out holds its gates by it.
 pub(crate) fn pins_judged(
     state: &cineris_config::StateDir,
     clock: &cineris_base::SharedClock,
     verifier: Option<&Verifier>,
     home: Option<&Path>,
-) -> Result<UserPins, String> {
+) -> (Result<UserPins, String>, Vec<UserPin>) {
     let file = state.pins_file();
     match PinStore::new(&file, Arc::clone(clock)).pins(verifier) {
-        Ok(pins) if pins.counts() => Ok(pins),
-        Ok(pins) => Err(format!(
-            "your approvals of your own extensions (`{}`) do not count in this session: {}",
-            in_code(&shown_path(&file, home)),
-            crate::person::uncounted(pins.checked())
-        )),
-        Err(failure) => Err(super::found::with_paths_shown(
-            &failure.to_string(),
-            &[&file],
-            home,
-        )),
+        Ok(pins) if pins.counts() => (Ok(pins), Vec::new()),
+        Ok(pins) => (
+            Err(format!(
+                "your approvals of your own extensions (`{}`) do not count in this session: {}",
+                in_code(&shown_path(&file, home)),
+                crate::person::uncounted(pins.checked())
+            )),
+            pins.held().to_vec(),
+        ),
+        Err(failure) => (
+            Err(super::found::with_paths_shown(
+                &failure.to_string(),
+                &[&file],
+                home,
+            )),
+            Vec::new(),
+        ),
     }
 }
 

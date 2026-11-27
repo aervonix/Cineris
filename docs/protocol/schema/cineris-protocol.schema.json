@@ -8203,7 +8203,7 @@
               "type": "null"
             }
           ],
-          "description": "What a yes would write, which the person signs (since the signed\napprovals step): the project's whole entry as it would then be. A\nfront end that answers yes rebuilds the bytes signed from it, checks\nthat it holds what it shows, asks the person for their password,\nand answers with the signature. Absent when nothing a yes would\nwrite can be kept (no state directory): a yes then holds for the\nsession alone."
+          "description": "What a yes would write, which the person signs (since the signed\napprovals step): the project's whole entry as it would then be. A\nfront end that answers yes rebuilds the bytes signed from it, checks\nthat it holds what it shows, asks the person for their password,\nand answers with the signature. The core puts no trust question\nwithout one; a yes to a question that had none would trust nothing,\nnot even for the session."
         },
         "resources": {
           "description": "What it asks to be trusted with.",

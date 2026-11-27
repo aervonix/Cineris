@@ -203,6 +203,7 @@ fn an_approved_extensions_gates_hold_without_the_script_engine() {
             project: Some(&project),
             project_trusted: trusted,
             pins: Ok(&user_pins),
+            pins_held: &[],
             trust: Ok(trust),
             for_the_run: &[],
             disabled: &["off".to_owned()],
@@ -340,6 +341,7 @@ fn an_unread_store_holds_the_users_gates_and_no_projects() {
         project: Some(&project),
         project_trusted: true,
         pins: Err("the pin store is broken".to_owned()),
+        pins_held: &[],
         trust: Err("the trust store is broken".to_owned()),
         for_the_run: &[],
         disabled: &[],
@@ -364,6 +366,166 @@ fn an_unread_store_holds_the_users_gates_and_no_projects() {
         told.contains("cannot be judged (the pin store is broken)"),
         "{told}"
     );
+}
+
+/// While the user's pins do not count (no key, unsigned, or not the
+/// person's), what they pin restricts all the same: one gone holds both
+/// gates, as it does while they count, and one left out holds what the
+/// cache keeps at the hash pinned (the review of the permission path: one
+/// gone held nothing). With no pin held, nothing is.
+#[test]
+fn a_pinned_extension_gone_holds_its_gates_while_the_pins_do_not_count() {
+    let user = discovered(Source::User, Vec::new());
+    let scratch = cineris_testkit::Scratch::outside("cineris-core-unit", "without_engine_gone");
+    let file = RegistrationCache::new(scratch.join("registered.json"));
+    let gone = found(Source::User, "gone", &["tool.before"]);
+    file.put(
+        &gone.snapshot.hash(),
+        Entry::new(
+            &gone.manifest,
+            registration(vec![hook("tool.before", &["edit"], false)]),
+            None,
+        ),
+    )
+    .unwrap();
+    let cache = file.load().cache;
+    let pin = |name: &str, hash: ContentHash| cineris_policy::UserPin {
+        kind: TrustResourceKind::Extension,
+        name: name.to_owned(),
+        hash,
+        registration: None,
+        at: cineris_protocol::ids::Timestamp::new("2026-11-27T10:00:00Z"),
+    };
+    let held_pins = [
+        pin("gone", gone.snapshot.hash()),
+        pin("vanished", ContentHash::of(b"not cached")),
+    ];
+    let judge = |pins_held: &[cineris_policy::UserPin]| {
+        holding(&Judging {
+            user: Some(&user),
+            project: None,
+            project_trusted: false,
+            pins: Err("your approvals are not open in this session".to_owned()),
+            pins_held,
+            trust: Ok(&ProjectTrust::untrusted()),
+            for_the_run: &[],
+            disabled: &[],
+            cache: Some(&cache),
+            confined: false,
+        })
+    };
+    let holding = judge(&held_pins);
+    assert_eq!(
+        held(&holding),
+        [
+            (
+                "gone/hook.tool.before",
+                LoopEvent::ToolBefore,
+                Some(vec!["edit".to_owned()])
+            ),
+            ("vanished/hook.prompt.submit", LoopEvent::PromptSubmit, None),
+            ("vanished/hook.tool.before", LoopEvent::ToolBefore, None),
+        ]
+    );
+    assert!(
+        holding
+            .told
+            .iter()
+            .all(|told| told.contains("cannot be found where you approved it")),
+        "{:#?}",
+        holding.told
+    );
+    assert!(judge(&[]).held.is_empty());
+}
+
+/// A build without the script engine holds the gates of what a project's
+/// entry that does not count pins (`uncounted_gates`): from what the cache
+/// keeps at the hash pinned, on its tools, or both gates on every call where
+/// it keeps nothing, each saying why. So under `--trust-project` (the
+/// project looked in, and its extension found and not approved) as in a
+/// project not trusted (the review of the permission path).
+#[test]
+fn a_session_without_the_engine_holds_what_an_uncounted_entry_pins() {
+    let scratch =
+        cineris_testkit::Scratch::outside("cineris-core-unit", "without_engine_uncounted");
+    let clock: SharedClock = Arc::new(FakeClock::starting_at("2026-11-27T10:00:00Z").unwrap());
+    let workspace = scratch.dir("work");
+    scratch.file(
+        "work/.cineris/extensions/theirs/extension.toml",
+        manifest_file("theirs", "\"tool.before\""),
+    );
+    scratch.file("work/.cineris/extensions/theirs/main.js", "theirs");
+    let resolver = Arc::new(
+        cineris_base::PathResolver::new(&workspace, cineris_base::path::PathOptions::new())
+            .unwrap(),
+    );
+    let state = cineris_config::StateDir::new(scratch.dir("state"));
+    let theirs = crate::ext::found::in_project(&resolver, &clock).0;
+    let [theirs] = &theirs.found[..] else {
+        panic!("{:?}", theirs.found);
+    };
+    RegistrationCache::new(state.registration_cache_file())
+        .put(
+            &theirs.snapshot.hash(),
+            Entry::new(
+                &theirs.manifest,
+                registration(vec![hook("tool.before", &["list"], false)]),
+                None,
+            ),
+        )
+        .unwrap();
+    let uncounted = crate::ext::found::Uncounted {
+        checked: cineris_policy::Checked::NoKey,
+        extensions: vec![
+            ("theirs".to_owned(), theirs.snapshot.hash()),
+            ("gone".to_owned(), ContentHash::of(b"not cached")),
+        ],
+    };
+    for project in [None, Some(ProjectKey::new("p_1"))] {
+        let view = SessionView {
+            resolver: Arc::clone(&resolver),
+            config_dir: None,
+            state: Some(state.clone()),
+            project: project.clone(),
+            verifier: None,
+            uncounted: Some(uncounted.clone()),
+            for_the_run: Vec::new(),
+            disabled: Vec::new(),
+        };
+        let holding = in_session(&view, &clock, None);
+        assert_eq!(
+            held(&holding),
+            [
+                (
+                    "theirs/hook.tool.before",
+                    LoopEvent::ToolBefore,
+                    Some(vec!["list".to_owned()])
+                ),
+                ("gone/hook.prompt.submit", LoopEvent::PromptSubmit, None),
+                ("gone/hook.tool.before", LoopEvent::ToolBefore, None),
+            ],
+            "{project:?}"
+        );
+        for gate in &holding.held {
+            assert!(
+                gate.why.contains(
+                    "this project's trust does not count in this session (your approvals are \
+                     not open"
+                ),
+                "{project:?}: {}",
+                gate.why
+            );
+        }
+        // With no entry that does not count, nothing is held.
+        let view = SessionView {
+            uncounted: None,
+            ..view
+        };
+        assert!(
+            in_session(&view, &clock, None).held.is_empty(),
+            "{project:?}"
+        );
+    }
 }
 
 /// The manifest of an extension `name` that may hook `hooks`, as a file.
@@ -482,6 +644,7 @@ fn an_extension_approved_for_the_session_stands_approved_while_the_trust_store_c
         project: Some(&project),
         project_trusted: true,
         pins: Ok(&cineris_policy::UserPins::default()),
+        pins_held: &[],
         trust: Err("the trust store is broken".to_owned()),
         for_the_run: &for_the_run,
         disabled: &[],

@@ -465,14 +465,20 @@ fn key_said(core: &Core) -> String {
     }
 }
 
-/// What `approvals reset` says it did.
+/// What `approvals reset` says it did: and each store it left as it was
+/// (`ResetReport::left`, a sentence of the core's that names its file and
+/// why), shown as text, which counts for nothing under the new key.
 fn reset_text(key: &str, report: &cineris_core::ResetReport) -> String {
-    format!(
+    let mut text = format!(
         "A new password is set for your approvals ({key}). The signature was taken off {} of \
          your own pins and {} projects' trust: each asks again when it is next used, and what \
          it let run stays held back until you approve it again.\n",
         report.pins, report.projects
-    )
+    );
+    for left in &report.left {
+        text.push_str(&format!("Left as it was: {}\n", crate::visible(left)));
+    }
+    text
 }
 
 /// `approvals status`: what the key file and the stores hold, checking

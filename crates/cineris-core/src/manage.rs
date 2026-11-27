@@ -33,6 +33,7 @@ use cineris_protocol::{ApprovalId, ErrorKind, ProjectKey};
 
 use crate::assemble::{held_back_settings, in_git_at, pinned_rules, resolve_dir};
 use crate::core::{Core, OpError, error};
+use crate::person::KeyRefusal;
 use crate::provider::{builtin_names, key_variable};
 
 /// A provider and where its key would come from.
@@ -437,11 +438,38 @@ impl Core {
     ///
     /// # Errors
     ///
-    /// When the project's configuration is invalid, or the trust store
-    /// cannot be read or written (the entry changed while the person was
-    /// asked among the reasons: ask again).
+    /// When `key` may not sign ([`signing_key_refusal`](Self::signing_key_refusal):
+    /// nothing is written), the project's configuration is invalid, or the
+    /// trust store cannot be read or written (the entry changed while the
+    /// person was asked among the reasons: ask again).
     pub fn trust_project(&self, project: &Project, key: &PersonKey) -> Result<Trusted, OpError> {
         self.trust_project_with(project, &[], &[], key)
+    }
+
+    /// Why `key` may not sign the person's approvals in this core, if it may
+    /// not: no key file is set up ([`KeyRefusal::NoKey`]), the key does not
+    /// open the key file in the state directory
+    /// ([`KeyRefusal::NotThePassword`]), or the core's approvals are open with
+    /// another key ([`KeyRefusal::NotTheOpenKey`]). Each method that signs
+    /// asks this before it proposes or writes anything (the review of the
+    /// permission path: a key that opened nothing signed and committed, and
+    /// was refused only after).
+    pub(crate) fn signing_key_refusal(&self, key: &PersonKey) -> Option<KeyRefusal> {
+        let file = match self.approval_key() {
+            Ok(Some(file)) => file,
+            Ok(None) => return Some(KeyRefusal::NoKey),
+            Err(refusal) => return Some(refusal),
+        };
+        if !file.opens(key) {
+            return Some(KeyRefusal::NotThePassword {
+                fingerprint: file.fingerprint(),
+                made_at: file.made_at().clone(),
+            });
+        }
+        match self.verifier() {
+            Some(open) if open != key.verifier() => Some(KeyRefusal::NotTheOpenKey),
+            _ => None,
+        }
     }
 
     /// What trusting the project would turn the sandbox off with, in the
@@ -591,6 +619,13 @@ impl Core {
         hooks: &[ProjectHookCommand],
         key: &PersonKey,
     ) -> Result<Trusted, OpError> {
+        if let Some(refusal) = self.signing_key_refusal(key) {
+            return Err(error(
+                ErrorKind::Usage,
+                "key_refused",
+                format!("The project's trust was not changed, and nothing was written: {refusal}."),
+            ));
+        }
         let rules = self.pinned(project)?;
         // What an untrusted load holds back is what trust now turns on.
         let settings =

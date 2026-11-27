@@ -438,7 +438,9 @@ pub(crate) struct Trust {
     /// The project's trust as the store gave it when this was worked out:
     /// `None` when the store was not read, or could not be. The trust
     /// question is shaped by this one reading (the early review of step
-    /// 28's second part: a second reading could differ from the first).
+    /// 28's second part: a second reading could differ from the first), and
+    /// the session holds the gates of what an entry that does not count
+    /// pins from it, under `--trust-project` too.
     stored: Option<cineris_policy::ProjectTrust>,
     /// What the trust question found in the project's folder of
     /// extensions, when it looked: the session's finding takes it in place
@@ -884,11 +886,21 @@ pub(crate) fn look(
     // be read now, or the project's trust was taken away since the reading
     // the question is shaped by) puts no question, and the session is put
     // together with the trust as it stands now, never the reading before.
+    // So does a proposal worked out against another entry than the one the
+    // question is shaped by (the review of the permission path: an older
+    // signed entry put back between the two readings would be signed again,
+    // at a new revision, by a yes to what is new).
     if let Some(state) = place.state.as_ref() {
         let store = TrustStore::new(state.trust_file(), Arc::clone(&inner.options.clock));
         match store.propose(&question.key, question.change(), verifier.as_ref()) {
-            Ok(proposal) => question.proposal = proposal,
-            Err(_) => {
+            Ok(proposal)
+                if proposal
+                    .as_ref()
+                    .is_none_or(|proposal| proposal.is_against(&stored)) =>
+            {
+                question.proposal = proposal;
+            }
+            Ok(_) | Err(_) => {
                 let now = self::trust(inner, place.state.as_ref(), &place.root, &place.load)?;
                 return Ok((now, None));
             }
@@ -1126,6 +1138,24 @@ fn kept_answer(
     }
 }
 
+/// The trust a session opens with when the project's entry moved under each
+/// of the person's signed yeses, as many times as the question is put: as
+/// the store holds it now, saying why (the review of the permission path:
+/// the question was put again without end).
+pub(crate) fn moved_each_time(inner: &Inner, wanted: &Wanted) -> Result<Trust, Box<ErrorData>> {
+    let place = place(inner, wanted)?;
+    let mut now = trust(inner, place.state.as_ref(), &place.root, &place.load)?;
+    let said = "This project's trust changed in the store each time you answered its question, \
+                so your answer was not used, and this session opens with the project's trust as \
+                it stands. Something other than Cineris may be changing the trust store: a \
+                session opened again asks afresh.";
+    now.problem = Some(match now.problem.take() {
+        Some(problem) => format!("{said} {problem}"),
+        None => said.to_owned(),
+    });
+    Ok(now)
+}
+
 /// The trust after a yes that was not signed by the person, or not over
 /// what the question proposed: it trusts nothing, not even for the session
 /// (the signed approvals step). The client's answer is refused before it is
@@ -1271,6 +1301,20 @@ fn shown_root(root: &AbsPath, home: Option<&Path>) -> String {
     }
 }
 
+/// What a session trusted for the run by `--trust-project` is told, once,
+/// of a project whose entry in the trust store does not count with its key
+/// (`checked`): what the entry approved does not run, and holds its gates.
+fn for_the_run_uncounted(checked: cineris_policy::Checked) -> String {
+    format!(
+        "This project is trusted for this run by `--trust-project`, which approves none of its \
+         hooks and extensions, and its stored trust does not count in this session ({}): each \
+         hook and extension its trust approved does not run, and holds its gates, failing, \
+         refusing every call and prompt it gates. `cineris permissions trust` trusts the project \
+         with your key.",
+        crate::person::uncounted(checked)
+    )
+}
+
 /// Works out whether the project is trusted, and loads its configuration
 /// with that answer.
 fn trust(
@@ -1300,7 +1344,23 @@ fn trust(
     };
     let made = |live: cineris_config::LiveConfig| ((*live.current()).clone(), Some(live));
     if inner.options.trust_project {
-        // The user's own command line says so, for this run.
+        // The user's own command line says so, for this run. It approves
+        // no hook and no extension of the project, and what the project's
+        // entry pins still restricts: an entry that does not count with the
+        // session's key (a headless run has none) holds the gates of what it
+        // pins, as it does in a session that does not trust the project (the
+        // review of the permission path: the maintainers' answer to call 4
+        // keeps every gate in a headless run). A store that cannot be read
+        // holds nothing: no repository gates a session by itself.
+        let stored = state.and_then(|state| {
+            TrustStore::new(state.trust_file(), Arc::clone(&inner.options.clock))
+                .project(&root.project_key(), inner.person.verifier().as_ref())
+                .ok()
+        });
+        let problem = stored
+            .as_ref()
+            .filter(|stored| stored.has_entry() && !stored.is_trusted())
+            .map(|stored| for_the_run_uncounted(stored.checked()));
         let (loaded, watched) = made(load(true)?);
         return Ok(Trust {
             rules: true,
@@ -1308,12 +1368,12 @@ fn trust(
             loaded,
             watched,
             for_the_run: None,
-            problem: None,
+            problem,
             git_note: None,
             standing: TrustStanding::ForTheRun,
             rules_declined: false,
             git_new: false,
-            stored: None,
+            stored,
             found: None,
         });
     }
@@ -3196,11 +3256,11 @@ pub(crate) fn assemble(
         TrustStanding::Trusted | TrustStanding::RulesChanged | TrustStanding::ForTheRun
     );
     // A project's entry that is there and does not count: what it pins holds
-    // its gates, the project not trusted (the signed approvals step). The
-    // key the stores' signatures are checked with, for the session.
-    let uncounted = (!projects_looked_in)
-        .then(|| stored.as_ref().and_then(crate::ext::found::Uncounted::of))
-        .flatten();
+    // its gates (the signed approvals step), whether the project is not
+    // trusted or trusted for the run by `--trust-project`, which approves
+    // none of it (the review of the permission path). The key the stores'
+    // signatures are checked with, for the session.
+    let uncounted = stored.as_ref().and_then(crate::ext::found::Uncounted::of);
     let verifier = inner.person.verifier();
     // What a build without the script engine judges the session's
     // extensions from, as the finding would look: the user's folder, and the
@@ -3227,28 +3287,16 @@ pub(crate) fn assemble(
     // The session's hook commands (step 28): the user's own, and the
     // project's that are approved as they are now, while it is trusted.
     // The store's reading the trust was worked out from decides a
-    // project's; where none was kept (`--trust-project`), it is read now.
-    // They run with the script engine or without it: they are processes.
+    // project's (`--trust-project`'s too, which reads it for what it pins):
+    // a store that could not be read then approves nothing of the project's
+    // here either. They run with the script engine or without it: they are
+    // processes.
     let command_hooks = {
         let trusted = matches!(
             standing,
             TrustStanding::ForTheRun | TrustStanding::Trusted | TrustStanding::RulesChanged
         );
         let configured = crate::ext::hooks::Configured::of(&loaded);
-        // Read again only under `--trust-project`, which reads it not at
-        // all: a store that could not be read when the trust was worked
-        // out approves nothing of the project's here either.
-        let stored = match stored {
-            Some(stored) => Some(stored),
-            None if options.trust_project && !configured.project.is_empty() => {
-                state_dir.as_ref().and_then(|state| {
-                    TrustStore::new(state.trust_file(), Arc::clone(&clock))
-                        .project(&project, verifier.as_ref())
-                        .ok()
-                })
-            }
-            None => None,
-        };
         let in_session = crate::ext::hooks::in_session(
             configured,
             trusted,

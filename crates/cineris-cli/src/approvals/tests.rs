@@ -86,3 +86,34 @@ fn with_no_terminal_the_refusal_names_the_command_to_run_at_one() {
     );
     assert!(said.contains("not an approval on its own"), "{said}");
 }
+
+/// A reset says each store it left as it was, a line each, its words shown
+/// as text (the core's reset leaves a store it cannot read or lock, and
+/// says so in `ResetReport::left`).
+#[test]
+fn a_reset_says_each_store_it_left_as_it_was() {
+    let report = cineris_core::ResetReport {
+        pins: 2,
+        projects: 1,
+        left: vec![
+            "~/.local/state/cineris/trust.toml could not be read".to_owned(),
+            "a\u{1b}[2Jb".to_owned(),
+        ],
+    };
+    let said = reset_text("key 0123", &report);
+    assert!(
+        said.contains("off 2 of your own pins and 1 projects'"),
+        "{said}"
+    );
+    assert!(
+        said.contains("Left as it was: ~/.local/state/cineris/trust.toml could not be read\n"),
+        "{said}"
+    );
+    assert!(!said.contains('\u{1b}'), "{said}");
+    let none = cineris_core::ResetReport {
+        pins: 0,
+        projects: 0,
+        left: Vec::new(),
+    };
+    assert!(!reset_text("key 0123", &none).contains("Left as it was"));
+}

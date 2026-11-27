@@ -1023,6 +1023,9 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
     // (the third re-check of the full review, L2; the signed approvals
     // step).
     let mut pins_unread: Vec<Unjudged> = Vec::new();
+    // A project's found, under `--trust-project`, that its entry pins and
+    // that does not count: by name, with its folder as shown.
+    let mut uncounted_found: Vec<(String, String)> = Vec::new();
     let pins_file = inputs.state.as_ref().map(|state| {
         let file = state.pins_file();
         with_paths_shown(
@@ -1145,6 +1148,31 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
                     ));
                     continue;
                 }
+                // Pinned by the project's entry, which does not count with
+                // the session's key, in a project trusted for the run by
+                // `--trust-project`, which approves none of its extensions:
+                // not loaded, and its gates held below, at the hash pinned
+                // (the review of the permission path: they lapsed).
+                if standing != Standing::Approved
+                    && let Some(uncounted) = &inputs.uncounted
+                    && uncounted
+                        .extensions
+                        .iter()
+                        .any(|(pinned, _)| *pinned == listed.manifest.name)
+                {
+                    because(
+                        &mut decided.told,
+                        format!(
+                            "This project's extension `{name}` (`{}`) is not loaded: this \
+                             project's trust does not count in this session ({}).",
+                            listed.shown,
+                            crate::person::uncounted(uncounted.checked)
+                        ),
+                        false,
+                    );
+                    uncounted_found.push((listed.manifest.name.clone(), listed.shown.clone()));
+                    continue;
+                }
                 standing
             }
         };
@@ -1204,12 +1232,22 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
             continue;
         }
         let pinned = match source {
-            Source::User => pins
+            // While the user's pins do not count, what they hold restricts
+            // all the same (the review of the permission path: one gone held
+            // nothing).
+            Source::User => match pins
                 .get_or_insert_with(|| user_pins(inputs, &mut decided.told))
                 .as_ref()
-                .ok()
-                .and_then(|pins| pins.get(&TrustResourceKind::Extension, &name))
-                .map(|pin| pin.hash),
+            {
+                Ok(pins) => pins
+                    .get(&TrustResourceKind::Extension, &name)
+                    .map(|pin| pin.hash),
+                Err(unused) => unused
+                    .held
+                    .iter()
+                    .find(|(pinned, _)| *pinned == name)
+                    .map(|(_, hash)| *hash),
+            },
             Source::Project => inputs
                 .for_the_run
                 .iter()
@@ -1229,22 +1267,34 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
         }
     }
     // The extensions a project's entry pins where the entry does not count:
-    // each holds its gates, at the hash pinned, though the project is not
-    // trusted and none of it is looked at (the signed approvals step). One
-    // whose name the user's folder takes holds nothing, as when it counts.
+    // each holds its gates, at the hash pinned, whether the project is not
+    // trusted, and none of it is looked at (the signed approvals step), or
+    // trusted for the run by `--trust-project`, which approves none of them
+    // (the review of the permission path). One whose name the user's folder
+    // takes holds nothing, as when it counts; nor does one that stands
+    // approved now, which is loaded.
     if let Some(uncounted) = &inputs.uncounted {
         for (name, hash) in &uncounted.extensions {
-            if users.takes(name)
+            let approved = standing_approved.iter().any(|(listed, _)| {
+                listed.source == Source::Project && listed.manifest.name == *name
+            });
+            if approved
+                || users.takes(name)
                 || pending
                     .iter()
                     .any(|held| held.0 == Source::Project && held.1 == *name)
             {
                 continue;
             }
+            let shown = uncounted_found
+                .iter()
+                .find(|(found, _)| found == name)
+                .map(|(_, shown)| shown.clone())
+                .unwrap_or_default();
             pending.push((
                 Source::Project,
                 name.clone(),
-                String::new(),
+                shown,
                 *hash,
                 Unstood::ProjectUncounted(uncounted.checked),
             ));
@@ -1376,9 +1426,9 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
             .map(|entry| entry.registration.hooks.clone());
         // One not found has no folder to show, nor to approve from; nor has
         // one of a project whose trust does not count, which is not looked
-        // in.
-        let shown = (!matches!(was, Unstood::Missing | Unstood::ProjectUncounted(_)))
-            .then_some(shown.as_str());
+        // in unless it is trusted for the run.
+        let shown =
+            (!matches!(was, Unstood::Missing) && !shown.is_empty()).then_some(shown.as_str());
         decided.held.push(gate(
             source,
             &name,
@@ -1623,20 +1673,23 @@ fn not_found(
     told: &mut Vec<String>,
 ) -> Vec<(Source, String, String, Unstood)> {
     let mut missing = Vec::new();
-    if inputs.config_dir.is_some()
-        && let Ok(pins) = pins.get_or_insert_with(|| user_pins(inputs, told)).as_ref()
-    {
-        for pin in pins.list() {
-            if pin.kind == TrustResourceKind::Extension
-                && !seen.contains(&(Source::User, pin.name.clone()))
-            {
+    if inputs.config_dir.is_some() {
+        // While the pins do not count, what they hold restricts: one gone
+        // holds its gates as it does when they count (the review of the
+        // permission path). A store that cannot be read holds nothing here.
+        let pinned: Vec<String> = match pins.get_or_insert_with(|| user_pins(inputs, told)) {
+            Ok(pins) => pins
+                .list()
+                .iter()
+                .filter(|pin| pin.kind == TrustResourceKind::Extension)
+                .map(|pin| pin.name.clone())
+                .collect(),
+            Err(unused) => unused.held.iter().map(|(name, _)| name.clone()).collect(),
+        };
+        for name in pinned {
+            if !seen.contains(&(Source::User, name.clone())) {
                 // Not found, it has no folder to show.
-                missing.push((
-                    Source::User,
-                    pin.name.clone(),
-                    String::new(),
-                    Unstood::Missing,
-                ));
+                missing.push((Source::User, name, String::new(), Unstood::Missing));
             }
         }
     }
@@ -1683,11 +1736,15 @@ type PinsRead = Result<UserPins, PinsUnused>;
 type Unjudged = (String, String, ContentHash, Vec<Event>, Option<Checked>);
 
 /// Why none of the user's pins counts in the session.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct PinsUnused {
     /// `None`: the store cannot be read. Otherwise how what it holds stands
     /// with the session's key: no key, unsigned, or not the person's.
     checked: Option<Checked>,
+    /// The extensions the store pins, signed or not, each with the hash
+    /// pinned (`UserPins::held`): what restricts while they do not count.
+    /// None when the store cannot be read.
+    held: Vec<(String, ContentHash)>,
 }
 
 /// The user's own pins, as they stand with the session's key. An error
@@ -1705,6 +1762,12 @@ fn user_pins(inputs: &Inputs, told: &mut Vec<String>) -> PinsRead {
         Ok(pins) if pins.counts() => Ok(pins),
         Ok(pins) => Err(PinsUnused {
             checked: Some(pins.checked()),
+            held: pins
+                .held()
+                .iter()
+                .filter(|pin| pin.kind == TrustResourceKind::Extension)
+                .map(|pin| (pin.name.clone(), pin.hash))
+                .collect(),
         }),
         Err(error) => {
             told.push(sentence(&with_paths_shown(
@@ -1712,7 +1775,10 @@ fn user_pins(inputs: &Inputs, told: &mut Vec<String>) -> PinsRead {
                 &[&file],
                 inputs.home.as_deref(),
             )));
-            Err(PinsUnused { checked: None })
+            Err(PinsUnused {
+                checked: None,
+                held: Vec::new(),
+            })
         }
     }
 }

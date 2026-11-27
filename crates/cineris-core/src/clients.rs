@@ -36,7 +36,7 @@ use cineris_protocol::methods::{
     ApprovalChoice, ApprovalResponse, ClientCapabilities, ClientRole, ServerRequest,
     ServerResponse, TrustResponse,
 };
-use cineris_protocol::{ErrorData, ErrorKind, SessionId};
+use cineris_protocol::{ErrorData, ErrorKind, ProjectKey, SessionId};
 use tokio::sync::oneshot;
 
 use crate::events::EventQueue;
@@ -161,6 +161,10 @@ struct Open {
     /// alone, a client that opens the session later included, and no
     /// grant answers it (a call whose arguments a hook replaced, step 28).
     people_only: bool,
+    /// For a trust question: the project of the session it was asked for,
+    /// whose trust alone a yes to it signs (the review of the permission
+    /// path).
+    project: Option<ProjectKey>,
 }
 
 /// The kinds of request, by the capability a client declares to be put
@@ -242,11 +246,16 @@ fn refused(code: &str, message: impl Into<String>) -> Box<ErrorData> {
 /// one, or with one that is not the key's the core's approvals are open with
 /// (`verifier`), over exactly what the question proposed, is refused, and
 /// trusts nothing, not even for the session. So is any yes while the
-/// approvals are not open: the front end opens them before it answers.
+/// approvals are not open: the front end opens them before it answers. And
+/// a yes is taken only to a proposal of the trust of the project the
+/// question was asked for (`project`): never of another project's, nor of
+/// another unit (the user's pins), which a signature over it would otherwise
+/// approve (the review of the permission path).
 fn trust_answer_problem(
     request: &ServerRequest,
     answer: &TrustResponse,
     verifier: Option<&cineris_policy::signed::Verifier>,
+    project: Option<&ProjectKey>,
 ) -> Option<&'static str> {
     let trusted_project = matches!(request, ServerRequest::Trust(request) if request.trusted);
     if answer.trusted
@@ -255,6 +264,17 @@ fn trust_answer_problem(
         && let ServerRequest::Trust(asked) = request
         && let Some(proposal) = &asked.proposal
     {
+        let of_the_project = matches!(
+            proposal,
+            cineris_protocol::methods::ApprovalProposal::Project { key, .. }
+                if project == Some(key)
+        );
+        if !of_the_project {
+            return Some(
+                "What this question proposes is not the trust of the project it was asked \
+                 about, so no yes to it is taken. The question stays open.",
+            );
+        }
         return unsigned_yes(proposal, answer.signature.as_deref(), verifier);
     }
     match answer {
@@ -445,7 +465,7 @@ impl Clients {
         request: impl Fn(&RequestId) -> ServerRequest,
         judge: Option<Judge>,
     ) -> (RequestId, oneshot::Receiver<Answer>) {
-        self.put(session, asked, request, false, judge, false)
+        self.put(session, asked, request, false, judge, false, None)
     }
 
     /// Puts a request that only a person answers to `asked`, who are
@@ -458,7 +478,7 @@ impl Clients {
         asked: &[u64],
         request: impl Fn(&RequestId) -> ServerRequest,
     ) -> (RequestId, oneshot::Receiver<Answer>) {
-        self.put(session, asked, request, false, None, true)
+        self.put(session, asked, request, false, None, true, None)
     }
 
     /// Puts a request to `asked` that ends when they have all gone (see
@@ -470,9 +490,27 @@ impl Clients {
         asked: &[u64],
         request: impl Fn(&RequestId) -> ServerRequest,
     ) -> (RequestId, oneshot::Receiver<Answer>) {
-        self.put(session, asked, request, true, None, false)
+        self.put(session, asked, request, true, None, false, None)
     }
 
+    /// Puts the trust question of the session's project `project` to
+    /// `asked`, as [`ask_once`](Self::ask_once) puts a request: a yes to it
+    /// is taken only signed over what it proposes for that project.
+    pub(crate) fn ask_trust(
+        &self,
+        session: &SessionId,
+        asked: &[u64],
+        request: impl Fn(&RequestId) -> ServerRequest,
+        project: ProjectKey,
+    ) -> (RequestId, oneshot::Receiver<Answer>) {
+        self.put(session, asked, request, true, None, false, Some(project))
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one private constructor of an open request, which each kind of `ask` names in \
+                  full"
+    )]
     fn put(
         &self,
         session: &SessionId,
@@ -481,6 +519,7 @@ impl Clients {
         ends_with_askers: bool,
         judge: Option<Judge>,
         people_only: bool,
+        project: Option<ProjectKey>,
     ) -> (RequestId, oneshot::Receiver<Answer>) {
         let number = self.next_request.fetch_add(1, Ordering::Relaxed) + 1;
         let id = RequestId::Number(i64::try_from(number).unwrap_or(i64::MAX));
@@ -498,6 +537,7 @@ impl Clients {
                 judge,
                 ends_with_askers,
                 people_only,
+                project,
             },
         );
         let clients = lock(&self.clients);
@@ -632,7 +672,8 @@ impl Clients {
         // of a grant is, and the question stays open for an answer that
         // can be read (the review of step 23: it was taken as a yes).
         if let ServerResponse::Trust(answer) = &response
-            && let Some(problem) = trust_answer_problem(&request.request, answer, verifier)
+            && let Some(problem) =
+                trust_answer_problem(&request.request, answer, verifier, request.project.as_ref())
         {
             return Err(refused("invalid_answer", problem));
         }
@@ -1140,6 +1181,77 @@ mod tests {
             .unwrap_err();
         assert_eq!(refused.code, code::ROLE_NOT_ALLOWED);
         assert!(answer.try_recv().is_err());
+    }
+
+    /// A yes to a trust question is taken only over a proposal of the trust
+    /// of the project the question was asked for, signed by the person: a
+    /// proposal of the user's pins, or of another project, is refused,
+    /// however well it is signed, and the question stays open (the review of
+    /// the permission path).
+    #[test]
+    fn a_trust_yes_is_taken_only_over_the_asking_projects_trust() {
+        use cineris_protocol::methods::{ApprovalProposal, TrustRequest};
+        let clients = Clients::default();
+        let session = SessionId::new("s_1");
+        let (user, _queue) = clients.connect(ClientInfo::user(), None);
+        let person = cineris_policy::test_support::Person::new();
+        let verifier = person.verifier();
+        let ask = |proposal: ApprovalProposal| {
+            let request = ServerRequest::Trust(TrustRequest {
+                session_id: session.clone(),
+                workspace: "~/work/app".to_owned(),
+                resources: Vec::new(),
+                trusted: false,
+                proposal: Some(proposal.clone()),
+                summary: Vec::new(),
+            });
+            let (id, answer) = clients.ask_trust(
+                &session,
+                &[user.0],
+                |_| request.clone(),
+                ProjectKey::new("p_1"),
+            );
+            let statement = crate::signed::statement_of(&proposal).unwrap();
+            let yes = ServerResponse::Trust(TrustResponse {
+                trusted: true,
+                signature: Some(person.sign(&statement).to_string()),
+                ..TrustResponse::default()
+            });
+            (clients.answer(user, &id, yes, Some(&verifier)), answer)
+        };
+        let project = |key: &str| ApprovalProposal::Project {
+            key: ProjectKey::new(key),
+            revision: 1,
+            root: "~/work/app".to_owned(),
+            git_trusted: false,
+            pins: Vec::new(),
+        };
+        for (proposal, what) in [
+            (
+                ApprovalProposal::UserPins {
+                    revision: 1,
+                    pins: Vec::new(),
+                },
+                "the user's pins",
+            ),
+            (project("p_2"), "another project's trust"),
+        ] {
+            let (taken, mut answer) = ask(proposal);
+            let refused = taken.unwrap_err();
+            assert_eq!(refused.code, "invalid_answer", "{what}");
+            assert!(
+                refused.message.contains("not the trust of the project"),
+                "{what}: {}",
+                refused.message
+            );
+            assert!(
+                answer.try_recv().is_err(),
+                "{what}: the question stays open"
+            );
+        }
+        let (taken, mut answer) = ask(project("p_1"));
+        assert_eq!(taken.unwrap(), session);
+        assert!(answer.try_recv().is_ok());
     }
 
     #[test]

@@ -535,7 +535,9 @@ impl World {
 
     /// A core whose approvals the person has opened ([`person`]), as after
     /// they typed their password: what the stores' signatures are checked
-    /// with.
+    /// with. The person's key file is in the state directory, as set-up
+    /// writes it, unless something stands at its name already: what the
+    /// core checks a key that signs against.
     pub fn core(&self) -> Core {
         self.core_with(|_| {})
     }
@@ -543,9 +545,23 @@ impl World {
     /// [`core`](Self::core), with its options changed first.
     pub fn core_with(&self, change: impl FnOnce(&mut CoreOptions)) -> Core {
         let core = self.closed_core_with(change);
+        self.set_up_key(&core);
         core.open_approvals(&person_key())
             .expect("the approvals open");
         core
+    }
+
+    /// Writes [`person`]'s key file where `core` reads it, as `cineris
+    /// approvals setup` writes it, unless something stands there already.
+    pub fn set_up_key(&self, core: &Core) {
+        if let Some(path) = core.approval_key_file()
+            && std::fs::symlink_metadata(&path).is_err()
+        {
+            person()
+                .key_file()
+                .write(&path, &self.clock)
+                .expect("the key file is written");
+        }
     }
 
     /// A core whose approvals nobody opened (the signed approvals step): a

@@ -339,10 +339,11 @@ pub(crate) fn start(pending: Pending) -> Arc<Extensions> {
 /// A project whose entry in the trust store does not count in the session
 /// (the signed approvals step): there is one, and it is not signed by the
 /// key the person opened their approvals with (`checked`: no key, unsigned,
-/// or not theirs). The project is not trusted, and each extension its entry
-/// pins, signed or not, holds its gates, failing, as an approved one that
-/// changed does: from what the registration cache keeps at the hash
-/// pinned, or both gates where it keeps nothing.
+/// or not theirs). The project is not trusted, or trusted for the run by
+/// `--trust-project`, which approves none of its extensions; either way
+/// each extension its entry pins, signed or not, holds its gates, failing,
+/// as an approved one that changed does: from what the registration cache
+/// keeps at the hash pinned, or both gates where it keeps nothing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Uncounted {
     /// How the entry stands with the session's key.

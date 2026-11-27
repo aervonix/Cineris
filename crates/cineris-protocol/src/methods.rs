@@ -1489,9 +1489,9 @@ pub struct TrustRequest {
     /// approvals step): the project's whole entry as it would then be. A
     /// front end that answers yes rebuilds the bytes signed from it, checks
     /// that it holds what it shows, asks the person for their password,
-    /// and answers with the signature. Absent when nothing a yes would
-    /// write can be kept (no state directory): a yes then holds for the
-    /// session alone.
+    /// and answers with the signature. The core puts no trust question
+    /// without one; a yes to a question that had none would trust nothing,
+    /// not even for the session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proposal: Option<ApprovalProposal>,
     /// What a yes changes, one line each, for the person to read before

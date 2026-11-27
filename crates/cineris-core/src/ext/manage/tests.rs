@@ -177,6 +177,7 @@ fn each_extension_stands_as_a_session_would_judge_it() {
                 project: Some(&project),
                 project_trusted: trusted,
                 pins,
+                pins_held: &[],
                 trust,
                 for_the_run: &[],
                 disabled: &["off".to_owned()],

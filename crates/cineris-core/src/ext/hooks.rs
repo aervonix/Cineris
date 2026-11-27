@@ -240,7 +240,9 @@ pub(crate) struct InSession {
 /// a project's only while the project is trusted (`trusted`) and the hook
 /// is approved as it is now, by the store's pin (`stored`) or by a yes the
 /// store could not keep (`for_the_run`, by the hashes shown). Without the
-/// store's reading nothing of a project's is approved.
+/// store's reading nothing of a project's is approved. Whether the project
+/// is trusted or not, an entry that does not count with the session's key
+/// holds each hook it pins on its event, failing.
 pub(crate) fn in_session(
     configured: Configured,
     trusted: bool,
@@ -293,8 +295,18 @@ pub(crate) fn in_session(
     }
     if trusted {
         // Told once, and on no event: an entry nobody approved holds no
-        // gate. Only one approved as it was and changed since does (below).
+        // gate. Only one approved as it was and changed since does (below),
+        // and, in a project trusted for the run by `--trust-project` whose
+        // entry does not count with the session's key, each the entry pins,
+        // signed or not: `--trust-project` approves no hook, and what the
+        // entry pins restricts (the review of the permission path: a
+        // headless run keeps every gate). The session is told of the entry
+        // once, as it opens.
         told.extend(projects.iter().map(Refused::told));
+        let uncounted = stored.filter(|entry| entry.has_entry() && !entry.is_trusted());
+        let held = uncounted
+            .map(|stored| stored.held(&TrustResourceKind::Hook))
+            .unwrap_or_default();
         for hook in configured.project {
             let definition = hook.definition();
             let standing = if for_the_run.contains(&definition) {
@@ -310,6 +322,25 @@ pub(crate) fn in_session(
                 }
             };
             let name = in_code(&hook.name);
+            if standing != Standing::Approved
+                && let Some(stored) = uncounted
+                && held.iter().any(|(pinned, _)| *pinned == hook.name)
+            {
+                let why = crate::person::uncounted(stored.checked());
+                refused.push(Refused {
+                    name: hook.name.clone(),
+                    source: Source::Project,
+                    event: Some(hook.event),
+                    observe: hook.observe,
+                    filter: Some(hook.filter.clone()),
+                    reason: format!(
+                        "this project's trust does not count in this session ({why}), so its \
+                         gate holds, though the project is trusted for this run: `cineris \
+                         permissions trust` trusts it with your key"
+                    ),
+                });
+                continue;
+            }
             match standing {
                 Standing::Approved => hooks.push(hook),
                 Standing::Changed => {
@@ -724,5 +755,59 @@ mod tests {
             let session = in_session(configured.clone(), true, Some(&mine), &[]);
             assert_eq!(session.hooks.is_empty(), label == "changed", "{label}");
         }
+    }
+
+    /// A project trusted for the run by `--trust-project` whose entry does
+    /// not count with the session's key: `--trust-project` approves no hook,
+    /// so none the entry pins runs, and each holds its event, failing (the
+    /// review of the permission path: under `--trust-project` with no key a
+    /// pinned hook's gate lapsed). One the entry does not pin is not
+    /// approved, and holds nothing.
+    #[test]
+    fn under_trust_project_a_hook_an_entry_that_does_not_count_pins_holds_its_event() {
+        let configured = one_project_hook();
+        let definition = configured.project[0].definition();
+        let scratch =
+            cineris_testkit::Scratch::outside("cineris-core-unit", "hooks_uncounted_for_the_run");
+        let clock: cineris_base::SharedClock = std::sync::Arc::new(
+            cineris_testkit::FakeClock::starting_at("2026-11-27T10:00:00Z").unwrap(),
+        );
+        let key =
+            cineris_base::PathResolver::new(&scratch.dir("work"), cineris_base::PathOptions::new())
+                .unwrap()
+                .root()
+                .project_key();
+        let store = cineris_policy::TrustStore::new(scratch.join("trust.toml"), clock);
+        let person = cineris_policy::test_support::Person::new();
+        person.trust(&store, &key, "~/work", &[], false);
+        let unpinned = store.project(&key, None).unwrap();
+        let session = in_session(configured.clone(), true, Some(&unpinned), &[]);
+        assert!(session.hooks.is_empty() && session.refused.is_empty());
+        person.trust(
+            &store,
+            &key,
+            "~/work",
+            std::slice::from_ref(&definition),
+            false,
+        );
+        let stored = store.project(&key, None).unwrap();
+        assert!(stored.has_entry() && !stored.is_trusted());
+        let session = in_session(configured.clone(), true, Some(&stored), &[]);
+        assert!(session.hooks.is_empty(), "it does not run unverified");
+        let [held] = session.refused.as_slice() else {
+            panic!("{:?}", session.refused);
+        };
+        assert_eq!(held.name, "lint");
+        assert_eq!(held.event, Some(Event::ToolAfter));
+        assert!(
+            held.reason.contains("your approvals are not open"),
+            "{}",
+            held.reason
+        );
+        // With the key it counts, and runs.
+        let mine = store.project(&key, Some(&person.verifier())).unwrap();
+        let session = in_session(configured, true, Some(&mine), &[]);
+        assert_eq!(session.hooks.len(), 1);
+        assert!(session.refused.is_empty());
     }
 }

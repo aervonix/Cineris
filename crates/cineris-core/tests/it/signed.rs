@@ -23,9 +23,7 @@
 use std::path::Path;
 
 use cineris_core::{ClientInfo, Core};
-#[cfg(feature = "scripts")]
-use cineris_policy::Definition;
-use cineris_policy::{PinStore, TrustStore};
+use cineris_policy::{Definition, PinStore, TrustStore};
 use cineris_protocol::methods::{
     Op, OpResult, ServerRequest, ServerResponse, SessionNewParams, TrustRequest, TrustResponse,
 };
@@ -457,17 +455,29 @@ fn an_extension_pinned_with_another_key_is_not_loaded() {
 fn a_pin_taken_out_by_hand_lifts_no_gate() {
     let world = World::new("signed_pin_taken_out", looks());
     let folder = users_gated(&world);
+    // A second of the user's, with no gate, pinned beside it: found, so
+    // that what it pins holds nothing (one pinned and gone would hold both
+    // gates, the pins counting or not).
+    let other = folder.with_file_name("other");
+    std::fs::create_dir_all(&other).unwrap();
+    std::fs::write(
+        other.join("extension.toml"),
+        "api = 1\nname = \"other\"\nversion = \"1\"\ndescription = \"No gate\"\nmain = \
+         \"main.js\"\n",
+    )
+    .unwrap();
+    std::fs::write(other.join("main.js"), "").unwrap();
     let (pins, _) = stores(&world);
     let person = crate::person();
     person.pin_all(
         &pins,
         &[
             crate::extensions_found::definition(&folder),
-            Definition::of(
-                cineris_protocol::methods::TrustResourceKind::Extension,
-                "other",
-                ["x"],
-            ),
+            Definition {
+                kind: cineris_protocol::methods::TrustResourceKind::Extension,
+                name: "other".to_owned(),
+                hash: cineris_ext::folder::Snapshot::read(&other).unwrap().hash(),
+            },
         ],
     );
     let written = std::fs::read_to_string(pins.path()).unwrap();
@@ -798,4 +808,688 @@ fn what_carries_a_signature_is_counted_and_nothing_is_opened() {
     assert!(matches!(held.key, HeldKey::Unreadable(_)), "{:?}", held.key);
     assert_eq!(held.pins, 1);
     assert!(!held.to_use());
+}
+
+// ------------------------------------------------------------ --trust-project
+
+/// `--trust-project`, for a core's options.
+fn trust_project(options: &mut cineris_core::CoreOptions) {
+    options.trust_project = true;
+}
+
+/// Opens a session in `core` and runs one turn of [`one_call`]'s `read`:
+/// how its `read` ended, what the model was shown, and the session's
+/// notices.
+fn read_once(world: &World, core: &Core) -> (Outcome, String, Vec<String>) {
+    world.run(async {
+        let front = crate::Front::start(world, core).await;
+        front.turn("read it").await;
+        let (outcome, text) = last_of(&front, "read");
+        front.drain();
+        let notices = front.notices();
+        front.close().await;
+        (outcome, text, notices)
+    })
+}
+
+/// A run with `--trust-project` and no key (a headless run's, whose
+/// approvals nobody opened), in a project whose trust pins its gating hook:
+/// `--trust-project` approves no hook, the entry does not count, so the hook
+/// does not run unverified, and its gate holds, failing, saying why; the
+/// session is told once (the review of the permission path: the gate lapsed;
+/// the maintainers' answer to call 4 keeps every gate in a headless run).
+#[test]
+fn under_trust_project_without_the_key_a_pinned_hooks_gate_holds() {
+    let world = World::new("signed_trust_project_hook", one_call("read"));
+    world.put("notes.md", "notes\n");
+    world.project_config(GATE_HOOK);
+    trust_with_its_hooks(&world);
+    let closed = world.closed_core_with(trust_project);
+    let (outcome, text, notices) = read_once(&world, &closed);
+    assert_eq!(outcome, "denied", "the pinned hook's gate lapsed: {text}");
+    assert!(
+        text.contains(
+            "this project's trust does not count in this session (your approvals are not open"
+        ),
+        "{text}"
+    );
+    assert_eq!(
+        notices
+            .iter()
+            .filter(|notice| notice.contains("trusted for this run by `--trust-project`"))
+            .count(),
+        1,
+        "{notices:?}"
+    );
+}
+
+/// The control: the same run with the person's key open runs the hook as
+/// approved, which fails to start, so the call is denied by the hook itself,
+/// and nothing is said of the entry.
+#[test]
+fn under_trust_project_with_the_key_the_pinned_hook_runs() {
+    let world = World::new("signed_trust_project_hook_key", one_call("read"));
+    world.put("notes.md", "notes\n");
+    world.project_config(GATE_HOOK);
+    trust_with_its_hooks(&world);
+    let open = world.core_with(trust_project);
+    let (outcome, text, notices) = read_once(&world, &open);
+    assert_eq!(outcome, "denied", "{text}");
+    assert!(!text.contains("does not count"), "{text}");
+    assert!(
+        !notices
+            .iter()
+            .any(|notice| notice.contains("trusted for this run by `--trust-project`")),
+        "{notices:?}"
+    );
+}
+
+/// A project's extension with a gate, pinned by the person's trust: a run
+/// with `--trust-project` and no key does not load it, and holds its gate
+/// (the review of the permission path).
+#[cfg(feature = "scripts")]
+#[test]
+fn under_trust_project_without_the_key_a_pinned_extensions_gate_holds() {
+    let world = World::new("signed_trust_project_extension", looks());
+    let folder = crate::extensions_found::projects(&world);
+    write_gated(&folder);
+    crate::extensions_found::cache(&world, &folder);
+    crate::extensions_found::trust(&world, &[crate::extensions_found::definition(&folder)]);
+    let closed = world.closed_core_with(trust_project);
+    let (offered, outcome, text, _, notices) = look_in(&world, &closed);
+    assert!(!offered, "loaded unverified");
+    assert_eq!(outcome, "denied", "its gate lapsed: {text}");
+    assert!(
+        text.contains("this project's trust does not count in this session"),
+        "{text}"
+    );
+    assert!(
+        notices
+            .iter()
+            .any(|notice| notice.contains("trusted for this run by `--trust-project`")),
+        "{notices:?}"
+    );
+}
+
+// ------------------------------------------------------------ what restricts while it does not count
+
+/// While the user's pins do not count, an extension they pin that is gone
+/// holds its gates as it does while they count: from what the cache keeps
+/// at the hash pinned (the review of the permission path: it held nothing).
+#[cfg(feature = "scripts")]
+#[test]
+fn a_pinned_users_extension_gone_holds_its_gates_without_the_key() {
+    let world = World::new("signed_gone_keyless", looks());
+    let folder = users_gated(&world);
+    let (pins, _) = stores(&world);
+    crate::person().pin(&pins, &crate::extensions_found::definition(&folder));
+    std::fs::remove_dir_all(&folder).unwrap();
+    let core = world.closed_core();
+    let (offered, outcome, text, _, _) = look_in(&world, &core);
+    assert!(!offered);
+    assert_eq!(
+        outcome, "denied",
+        "the gone extension's gate lapsed: {text}"
+    );
+    assert!(
+        text.contains("cannot be found where it was approved"),
+        "{text}"
+    );
+}
+
+/// The stated residual (`docs/architecture/12-extensions.md`, "A gate is the
+/// person's own check, not a bound on the model"): a pin taken out of
+/// `pins.toml` lifts no gate, but `pins.toml` deleted whole leaves nothing
+/// that pins, and the extension's gate goes with it, as it does for one
+/// never approved.
+#[cfg(feature = "scripts")]
+#[test]
+fn the_pin_store_deleted_whole_holds_nothing() {
+    let world = World::new("signed_pins_deleted", looks());
+    let folder = users_gated(&world);
+    let (pins, _) = stores(&world);
+    crate::person().pin(&pins, &crate::extensions_found::definition(&folder));
+    std::fs::remove_file(pins.path()).unwrap();
+    let core = world.core();
+    let (offered, outcome, text, _, _) = look_in(&world, &core);
+    assert!(!offered);
+    assert_eq!(outcome, "success", "{text}");
+}
+
+/// The gates `cineris ext disable` asks about are found by the pin, signed
+/// or not: a subcommand's core never has the person's approvals open, and a
+/// pinned extension holding a gate is still turned off only on a yes naming
+/// it (step 28's M1; the front-end part's finding: "holds no gates" let it
+/// go unasked). One not pinned holds none; a pin store that cannot be read
+/// leaves what it holds not known.
+#[cfg(feature = "scripts")]
+#[test]
+fn the_gates_a_disable_lets_go_are_found_without_the_key() {
+    let world = World::new("signed_disable_gates", []);
+    let folder = users_gated(&world);
+    let (pins, _) = stores(&world);
+    let pinned = crate::extensions_found::definition(&folder);
+    crate::person().pin(&pins, &pinned);
+    for core in [world.closed_core(), world.core()] {
+        let project = core.project(&world.workspace).unwrap();
+        let gates = core.extension_gates(&project, "probe").unwrap();
+        assert_eq!(gates.hash, Some(pinned.hash));
+        assert!(!gates.unknown);
+        assert_eq!(gates.held, ["`tool.before on list`"], "{gates:?}");
+        let none = core.extension_gates(&project, "other").unwrap();
+        assert!(none.held.is_empty() && !none.unknown && none.hash.is_none());
+    }
+    std::fs::write(pins.path(), "version = 99\n").unwrap();
+    let core = world.closed_core();
+    let project = core.project(&world.workspace).unwrap();
+    assert!(core.extension_gates(&project, "probe").unwrap().unknown);
+}
+
+// ------------------------------------------------------------ the core's keys
+
+/// The core's refusals of a key, each with a key file the test wrote as
+/// set-up writes it: no key file (`NoKey`); a password that does not make
+/// the file's key (`NotThePassword`, with the file's fingerprint); a key
+/// that opens the file while the core's approvals are open with another
+/// (`NotTheOpenKey`, from `person_key` and from `open_approvals`); and a
+/// set-up over a key file there (`KeyExists`, before any key is made).
+#[test]
+fn the_cores_key_refusals() {
+    use cineris_core::KeyRefusal;
+    use cineris_core::signed::PersonKey;
+    let world = World::new("signed_key_refusals", []);
+    let core = world.closed_core();
+    let password = cineris_policy::test_support::PASSWORD.as_bytes();
+    assert_eq!(core.person_key(password).err(), Some(KeyRefusal::NoKey));
+    world.set_up_key(&core);
+    let model = crate::model_key();
+    let refused = core.person_key(b"the model's own password").err();
+    let Some(KeyRefusal::NotThePassword { fingerprint, .. }) = refused else {
+        panic!("{refused:?}");
+    };
+    assert_eq!(fingerprint, crate::person().key_file().fingerprint());
+    assert_eq!(
+        core.set_up_approvals(b"a password long enough").err(),
+        Some(KeyRefusal::KeyExists)
+    );
+    // Open with another key (the model's, made from its own key file): the
+    // person's own key is refused while it is.
+    let models_key =
+        PersonKey::derive(b"the model's own password", model.key_file()).expect("it is made");
+    core.open_approvals(&models_key).unwrap();
+    assert_eq!(
+        core.person_key(password).err(),
+        Some(KeyRefusal::NotTheOpenKey)
+    );
+    assert_eq!(
+        core.open_approvals(&crate::person_key()).err(),
+        Some(KeyRefusal::NotTheOpenKey)
+    );
+    // With the person's key open, the person's password makes their key.
+    let mine = world.core();
+    assert!(mine.person_key(password).is_ok());
+}
+
+/// The core's methods that sign check the key before they propose or write
+/// anything (the review of the permission path): with no key file, with a
+/// key that does not open it, and with one that is not the key the core's
+/// approvals are open with, `trust_project` is refused, saying which, and
+/// nothing is written. The person's key, opening the file and open in the
+/// core, trusts.
+#[test]
+fn a_key_that_may_not_sign_writes_nothing() {
+    use cineris_core::signed::PersonKey;
+    let world = World::new("signed_key_writes_nothing", []);
+    world.project_config(&format!("[model]\nmain = \"{OTHER_MODEL}\"\n"));
+    let (_, trust) = stores(&world);
+    let key = key_of(&world);
+    let models_key = PersonKey::derive(b"the model's own password", crate::model_key().key_file())
+        .expect("it is made");
+    let refused = |core: &Core, signing: &PersonKey, why: &str| {
+        let project = core.project(&world.workspace).unwrap();
+        let error = core.trust_project(&project, signing).unwrap_err();
+        assert_eq!(error.code, "key_refused", "{why}: {}", error.message);
+        assert!(
+            error.message.contains("nothing was written") && error.message.contains(why),
+            "{why}: {}",
+            error.message
+        );
+        assert!(
+            !trust.project(&key, None).unwrap().has_entry(),
+            "{why}: nothing was written"
+        );
+    };
+    let closed = world.closed_core();
+    refused(&closed, &crate::person_key(), "no password has been set");
+    world.set_up_key(&closed);
+    refused(&closed, &models_key, "that is not the password");
+    closed.open_approvals(&models_key).unwrap();
+    refused(&closed, &crate::person_key(), "another key than the one");
+    let core = world.core();
+    let project = core.project(&world.workspace).unwrap();
+    core.trust_project(&project, &crate::person_key()).unwrap();
+    assert!(
+        trust
+            .project(&key, Some(&crate::person().verifier()))
+            .unwrap()
+            .is_trusted()
+    );
+}
+
+/// `add_extension` and `remove_extension` check the key first too: the
+/// model's key adds nothing (no folder written, no pin) and removes nothing
+/// (the pin and the folder stay).
+#[cfg(feature = "scripts")]
+#[test]
+fn an_extension_is_neither_added_nor_removed_with_a_key_that_may_not_sign() {
+    use cineris_core::signed::PersonKey;
+    let world = World::new("signed_key_extensions", []);
+    let core = world.core();
+    let project = core.project(&world.workspace).unwrap();
+    let models_key = PersonKey::derive(b"the model's own password", crate::model_key().key_file())
+        .expect("it is made");
+    let (pins, _) = stores(&world);
+    // Added from a folder elsewhere.
+    let source = world.dir.join("source").join("probe");
+    write_gated(&source);
+    let to_add = core.extension_to_add(&project, &source).unwrap();
+    let error = world
+        .run(core.add_extension(to_add, &models_key))
+        .unwrap_err();
+    assert_eq!(error.code, "key_refused", "{}", error.message);
+    assert!(
+        !crate::extensions_found::users(&world).exists(),
+        "nothing was written"
+    );
+    assert!(
+        pins.pins(None).unwrap().held().is_empty(),
+        "nothing was pinned"
+    );
+    // The person's own, pinned: not removed with the model's key.
+    let folder = users_gated(&world);
+    crate::person().pin(&pins, &crate::extensions_found::definition(&folder));
+    let removal = core.extension_removal(&project, "probe").unwrap();
+    let error = core
+        .remove_extension(&removal, true, Some(&models_key))
+        .unwrap_err();
+    assert_eq!(error.code, "key_refused", "{}", error.message);
+    assert!(folder.exists(), "nothing was deleted");
+    assert_eq!(pins.pins(None).unwrap().held().len(), 1, "the pin stays");
+}
+
+// ------------------------------------------------------------ a reset nothing blocks
+
+/// The password a reset in these tests chooses.
+const NEW_PASSWORD: &[u8] = b"a new password, chosen at a reset";
+
+/// What a reset gives.
+type Reset =
+    Result<(cineris_core::signed::PersonKey, cineris_core::ResetReport), cineris_core::KeyRefusal>;
+
+/// Resets the core's approvals at a test's cost, each lock waited for not
+/// at all.
+fn reset_now(core: &Core) -> Reset {
+    core.reset_approvals_within(
+        NEW_PASSWORD,
+        cineris_policy::test_support::Person::cost(),
+        std::time::Duration::ZERO,
+    )
+}
+
+/// What stands beside `path` under a name a reset sets things aside with
+/// (`<name>.aside-…`).
+fn set_aside_of(path: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let name = format!("{}.aside-", path.file_name().unwrap().to_string_lossy());
+    let mut found: Vec<std::path::PathBuf> = std::fs::read_dir(path.parent().unwrap())
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .is_some_and(|file| file.to_string_lossy().starts_with(&name))
+        })
+        .collect();
+    found.sort();
+    found
+}
+
+/// One of the user's pins, for a store to hold.
+fn a_pin() -> Definition {
+    Definition::of(
+        cineris_protocol::methods::TrustResourceKind::Extension,
+        "tracker",
+        ["x"],
+    )
+}
+
+/// A store another program made unreadable does not block the person's
+/// reset (the review of the permission path: a forgotten password's only
+/// way out): a `pins.toml` of a version this build does not understand, and
+/// a folder at `trust.toml`'s name, are each left as they are and said; the
+/// other store's signatures are taken off; and the new password opens the
+/// approvals. The unreadable store is never moved aside, which would lift
+/// its gates.
+#[test]
+fn a_store_not_understood_does_not_block_a_reset() {
+    for case in ["pins", "trust"] {
+        let world = World::new("signed_reset_unreadable", []);
+        let state = cineris_config::StateDir::from_dirs(&world.dirs()).unwrap();
+        let core = world.core();
+        let (pins, trust) = stores(&world);
+        let left = if case == "pins" {
+            crate::person().trust(&trust, &key_of(&world), "~/work/app", &[], false);
+            std::fs::write(state.pins_file(), "version = 99\n").unwrap();
+            state.pins_file()
+        } else {
+            crate::person().pin(&pins, &a_pin());
+            std::fs::create_dir_all(state.trust_file()).unwrap();
+            state.trust_file()
+        };
+        let (_, report) =
+            reset_now(&core).unwrap_or_else(|refusal| panic!("{case}: blocked: {refusal}"));
+        let [said] = report.left.as_slice() else {
+            panic!("{case}: {:?}", report.left);
+        };
+        let file = left.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(said.contains(&file), "{case}: {said}");
+        assert_eq!(report.pins + report.projects, 1, "{case}: {report:?}");
+        if case == "pins" {
+            assert_eq!(std::fs::read_to_string(&left).unwrap(), "version = 99\n");
+        } else {
+            assert!(left.is_dir());
+        }
+        assert!(set_aside_of(&left).is_empty(), "{case}: never moved aside");
+        assert!(core.person_key(NEW_PASSWORD).is_ok(), "{case}");
+    }
+}
+
+/// A folder put at a lock's name, the stores' and the key file's, does not
+/// block a reset: each is moved aside, and the reset takes the signatures
+/// off and sets the new key.
+#[test]
+fn a_folder_at_a_locks_name_does_not_block_a_reset() {
+    let world = World::new("signed_reset_lock_folders", []);
+    let state = cineris_config::StateDir::from_dirs(&world.dirs()).unwrap();
+    let core = world.core();
+    let (pins, trust) = stores(&world);
+    crate::person().trust(&trust, &key_of(&world), "~/work/app", &[], false);
+    crate::person().pin(&pins, &a_pin());
+    let key_file = core.approval_key_file().unwrap();
+    let locks: Vec<std::path::PathBuf> = [state.pins_file(), state.trust_file(), key_file]
+        .iter()
+        .map(|file| cineris_base::private::lock_path(file))
+        .collect();
+    for lock in &locks {
+        let _ = std::fs::remove_file(lock);
+        std::fs::create_dir_all(lock.join("inside")).unwrap();
+    }
+    let (_, report) = reset_now(&core).unwrap();
+    assert_eq!((report.pins, report.projects), (1, 1));
+    assert!(report.left.is_empty(), "{:?}", report.left);
+    for lock in &locks {
+        assert_eq!(set_aside_of(lock).len(), 1, "{}", lock.display());
+    }
+    assert!(core.person_key(NEW_PASSWORD).is_ok());
+}
+
+/// A store's lock held by another program (a process left running) is
+/// waited for no longer than the reset's wait, and the store is left as it
+/// is and said; the key file's lock held stops the reset before anything
+/// changes (the review of the permission path: the reset waited on it).
+#[test]
+fn a_held_lock_is_waited_for_no_longer_than_the_wait() {
+    let world = World::new("signed_reset_held_lock", []);
+    let state = cineris_config::StateDir::from_dirs(&world.dirs()).unwrap();
+    let core = world.core();
+    let (pins, trust) = stores(&world);
+    let key = key_of(&world);
+    crate::person().trust(&trust, &key, "~/work/app", &[], false);
+    crate::person().pin(&pins, &a_pin());
+    // The key file's lock held: nothing changes.
+    let key_file = core.approval_key_file().unwrap();
+    let held = cineris_base::private::hold_lock(&key_file)
+        .unwrap()
+        .expect("this file system locks");
+    let refused = reset_now(&core).unwrap_err();
+    assert!(
+        refused.to_string().contains("nothing was changed"),
+        "{refused}"
+    );
+    drop(held);
+    let person = crate::person().verifier();
+    assert!(trust.project(&key, Some(&person)).unwrap().is_trusted());
+    assert!(pins.pins(Some(&person)).unwrap().counts());
+    assert!(
+        core.person_key(cineris_policy::test_support::PASSWORD.as_bytes())
+            .is_ok()
+    );
+    // The pins' lock held: they are left signed by the old key, and said.
+    let held = cineris_base::private::hold_lock(&state.pins_file())
+        .unwrap()
+        .expect("this file system locks");
+    let (_, report) = reset_now(&core).unwrap();
+    drop(held);
+    assert_eq!((report.pins, report.projects), (0, 1));
+    let [said] = report.left.as_slice() else {
+        panic!("{:?}", report.left);
+    };
+    assert!(
+        said.contains("pins.toml") && said.contains("lock"),
+        "{said}"
+    );
+    assert!(core.person_key(NEW_PASSWORD).is_ok());
+}
+
+/// Makes `link`, a link to the file `target`. `false` when this machine
+/// cannot (Windows without the right to), where the test then checks
+/// nothing of it; a CI runner can, and must.
+#[expect(
+    clippy::print_stdout,
+    reason = "a test that checks nothing on this machine says so, as the test runner shows it"
+)]
+fn make_file_link(target: &std::path::Path, link: &std::path::Path) -> bool {
+    #[cfg(unix)]
+    let made = std::os::unix::fs::symlink(target, link);
+    #[cfg(windows)]
+    let made = std::os::windows::fs::symlink_file(target, link);
+    match made {
+        Ok(()) => true,
+        Err(error) if std::env::var_os("GITHUB_ACTIONS").is_none() => {
+            println!("skipped: cannot make a link here ({error})");
+            false
+        }
+        Err(error) => panic!("the CI runner cannot make a link: {error}"),
+    }
+}
+
+/// Whatever another program put at the key file's name does not stop a
+/// reset, nor leave it half-done: a key file of its own made read-only (the
+/// review of the system's layer: the reset took every store's signatures off
+/// and then failed to write the key), a folder, and a link to a file
+/// elsewhere are each moved aside, the new password opens the approvals,
+/// and what was there is kept beside it, a link's target untouched.
+#[test]
+fn what_stands_at_the_key_files_name_is_moved_aside_at_a_reset() {
+    for case in ["read-only", "folder", "link"] {
+        let world = World::new("signed_reset_key_aside", []);
+        let core = world.closed_core();
+        let key_file = core.approval_key_file().unwrap();
+        std::fs::create_dir_all(key_file.parent().unwrap()).unwrap();
+        let model = crate::model_key();
+        let target = world.dir.join("elsewhere.toml");
+        match case {
+            "read-only" => {
+                model.key_file().write(&key_file, &world.clock).unwrap();
+                let mut permissions = std::fs::metadata(&key_file).unwrap().permissions();
+                permissions.set_readonly(true);
+                std::fs::set_permissions(&key_file, permissions).unwrap();
+            }
+            "folder" => std::fs::create_dir_all(key_file.join("inside")).unwrap(),
+            _ => {
+                model.key_file().write(&target, &world.clock).unwrap();
+                if !make_file_link(&target, &key_file) {
+                    continue;
+                }
+            }
+        }
+        let (_, trust) = stores(&world);
+        crate::person().trust(&trust, &key_of(&world), "~/work/app", &[], false);
+        let (_, report) = reset_now(&core).unwrap_or_else(|refusal| panic!("{case}: {refusal}"));
+        assert_eq!(report.projects, 1, "{case}");
+        assert!(
+            core.person_key(NEW_PASSWORD).is_ok(),
+            "{case}: the new password opens"
+        );
+        let found = set_aside_of(&key_file);
+        let [aside] = found.as_slice() else {
+            panic!("{case}: {found:?}");
+        };
+        if case == "folder" {
+            assert!(aside.join("inside").is_dir());
+        } else {
+            let kept = if case == "link" {
+                assert!(std::fs::symlink_metadata(aside).unwrap().is_symlink());
+                &target
+            } else {
+                aside
+            };
+            let kept = cineris_core::signed::KeyFile::read(kept).unwrap().unwrap();
+            assert_eq!(kept.fingerprint(), model.key_file().fingerprint(), "{case}");
+        }
+        if case == "read-only" {
+            // Writable again, for the world's folder to be removed.
+            let mut permissions = std::fs::metadata(aside).unwrap().permissions();
+            #[expect(
+                clippy::permissions_set_readonly_false,
+                reason = "the test's own file, made writable for its folder's removal"
+            )]
+            permissions.set_readonly(false);
+            std::fs::set_permissions(aside, permissions).unwrap();
+        }
+        // Nothing of the new key is left under another name.
+        let staged = format!("{}.new-", cineris_core::signed::KEY_FILE);
+        let leftovers: Vec<std::path::PathBuf> = std::fs::read_dir(key_file.parent().unwrap())
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .is_some_and(|file| file.to_string_lossy().starts_with(&staged))
+            })
+            .collect();
+        assert!(leftovers.is_empty(), "{case}: {leftovers:?}");
+    }
+}
+
+/// A reset the person makes writes the standard cost: the cost it makes the
+/// key at, seen without making one (which takes seconds unoptimised); and a
+/// password too short is refused before any key is made.
+#[test]
+fn a_reset_writes_the_standard_cost() {
+    assert_eq!(Core::reset_cost(), cineris_core::signed::Cost::STANDARD);
+    let world = World::new("signed_reset_cost", []);
+    let core = world.core();
+    assert_eq!(
+        core.reset_approvals(b"too short").err(),
+        Some(cineris_core::KeyRefusal::TooShort)
+    );
+}
+
+// ------------------------------------------------------------ one reading, and a bound
+
+/// The trust question is put only with a proposal worked out against the
+/// very entry it is shaped by (the review of the permission path): an older
+/// entry, signed by the person, put back between the reading and the
+/// proposal puts no question, and the session opens with the trust as it
+/// stands; nothing is signed again at a new revision.
+#[test]
+fn a_question_is_put_only_with_a_proposal_from_its_own_reading() {
+    let mut world = World::new("signed_one_reading", []);
+    world.project_config(GATE_HOOK);
+    let (_, trust) = stores(&world);
+    let key = key_of(&world);
+    let person = crate::person();
+    person.trust(&trust, &key, "~/work/app", &[], false);
+    let older = std::fs::read(trust.path()).unwrap();
+    person.approve(
+        &trust,
+        &key,
+        &[Definition::of(
+            cineris_protocol::methods::TrustResourceKind::Hook,
+            "other",
+            ["x"],
+        )],
+        false,
+    );
+    // The core's blocking work on threads of its own, so that the look can
+    // be held while the test goes on.
+    world._order = None;
+    let core = world.core();
+    let shaped = cineris_testkit::Hold::new(cineris_core::ext::THE_QUESTIONS_TRUST_IS_READ);
+    let answer = |request: &TrustRequest| vec![crate::yes_to(request)];
+    let (state, asked) = world.run(async {
+        let mut opening = std::pin::pin!(open(&world, &core, &answer));
+        shaped.drive_until_reached(opening.as_mut()).await;
+        std::fs::write(trust.path(), &older).unwrap();
+        shaped.release();
+        let (state, asked, _) = opening.await;
+        (state, asked)
+    });
+    assert!(
+        asked.is_empty(),
+        "a question from another reading: {asked:?}"
+    );
+    assert_eq!(state.trust, Some(TrustStanding::Trusted));
+    assert_eq!(
+        trust.project(&key, None).unwrap().revision(),
+        1,
+        "not signed again"
+    );
+}
+
+/// A project's entry that moves under each signed yes (something other than
+/// Cineris writing the store as the person answers) has its question put
+/// three times at most: then the session opens with the trust as it stands,
+/// and says why (the review of the permission path: it was put without
+/// end).
+#[test]
+fn the_question_is_put_three_times_at_most_when_the_entry_moves_under_each_yes() {
+    let world = World::new("signed_asked_at_most", []);
+    world.project_config(
+        "[[permissions.rules]]\neffect = \"write\"\nmatch = \"docs/**\"\naction = \"allow\"\n",
+    );
+    let (_, trust) = stores(&world);
+    let key = key_of(&world);
+    let core = world.core();
+    let rounds = std::cell::Cell::new(0);
+    let answer = |request: &TrustRequest| {
+        // The entry moves before each of the first four answers.
+        let round = rounds.get() + 1;
+        rounds.set(round);
+        let person = crate::person();
+        if round == 1 {
+            person.trust(&trust, &key, "~/work/app", &[], false);
+        } else if round <= 4 {
+            let moved = format!("moved-{round}");
+            person.approve(
+                &trust,
+                &key,
+                &[Definition::of(
+                    cineris_protocol::methods::TrustResourceKind::Hook,
+                    &moved,
+                    ["x"],
+                )],
+                false,
+            );
+        }
+        vec![crate::yes_to(request)]
+    };
+    let (state, asked, refused) = world.run(open(&world, &core, &answer));
+    assert!(refused.is_empty(), "{refused:?}");
+    assert_eq!(asked.len(), 3, "{asked:?}");
+    assert_eq!(state.trust, Some(TrustStanding::RulesChanged));
+    let stored = trust
+        .project(&key, Some(&crate::person().verifier()))
+        .unwrap();
+    assert_eq!(stored.revision(), 3, "no yes was written");
 }

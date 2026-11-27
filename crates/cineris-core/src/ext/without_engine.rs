@@ -26,13 +26,17 @@
 //! session's key (no key, unsigned, or not the person's: the signed
 //! approvals step), each of the user's extensions found holds the gating
 //! hooks of the cache's entries of its name, and a gate on each gating event
-//! its manifest lists; a project's, while the trust store cannot be read,
-//! holds nothing: no repository gates a session by itself, as with the
-//! engine. A project whose entry is there and does not count is not
-//! trusted, and each extension its entry pins holds its gates, from the
-//! cache's entry at the hash pinned, or both where it has none. One approved for this session by a yes the store
-//! could not keep stands approved all the same, as the session's finding
-//! judges it with the engine, which loads it: it holds its gates.
+//! its manifest lists; while they do not count, one they pin that is gone or
+//! left out holds its gates by its pin, signed or not, as it does while they
+//! count. A project's, while the trust store cannot be read, holds nothing:
+//! no repository gates a session by itself, as with the engine. A project
+//! whose entry is there and does not count, whether it is not trusted or
+//! trusted for the run by `--trust-project` (which approves none of its
+//! extensions), holds the gates of each extension its entry pins, from the
+//! cache's entry at the hash pinned, or both where it has none. One approved
+//! for this session by a yes the store could not keep stands approved all
+//! the same, as the session's finding judges it with the engine, which loads
+//! it: it holds its gates.
 //!
 //! What is held is settled as the session opens and kept for it, as its hook
 //! commands are: a change takes effect at the next session. The user is
@@ -374,12 +378,18 @@ fn found_manifest<'a>(
 /// trusted project's for the run or in its entry of the trust store.
 fn pin_of(judging: &Judging<'_>, source: Source, name: &str) -> Option<ContentHash> {
     match source {
-        Source::User => judging
-            .pins
-            .as_ref()
-            .ok()?
-            .get(&TrustResourceKind::Extension, name)
-            .map(|pin| pin.hash),
+        Source::User => match &judging.pins {
+            Ok(pins) => pins
+                .get(&TrustResourceKind::Extension, name)
+                .map(|pin| pin.hash),
+            // While the pins do not count, what they hold restricts (the
+            // review of the permission path).
+            Err(_) => judging
+                .pins_held
+                .iter()
+                .find(|pin| pin.kind == TrustResourceKind::Extension && pin.name == name)
+                .map(|pin| pin.hash),
+        },
         Source::Project if judging.project_trusted => judging
             .for_the_run
             .iter()

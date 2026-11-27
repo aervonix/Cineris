@@ -101,6 +101,11 @@ enum Back {
 /// starting state, when that has not finished.
 const BASE_WAIT: Duration = Duration::from_secs(2);
 
+/// How many times a session's trust question is put when the project's entry
+/// moves under each signed yes: then the session opens with the trust as it
+/// stands (`assemble::moved_each_time`).
+const TRUST_ASKED_AT_MOST: usize = 3;
+
 pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     // Each change behind these locks is whole before the lock is let go.
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
@@ -1085,8 +1090,12 @@ impl Core {
         }
         // A signed yes whose entry moved while the question was open wrote
         // nothing, and the question is put again with what the entry holds
-        // now (the signed approvals step). Each round waits for the person.
-        loop {
+        // now (the signed approvals step). Each round waits for the person,
+        // and there are three at most: an entry that moves under every yes
+        // is something else's doing, and the session then opens with the
+        // trust as it stands, saying why (the review of the permission path:
+        // the rounds had no bound).
+        for _ in 0..TRUST_ASKED_AT_MOST {
             let inner = Arc::clone(&self.inner);
             let look = wanted.clone();
             let (trust, question) = Self::blocking(move || assemble::look(&inner, &look)).await?;
@@ -1098,6 +1107,11 @@ impl Core {
                 assemble::Answered::AskAgain => {}
             }
         }
+        let inner = Arc::clone(&self.inner);
+        let look = wanted.clone();
+        Self::blocking(move || assemble::moved_each_time(&inner, &look))
+            .await
+            .map(Some)
     }
 
     /// Puts `question` to the client, and keeps its answer: one round of
@@ -1127,9 +1141,12 @@ impl Core {
             proposal,
             summary,
         };
-        let (id, answer) = self.inner.clients.ask_once(&session, &[client.0], |_| {
-            ServerRequest::Trust(request.clone())
-        });
+        let (id, answer) = self.inner.clients.ask_trust(
+            &session,
+            &[client.0],
+            |_| ServerRequest::Trust(request.clone()),
+            question.key.clone(),
+        );
         // A shutdown that began since the look (its withdrawal came before
         // this question was put) takes the question back at once: it sets
         // its mark before it withdraws, so one or the other sees this
