@@ -20,8 +20,8 @@
 //!   `--permission-mode`, `--allow`, `-c`, `--profile`, `--continue`,
 //!   `--resume`, `--fork`; and any run of Cineris in a line that sets or
 //!   unsets a variable that moves its stores (`HOME`, `USERPROFILE`,
-//!   `APPDATA`, `LOCALAPPDATA`, `XDG_CONFIG_HOME`, `XDG_STATE_HOME`,
-//!   `XDG_DATA_HOME`, or any `CINERIS_…`).
+//!   `APPDATA`, `LOCALAPPDATA`, `ProgramData`, `XDG_CONFIG_HOME`,
+//!   `XDG_STATE_HOME`, `XDG_DATA_HOME`, or any `CINERIS_…`).
 //!
 //! The help (`-h`, `--help` before `--`), the version, and the subcommands
 //! that only read are not refused.
@@ -651,6 +651,7 @@ fn moves_stores(name: &str) -> bool {
             | "USERPROFILE"
             | "APPDATA"
             | "LOCALAPPDATA"
+            | "PROGRAMDATA"
             | "XDG_CONFIG_HOME"
             | "XDG_STATE_HOME"
             | "XDG_DATA_HOME"

@@ -1084,3 +1084,41 @@ fn sys_another_user_cannot_open_the_pipe() {
     assert!(why.contains("another user"), "{why}");
     assert!(closed_unanswered(&runtime, &mut pipe));
 }
+
+/// A client the front end's check refuses (`ListenOptions::peer_check`, by
+/// which `cineris serve` refuses a client under any harness's session's
+/// command: the review of step 28, finding 3) is closed unanswered, with
+/// the check's reason, and the check is given the client's process; one it
+/// admits is served.
+#[test]
+fn a_client_the_front_ends_check_refuses_is_closed_unanswered() {
+    let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let checked = Arc::clone(&asked);
+    let refusing = ListenOptions {
+        peer_check: Some(cineris_rpc::PeerCheck::new(move |pid| {
+            checked.lock().unwrap().push(pid);
+            Err("it runs under a session's command (a test's)".to_owned())
+        })),
+        ..ListenOptions::new(false)
+    };
+    let place = pipe_of("peer-check");
+    let mut listener = Listener::bind(&place, &refusing).unwrap();
+    let mut pipe = said(&place).expect("the user opens the pipe");
+    let runtime = runtime();
+    let why = refused(runtime.block_on(listener.accept()).unwrap());
+    assert!(why.contains("a test's"), "{why}");
+    assert!(closed_unanswered(&runtime, &mut pipe));
+    assert_eq!(*asked.lock().unwrap(), [std::process::id()]);
+    drop(listener);
+    let admitting = ListenOptions {
+        peer_check: Some(cineris_rpc::PeerCheck::new(|_| Ok(()))),
+        ..ListenOptions::new(false)
+    };
+    let place = pipe_of("peer-check-admits");
+    let mut listener = Listener::bind(&place, &admitting).unwrap();
+    let _pipe = said(&place).expect("the user opens the pipe");
+    assert!(matches!(
+        runtime.block_on(listener.accept()).unwrap(),
+        Accepted::Client { .. }
+    ));
+}

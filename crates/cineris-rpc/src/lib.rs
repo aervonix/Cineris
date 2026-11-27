@@ -27,5 +27,5 @@ mod wire;
 
 pub use crate::connection::{Connection, Ended, ServeOptions};
 pub use crate::server::{serve_one, serve_socket};
-pub use crate::socket::{Accepted, ListenOptions, Listener, Place};
+pub use crate::socket::{Accepted, ListenOptions, Listener, PeerCheck, Place};
 pub use crate::transport::{Ends, Transport, Written};

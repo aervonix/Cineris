@@ -110,6 +110,10 @@ pub const CASES: &[(&str, &[ShellSyntax], bool)] = &[
     ("export HOME=/tmp/x; cineris -p go", &[Posix], true),
     ("$env:APPDATA='x'; cineris -p go", &[PowerShell], true),
     ("set USERPROFILE=x& cineris -p go", &[Cmd], true),
+    // The managed configuration's folder (the review of step 28, finding
+    // 17), in any case, as Windows reads a variable's name.
+    ("set ProgramData=x& cineris -p go", &[Cmd], true),
+    ("$env:PROGRAMDATA='x'; cineris -p go", &[PowerShell], true),
     // In any segment.
     ("ls; cineris ext add x", &[Posix, PowerShell], true),
     ("true && cineris ext add x", &[Posix], true),

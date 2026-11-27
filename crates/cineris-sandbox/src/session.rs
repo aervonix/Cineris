@@ -1,7 +1,9 @@
 //! Whether this process runs under a session's command: what the
 //! subcommands that approve, trust or answer for the person
 //! (`cineris ext add`, `remove` and `disable`, `cineris permissions trust`,
-//! `untrust`, `revoke` and `forget`, `cineris setup`) look at before they do
+//! `untrust`, `revoke` and `forget`, `cineris setup`, and since the review
+//! of step 28 `cineris project`'s changes, `auth login` and `logout`, and
+//! `stats reset`; and the RPC socket, of each peer) look at before they do
 //! anything, and refuse under (since step 28's third pull request, the
 //! owner's answer to the early review's H1). The permission engine refuses
 //! a command line that names them; this is the backstop for one that runs
@@ -15,12 +17,26 @@
 //!   too: never by its name alone) and its first argument is not a
 //!   subcommand that runs no session (`ext`, `config`, `attach` and the
 //!   rest): the application, a headless run and `serve` run sessions. A
-//!   line that cannot be read refuses, as if it reached one. A parent that
-//!   `/proc` does not show (another user's: an SSH session's `sshd`, a
-//!   `sudo`) ends the line elsewhere. **It does not see** a command that
-//!   detached itself from the line (its parent exited, and it was handed to
-//!   the system's first process or a subreaper), or one in a namespace of
-//!   processes of its own.
+//!   line that cannot be read refuses, as if it reached one. The line ends
+//!   at process 0 or at a process that is its own parent: process 1 is read
+//!   as any other, so a harness that is a container's first process is seen
+//!   (the review of step 28, finding 7). A parent that `/proc` does not show
+//!   (gone, or hidden: another user's under `hidepid`) ends the line
+//!   elsewhere; without `hidepid` another user's process (an SSH session's
+//!   `sshd`, a `sudo`) is shown, its `stat` is read, and the line goes on
+//!   through it. **It does not see** a command that detached itself from
+//!   the line (its parent exited, and it was handed to the system's first
+//!   process or a subreaper), **nor one in a namespace of processes of its
+//!   own** (`unshare -Urpf`, `bwrap --unshare-user --unshare-pid`, where
+//!   unprivileged user namespaces are open): its parent reads as 0 at the
+//!   namespace's edge, whoever reaps it, so a subreaper does not close this.
+//!   The maintainers settled that it is stated and not built against (the
+//!   review of step 28, finding 8): a rule on a namespace would refuse every
+//!   person in WSL 2 (whose processes are all in a pid namespace that is
+//!   not the first), in a toolbox or distrobox (a user namespace), or in a
+//!   container, whose legitimate first process has a parent of 0 as the
+//!   attack's does. Approvals signed with a key that needs a person close
+//!   it.
 //! - **On Windows, by the harness's own job, and by what started it.** A
 //!   process that runs sessions calls [`mark`] at its start: it makes a job
 //!   of its own, named [`JOB_PREFIX`] and its process's instance (its id and
@@ -73,7 +89,10 @@
 //!   review of the third part, H1, and its narrow re-check, M2'); where which
 //!   host runs the scheduler cannot be asked, any service host counts. Any
 //!   other program ends the line: a terminal or a CI runner a service
-//!   started is not taken for one. **Only a start after a harness began
+//!   started is not taken for one. A line that goes on through more
+//!   interpreters and runtimes than the walk reads (64), like a line of
+//!   parents longer than it reads, is not known, which refuses (the review
+//!   of step 28, finding 2). **Only a start after a harness began
 //!   counts:** the process the service started on the line must have been
 //!   made after the earliest harness of the user's that runs now (a process
 //!   this user may open whose job of sessions' commands is there), so that a
@@ -154,12 +173,30 @@ pub fn under_a_session() -> Under {
     sys::under_a_session()
 }
 
+/// Whether another process of this user, `pid`, runs under a session's
+/// command, read as [`under_a_session`] reads this process: what the RPC
+/// socket asks of each peer, so that a command of any harness, and not only
+/// of the server's own sessions, is refused as a client (the review of step
+/// 28, finding 3). The peer's own process must be there to be read: one that
+/// has gone, or cannot be opened, is not known. On Linux a parent of it that
+/// `/proc` does not show ends its line elsewhere, the first one included (a
+/// client's launcher may exit as it connects), where this process's own
+/// first parent not shown is not known.
+#[must_use]
+pub fn under_a_session_of(pid: u32) -> Under {
+    sys::under_a_session_of(pid)
+}
+
 /// Under a session's command, a variable of this process that moves where
 /// Cineris's configuration and stores are read from, set otherwise than
 /// for the session that started it: on Linux by the session's process's own
 /// environment, on Windows by what the session told what it starts
 /// (`CINERIS_SESSION_STORES`, which [`mark`] sets, and which the permission
-/// engine refuses a command line to set). `None` when none is.
+/// engine refuses a command line to set). `None` when none is. Asked only
+/// where [`under_a_session`] refuses: where the session's own stores cannot
+/// be read (on Linux, no harness found on the line of parents, or its
+/// environment unreadable; on Windows, nothing told), it names that, which
+/// refuses.
 #[must_use]
 pub fn moved_stores() -> Option<String> {
     sys::moved_stores()
@@ -285,11 +322,31 @@ enum Seen {
 /// reading each process.
 #[cfg_attr(windows, allow(dead_code, reason = "Linux's line of parents"))]
 fn line(start: u32, seen: impl Fn(u32) -> Seen) -> Under {
+    walk(start, seen, true)
+}
+
+/// Where the line from `start` leads, `seen` reading each process; a first
+/// process that is not shown is not known when `first_must_show`, and ends
+/// the line elsewhere otherwise.
+///
+/// **The line ends only at process 0,** the parent the kernel gives the
+/// first process of a namespace of processes and a process whose parent is
+/// outside its namespace, **or at a process that is its own parent:**
+/// process 1 is read as any other (the review of step 28, finding 7: a
+/// harness that is a container's first process, `docker run image cineris
+/// -p …` without `--init`, was never seen, as the walk stopped before
+/// reading it). The system's own first process (`systemd`, WSL's `/init`, a
+/// container's entry point) runs no sessions, and its parent is 0; one that
+/// `/proc` does not show (another user's, under `hidepid`) is not this
+/// user's harness, and ends the line elsewhere even first, as it cannot
+/// have gone (its namespace ends with it).
+#[cfg_attr(windows, allow(dead_code, reason = "Linux's line of parents"))]
+fn walk(start: u32, seen: impl Fn(u32) -> Seen, first_must_show: bool) -> Under {
     let mut at = start;
     // A line of parents is short; the bound only stops a loop the table
     // could show while it changes.
     for _ in 0..4096 {
-        if at <= 1 {
+        if at == 0 {
             return Under::Nothing;
         }
         match seen(at) {
@@ -300,7 +357,7 @@ fn line(start: u32, seen: impl Fn(u32) -> Seen) -> Under {
             Seen::Of { parent, .. } => at = parent,
             // The parent itself not shown: it went as this started, and
             // what it was is not known.
-            Seen::Unseen if at == start => {
+            Seen::Unseen if at == start && at != 1 && first_must_show => {
                 return Under::Unknown(format!("its parent, process {at}, is not shown"));
             }
             Seen::Unseen => return Under::Nothing,
@@ -322,7 +379,7 @@ mod sys {
     use std::io;
     use std::os::unix::fs::MetadataExt;
 
-    use super::{Seen, Under, line, runs_cineris_sessions};
+    use super::{Seen, Under, line, runs_cineris_sessions, walk};
 
     pub(super) fn mark() -> io::Result<()> {
         Ok(())
@@ -331,6 +388,23 @@ mod sys {
     pub(super) fn under_a_session() -> Under {
         let own = Own::read();
         line(std::os::unix::process::parent_id(), |pid| seen(&own, pid))
+    }
+
+    /// Whether another process, `pid`, runs under a session's command, read
+    /// as [`under_a_session`] reads this one's: its line of parents, from
+    /// its parent up, each told by the same rules. The process itself must
+    /// be shown (one that has gone is not known); a parent that is not
+    /// shown, the first included, ends the line elsewhere, as a client's
+    /// launcher may exit between two reads (the RPC socket's rule since the
+    /// second review of step 27's second part).
+    pub(super) fn under_a_session_of(pid: u32) -> Under {
+        let own = Own::read();
+        match seen(&own, pid) {
+            Seen::Of { parent, .. } if parent == pid => Under::Nothing,
+            Seen::Of { parent, .. } => walk(parent, |pid| seen(&own, pid), false),
+            Seen::Unseen => Under::Unknown(format!("process {pid} is not shown")),
+            Seen::Failed => Under::Unknown(format!("process {pid} could not be read")),
+        }
     }
 
     /// This process's own file, read once a check and not once a process of
@@ -357,14 +431,19 @@ mod sys {
         }
     }
 
-    /// The process of the line that runs sessions.
+    /// The process of the line that runs sessions, read as [`line`] reads
+    /// it: to process 0, process 1 included (the review of step 28, finding
+    /// 7: a harness that is a container's first process).
     fn harness() -> Option<u32> {
         let own = Own::read();
         let mut at = std::os::unix::process::parent_id();
         for _ in 0..4096 {
+            if at == 0 {
+                return None;
+            }
             match seen(&own, at) {
                 Seen::Of { harness: true, .. } => return Some(at),
-                Seen::Of { parent, .. } if parent > 1 && parent != at => at = parent,
+                Seen::Of { parent, .. } if parent != at => at = parent,
                 _ => return None,
             }
         }
@@ -380,11 +459,14 @@ mod sys {
             "CINERIS_CONFIG",
             "CINERIS_DATA_DIR",
         ];
+        // Asked only under a session's command, or where that could not be
+        // told: with no harness found on the line (one of it could not be
+        // read), what the session's stores are is not known either, and
+        // nothing is compared with them (the review of step 28: this took
+        // only the `CINERIS_` variables, so a line made unreadable on
+        // purpose let a nested run read stores moved by `XDG_STATE_HOME`).
         let Some(pid) = harness() else {
-            return names
-                .iter()
-                .find(|name| name.starts_with("CINERIS_") && std::env::var_os(name).is_some())
-                .map(|name| (*name).to_owned());
+            return Some("the session's own environment, whose process was not found,".to_owned());
         };
         let Ok(environ) = std::fs::read(format!("/proc/{pid}/environ")) else {
             return Some("the session's own environment, which could not be read,".to_owned());
@@ -615,6 +697,29 @@ mod sys {
                 "{seen:?}"
             );
         }
+
+        /// Another process's line is read as this one's (what the RPC
+        /// socket asks of a peer, the review of step 28, finding 3): a
+        /// script this test starts is under the test's own process, which
+        /// runs this very file with a test runner's arguments, a harness as
+        /// the check reads one; a process that is not there is not known.
+        #[test]
+        fn sys_another_processs_line_is_read_as_this_ones() {
+            let scratch = cineris_testkit::scratch::Scratch::outside(
+                "cineris-sandbox-session",
+                "sys_another_processs_line_is_read_as_this_ones",
+            );
+            let mut child = started_up(&scratch.join("peer"));
+            let under = crate::session::under_a_session_of(child.id());
+            drop(child.stdin.take());
+            child.wait().unwrap();
+            let own = format!("process {} runs Cineris's sessions", std::process::id());
+            assert_eq!(under, super::Under::Session(own));
+            assert!(matches!(
+                crate::session::under_a_session_of(u32::MAX),
+                super::Under::Unknown(_)
+            ));
+        }
     }
 }
 
@@ -791,19 +896,27 @@ struct Parent {
 /// so up, through any program, as far as each is a running process this
 /// user may open that was made before the one below it (a process made
 /// after has the id of a parent that has gone), at most [`LINE_OF_PARENTS`]
-/// of them, and no further than the first that is a harness by its program
+/// of them and the one past them, and no further than the first that is a
+/// harness by its program
 /// and its arguments. The harness of a session's command is on it unless
 /// the command detached itself (its parents exited), so its job is asked by
 /// its name first, which no listing can miss (the review of the start-up's
 /// fix: a listing of the namespace that took several calls could skip it),
 /// and it is a harness by what it runs whatever its job is.
+///
+/// **A line that goes on past the bound is not known** (the review of step
+/// 28, beside finding 2): the process past it is kept, and is a harness
+/// when it is one and not known otherwise, which refuses where nothing
+/// holds the process; before, a command outside its harness's job (it let
+/// the jobs it is in let it leave) whose line went up through 64 programs of
+/// its own before its harness read as under no session.
 #[cfg_attr(not(windows), allow(dead_code, reason = "Windows's jobs"))]
 fn parents(own: u32, describe: impl Fn(u32, bool) -> Above) -> Vec<Parent> {
     let mut line = Vec::new();
     let Above::Is(mut below, _) = describe(own, false) else {
         return line;
     };
-    for _ in 0..LINE_OF_PARENTS {
+    loop {
         let parent = below.parent;
         if parent == 0 || parent == below.pid {
             break;
@@ -812,6 +925,23 @@ fn parents(own: u32, describe: impl Fn(u32, bool) -> Above) -> Vec<Parent> {
             break;
         };
         if process.made > below.made {
+            break;
+        }
+        if line.len() == LINE_OF_PARENTS {
+            let past = format!(
+                "its line of parents goes on through more than {LINE_OF_PARENTS} processes, past \
+                 which it is not read"
+            );
+            let runs = if runs == Runs::Sessions {
+                runs
+            } else {
+                Runs::Unknown(past)
+            };
+            line.push(Parent {
+                pid: process.pid,
+                made: process.made,
+                runs,
+            });
             break;
         }
         let harness = runs == Runs::Sessions;
@@ -1126,7 +1256,15 @@ fn started_by_a_service(
             _ => return Under::Nothing,
         }
     }
-    Under::Nothing
+    // Still going up through interpreters past the bound: what started the
+    // first of them is not known, and so not that it was no service (the
+    // review of step 28, finding 2: a start through 64 `cmd /c` said
+    // nothing, where Linux's walk refuses past its own bound).
+    let past = format!(
+        "its line of parents goes on through more than {LINE_OF_PARENTS} command interpreters \
+         and runtimes, past which what started it is not read"
+    );
+    Under::Unknown(past)
 }
 
 #[cfg(windows)]
@@ -1185,11 +1323,13 @@ mod sys {
     use windows_sys::Win32::System::WindowsProgramming::SYSTEM_PROCESS_INFORMATION;
 
     /// The variables that place Cineris's configuration and stores on
-    /// Windows.
-    const STORES: [&str; 5] = [
+    /// Windows: `ProgramData` places the managed configuration, which the
+    /// user's own cannot override (the review of step 28, finding 17).
+    const STORES: [&str; 6] = [
         "USERPROFILE",
         "APPDATA",
         "LOCALAPPDATA",
+        "ProgramData",
         "CINERIS_CONFIG",
         "CINERIS_DATA_DIR",
     ];
@@ -1737,14 +1877,40 @@ mod sys {
     }
 
     pub(super) fn under_a_session() -> Under {
+        // SAFETY: plain calls; the pseudo-handle is always valid, with
+        // every right.
+        let (own, process) = unsafe { (GetCurrentProcessId(), GetCurrentProcess()) };
+        judged_for(own, process)
+    }
+
+    /// Whether the process `pid` runs under a session's command, read as
+    /// this one is ([`judged_for`]), through a handle of it opened only to
+    /// ask, which `IsProcessInJob` takes: one that cannot be opened (gone,
+    /// another user's) is not known.
+    pub(super) fn under_a_session_of(pid: u32) -> Under {
+        // SAFETY: plain values.
+        let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid) };
+        if handle.is_null() {
+            return Under::Unknown(format!(
+                "process {pid} could not be opened: {}",
+                io::Error::last_os_error()
+            ));
+        }
+        // SAFETY: `handle` was just opened and nothing else owns it.
+        let process = unsafe { OwnedHandle::from_raw_handle(handle) };
+        judged_for(pid, process.as_raw_handle())
+    }
+
+    /// The check of the process `own`, whose handle `process` has at least
+    /// the limited right to ask: this process's own, or another's (an RPC
+    /// socket's peer).
+    fn judged_for(own: u32, process: HANDLE) -> Under {
         let list = Taken::new();
         // This binary, read at the first process of the line of parents
         // whose program is judged, or where a job of a harness's name
         // cannot be opened; its file's identity only where a program's
         // name and size do not tell it apart.
         let binary = OnceCell::new();
-        // SAFETY: plain call.
-        let own = unsafe { GetCurrentProcessId() };
         // The harnesses on its line of parents first, each by its job's
         // name and by its program and its arguments: a session's command's
         // own harness is there unless it detached, no listing's race can
@@ -1756,7 +1922,7 @@ mod sys {
             // call: a process whose parents exited stays in its harness's
             // job.
             || harnesses(&list).map(|(harnesses, _)| harnesses),
-            |pid, made| in_the_job_of(pid, made, &binary),
+            |pid, made| in_the_job_of(pid, made, &binary, process),
             // The line of parents, each process on it opened, or the list
             // where one cannot be; the service manager is asked only where
             // the line reaches a service host.
@@ -2399,8 +2565,9 @@ mod sys {
         }
     }
 
-    /// Whether this process is in the job of sessions' commands of the
-    /// harness `pid`, made at `made`.
+    /// Whether the process `process` (this one's pseudo-handle, or a
+    /// handle with at least the limited right to ask) is in the job of
+    /// sessions' commands of the harness `pid`, made at `made`.
     ///
     /// **A job of that name that cannot be opened,** for any reason but
     /// there being none, is not known, which refuses (the full review of
@@ -2426,7 +2593,7 @@ mod sys {
     /// where there is a job of that name, or one that could not be told
     /// from none: most processes run no sessions, and opening each cost a
     /// headless run's start 0.35 ms on a hosted runner.
-    fn in_the_job_of(pid: u32, made: u64, own: &OnceCell<Own>) -> Job {
+    fn in_the_job_of(pid: u32, made: u64, own: &OnceCell<Own>, process: HANDLE) -> Job {
         // The process, this user's and the same instance (a process that
         // has gone, whose id is another's now, is not).
         let harness = || opened(pid) == Opened::Made(made);
@@ -2456,11 +2623,10 @@ mod sys {
             return Job::None;
         }
         let mut inside = FALSE;
-        // SAFETY: the pseudo-handle has every right, `job` is open with
-        // `JOB_OBJECT_QUERY`, both live through the call, and `inside` is a
-        // live `BOOL`.
-        let asked =
-            unsafe { IsProcessInJob(GetCurrentProcess(), job.as_raw_handle(), &raw mut inside) };
+        // SAFETY: `process` has at least the limited right to ask, `job` is
+        // open with `JOB_OBJECT_QUERY`, both live through the call, and
+        // `inside` is a live `BOOL`.
+        let asked = unsafe { IsProcessInJob(process, job.as_raw_handle(), &raw mut inside) };
         if asked == 0 {
             return Job::Unknown(format!(
                 "whether it is in the job of process {pid}'s sessions' commands could not be \
@@ -2530,6 +2696,48 @@ mod tests {
         assert!(matches!(line(70, &read), Under::Unknown(_)));
         assert!(Under::Nothing.refusal().is_none());
         assert!(line(40, &read).refusal().is_some());
+    }
+
+    /// Process 1 is read as any other (the review of step 28, finding 7): a
+    /// harness that is the first process of its namespace (`docker run image
+    /// cineris -p …` without `--init`) is seen, near or far; the system's
+    /// own first process, whose parent is 0, ends the line elsewhere; and one
+    /// `/proc` does not show (another user's, under `hidepid`) ends it
+    /// elsewhere even as the first parent, as it cannot have gone.
+    #[test]
+    fn a_harness_that_is_process_1_is_seen_and_the_line_ends_at_process_0() {
+        let container = [(7, of(5, false)), (5, of(1, false)), (1, of(0, true))];
+        let read = table(&container);
+        assert!(
+            matches!(line(7, &read), Under::Session(how) if how.contains("process 1 ")),
+            "{:?}",
+            line(7, &read)
+        );
+        assert!(matches!(line(1, &read), Under::Session(_)));
+        let system = [(7, of(5, false)), (5, of(1, false)), (1, of(0, false))];
+        let read = table(&system);
+        assert_eq!(line(7, &read), Under::Nothing);
+        assert_eq!(line(1, &read), Under::Nothing);
+        // A parent that reads 0: outside the namespace (the stated gap of a
+        // namespace of the command's own, which nothing here closes).
+        assert_eq!(line(0, &read), Under::Nothing);
+        let hidden = [(7, of(1, false))];
+        let read = table(&hidden);
+        assert_eq!(line(1, &read), Under::Nothing, "pid 1 hidden, first");
+        assert_eq!(line(7, &read), Under::Nothing, "pid 1 hidden, further up");
+    }
+
+    /// Another process's line, as the RPC socket reads a peer's: the same
+    /// rules, but a first parent `/proc` does not show ends it elsewhere (a
+    /// client's launcher may exit as it connects), where this process's
+    /// own first parent not shown is not known.
+    #[test]
+    fn a_peers_line_ends_elsewhere_at_a_first_parent_not_shown() {
+        let processes = [(10, of(9, false)), (9, of(1, true)), (20, of(19, false))];
+        let read = table(&processes);
+        assert!(matches!(walk(9, &read, false), Under::Session(_)));
+        assert_eq!(walk(19, &read, false), Under::Nothing);
+        assert!(matches!(walk(19, &read, true), Under::Unknown(_)));
     }
 
     /// A process of Cineris runs sessions unless its first argument is a
@@ -2795,6 +3003,86 @@ mod tests {
         assert!(!under(320, Some(45), None), "WMI's, no harness running");
     }
 
+    /// A service's start through more command interpreters than the walk
+    /// reads is not known, which refuses (the review of step 28, finding 2:
+    /// `cmd /c` nested 64 times between WMI's host and the subcommand said
+    /// nothing), read on the line [`line_of`] describes as on the system's
+    /// list; up to the bound, the host is still reached.
+    #[test]
+    fn a_services_start_through_more_interpreters_than_the_bound_is_not_known() {
+        // `own` (1000), `count` interpreters above it, the nearest first,
+        // then WMI's host, made in that order downwards.
+        let chain = |count: u32| {
+            let mut processes = vec![(1000, 2000, "cin.exe".to_owned())];
+            for at in 0..count {
+                let parent = if at + 1 == count { 9000 } else { 2001 + at };
+                processes.push((2000 + at, parent, "cmd.exe".to_owned()));
+            }
+            processes.push((9000, 4, "wmiprvse.exe".to_owned()));
+            processes
+                .into_iter()
+                .map(|(pid, parent, name)| Listed {
+                    pid,
+                    parent,
+                    name,
+                    made: u64::from(10_000 - pid),
+                })
+                .collect::<Vec<_>>()
+        };
+        let opened = |pid: u32| match pid {
+            4 | 9000 => Opened::Closed,
+            _ => Opened::Made(u64::from(10_000 - pid)),
+        };
+        let bound = u32::try_from(LINE_OF_PARENTS).unwrap();
+        for (count, seen) in [
+            (3, true),
+            (bound - 1, true),
+            (bound, false),
+            (bound + 10, false),
+        ] {
+            let processes = chain(count);
+            let listed = started_by_a_service(&processes, 1000, opened, || Some(0), Some(0));
+            let described = |pid: u32| {
+                processes
+                    .iter()
+                    .find(|process| process.pid == pid)
+                    .cloned()
+                    .map_or(Described::Gone, |process| {
+                        if pid == 9000 {
+                            Described::Closed
+                        } else {
+                            Described::Is(process)
+                        }
+                    })
+            };
+            // Described by opening each, the line stops at the host, which
+            // cannot be opened: the list is then taken. A line that never
+            // reaches it within the bound is read to the bound alone.
+            let line = line_of(1000, described);
+            let on_the_line = line
+                .as_deref()
+                .map(|line| started_by_a_service(line, 1000, opened, || Some(0), Some(0)));
+            if seen {
+                assert!(matches!(listed, Under::Session(_)), "{count}: {listed:?}");
+                assert!(line.is_none(), "{count}: the host is met, closed");
+            } else {
+                assert!(
+                    matches!(&listed, Under::Unknown(why) if why.contains("more than 64")),
+                    "{count}: {listed:?}"
+                );
+                assert_eq!(
+                    line.as_ref().map(Vec::len),
+                    Some(LINE_OF_PARENTS + 1),
+                    "{count}"
+                );
+                assert!(
+                    matches!(&on_the_line, Some(Under::Unknown(why)) if why.contains("more than 64")),
+                    "{count}: {on_the_line:?}"
+                );
+            }
+        }
+    }
+
     /// The service manager is asked which host runs the task scheduler only
     /// when the line reaches a service host, and once: a headless run's
     /// line from a terminal or a runner's step, which never does, pays
@@ -3057,7 +3345,6 @@ mod tests {
         assert_eq!(pids(400), [390], "its own parent");
         assert_eq!(pids(500), [] as [u32; 0], "the idle process");
         assert_eq!(pids(9999), [] as [u32; 0], "itself gone");
-        // A line that does not end is read to the bound.
         let endless = |pid: u32, _judged: bool| {
             Above::Is(
                 Listed {
@@ -3069,7 +3356,39 @@ mod tests {
                 Runs::No,
             )
         };
-        assert_eq!(parents(1, endless).len(), LINE_OF_PARENTS);
+        // A line that does not end is read to the bound and one past it,
+        // which is not known (the review of step 28, beside finding 2).
+        let read = parents(1, endless);
+        assert_eq!(read.len(), LINE_OF_PARENTS + 1);
+        assert!(
+            read[..LINE_OF_PARENTS]
+                .iter()
+                .all(|process| process.runs == Runs::No),
+            "{read:?}"
+        );
+        assert!(
+            matches!(&read[LINE_OF_PARENTS].runs, Runs::Unknown(why) if why.contains("more than 64")),
+            "{read:?}"
+        );
+        // A harness past the bound is still a harness.
+        let harness_past = |pid: u32, judged: bool| match endless(pid, judged) {
+            Above::Is(process, _) if pid == 1 + 65 => Above::Is(process, Runs::Sessions),
+            other => other,
+        };
+        let read = parents(1, harness_past);
+        assert_eq!(read[LINE_OF_PARENTS].runs, Runs::Sessions);
+        // Judged with nothing that holds the process, the line past its
+        // bound refuses.
+        let unknown = judged(
+            parents(1, endless),
+            || Ok(Vec::new()),
+            |_, _| Job::None,
+            |_| Under::Nothing,
+        );
+        assert!(
+            matches!(&unknown, Under::Unknown(why) if why.contains("more than 64")),
+            "{unknown:?}"
+        );
     }
 
     /// The line of parents whose jobs are asked first asks each process

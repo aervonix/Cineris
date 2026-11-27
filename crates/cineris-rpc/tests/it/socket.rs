@@ -579,3 +579,45 @@ fn a_client_reaches_only_a_server_of_the_users_own() {
         "{refused}"
     );
 }
+
+/// A peer the front end's check refuses (`ListenOptions::peer_check`, by
+/// which `cineris serve` refuses a peer under any harness's session's
+/// command: the review of step 28, finding 3) is closed unanswered, and the
+/// check is given the peer's process; one it admits is served.
+#[test]
+fn a_peer_the_front_ends_check_refuses_is_closed_unanswered() {
+    let world = World::new("socket-peer-check");
+    let core = world.core();
+    let path = folder(&world, "named", 0o700).join("rpc.sock");
+    let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let checked = std::sync::Arc::clone(&asked);
+    let admit = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let admitting = std::sync::Arc::clone(&admit);
+    let options = ListenOptions {
+        peer_check: Some(cineris_rpc::PeerCheck::new(move |pid| {
+            checked.lock().unwrap().push(pid);
+            if admitting.load(std::sync::atomic::Ordering::SeqCst) {
+                Ok(())
+            } else {
+                Err("it runs under a session's command (a test's)".to_owned())
+            }
+        })),
+        ..ListenOptions::new(false)
+    };
+    let listener = Listener::bind(&Place::Path(path.clone()), &options).unwrap();
+    let (stop, done) = serve(&core, listener, world.serve_options(), 64);
+    let mut refused = client(&path);
+    let initialize = serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": conformance::initialize()});
+    refused.write_raw(format!("{initialize}\n").as_bytes());
+    assert!(
+        refused.read().is_none(),
+        "a peer the check refuses was served"
+    );
+    assert_eq!(*asked.lock().unwrap(), [std::process::id()]);
+    admit.store(true, std::sync::atomic::Ordering::SeqCst);
+    let mut served = client(&path);
+    assert!(served.initialize(conformance::initialize()).is_ok());
+    stop.cancel();
+    done.recv().unwrap();
+}

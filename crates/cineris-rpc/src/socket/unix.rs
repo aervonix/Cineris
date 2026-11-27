@@ -33,6 +33,12 @@
 //!   its own that `/proc` hides from the server (one that ran a set-user-id
 //!   program, or made itself not dumpable): it is defence in depth beside
 //!   the sandbox, which keeps a confined command from any Unix socket.
+//! - **The front end's check of each peer** ([`super::PeerCheck`]), after
+//!   that: `cineris serve` refuses a peer under any harness's session's
+//!   command, read as the approving subcommands read their own process (the
+//!   review of step 28, finding 3: another harness's command, another
+//!   session of Cineris's included, could otherwise answer this server's
+//!   trust questions and approvals).
 
 #![allow(
     clippy::disallowed_methods,
@@ -46,7 +52,7 @@ use std::io;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
-use super::{Accepted, ListenOptions, Place};
+use super::{Accepted, ListenOptions, PeerCheck, Place};
 
 /// The user the server runs as: the owner of `/proc/self`, which is the
 /// process's effective uid, read with no `unsafe`.
@@ -257,6 +263,8 @@ pub(super) struct Listener {
     uid: u32,
     /// Held for the listener's life; let go after the socket is removed.
     lock: Option<File>,
+    /// The front end's check of each peer, after the server's own.
+    peer_check: Option<PeerCheck>,
 }
 
 impl Listener {
@@ -295,6 +303,7 @@ impl Listener {
             listener: None,
             uid,
             lock: Some(lock),
+            peer_check: options.peer_check.clone(),
         })
     }
 
@@ -346,6 +355,15 @@ impl Listener {
                 )));
             }
             Line::Elsewhere => {}
+        }
+        if let Some(why) = self
+            .peer_check
+            .as_ref()
+            .and_then(|check| check.refusal(pid))
+        {
+            return Ok(Accepted::Refused(format!(
+                "a peer refused (pid {pid}): {why}"
+            )));
         }
         let described = format!(
             "pid {}",

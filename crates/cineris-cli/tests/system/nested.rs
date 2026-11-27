@@ -18,8 +18,10 @@ struct Nested {
 }
 
 /// The subcommands that approve, trust or answer for the person, each run
-/// by the script under the session's command.
-fn approving(folder: &Path) -> [Vec<String>; 12] {
+/// by the script under the session's command: since the review of step 28
+/// (finding 1), `project`'s changes, `auth login` and `logout`, and `stats
+/// reset` among them.
+fn approving(folder: &Path) -> [Vec<String>; 23] {
     let folder = folder.to_string_lossy().into_owned();
     let words = |line: &[&str]| -> Vec<String> { line.iter().map(|w| (*w).to_owned()).collect() };
     [
@@ -35,8 +37,54 @@ fn approving(folder: &Path) -> [Vec<String>; 12] {
         words(&["permissions", "revoke", "a_1"]),
         words(&["permissions", "forget"]),
         words(&["setup", "skill-folders", "on"]),
+        words(&["project", "add", "fact", "A fact of the review"]),
+        words(&[
+            "project",
+            "add",
+            "command",
+            "A check of the review",
+            "--purpose",
+            "check",
+            "--command",
+            "touch review-ran.txt",
+        ]),
+        words(&["project", "accept", "k_1"]),
+        words(&["project", "accept", "--shared"]),
+        words(&["project", "edit", "k_1", "changed"]),
+        words(&["project", "promote", "k_1"]),
+        words(&["project", "disable", "k_1"]),
+        words(&["project", "delete", "k_1"]),
+        words(&["auth", "login", "anthropic"]),
+        words(&["auth", "logout", "anthropic"]),
+        words(&["stats", "reset"]),
     ]
 }
+
+/// The variables that move where Cineris's configuration and approvals are
+/// read from, as the subcommands' own check compares them with the
+/// session's (`cineris_sandbox::session::moved_stores`): each is moved for
+/// one nested headless run of the script, which must be refused naming it
+/// (the review of step 28, finding 19: only `CINERIS_CONFIG` was tried, and
+/// an entry taken out of the check's list failed no test).
+const STORES: &[&str] = if cfg!(windows) {
+    &[
+        "USERPROFILE",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "ProgramData",
+        "CINERIS_CONFIG",
+        "CINERIS_DATA_DIR",
+    ]
+} else {
+    &[
+        "HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_STATE_HOME",
+        "XDG_DATA_HOME",
+        "CINERIS_CONFIG",
+        "CINERIS_DATA_DIR",
+    ]
+};
 
 impl Nested {
     /// Writes the script and runs the outer headless run, whose model asks
@@ -67,6 +115,14 @@ impl Nested {
                  bare.err\r\nendlocal\r\n",
                 crate::KEY
             );
+            for name in STORES {
+                let moved = machine.workspace.join("moved").join(name);
+                text.push_str(&format!(
+                    "setlocal\r\nset {name}={}\r\n\"{binary}\" -p hi > moved-{name}.out 2> \
+                     moved-{name}.err\r\nendlocal\r\n",
+                    moved.display()
+                ));
+            }
             for words in approving(&folder) {
                 let words: Vec<String> = words.iter().map(|word| format!("\"{word}\"")).collect();
                 text.push_str(&format!(
@@ -82,6 +138,13 @@ impl Nested {
                  moved.err\nCINERIS_CONFIG=evil.toml '{binary}' -p > bare.out 2> bare.err\n",
                 crate::KEY
             );
+            for name in STORES {
+                let moved = machine.workspace.join("moved").join(name);
+                text.push_str(&format!(
+                    "{name}='{}' '{binary}' -p hi > moved-{name}.out 2> moved-{name}.err\n",
+                    moved.display()
+                ));
+            }
             for words in approving(&folder) {
                 let words: Vec<String> = words.iter().map(|word| format!("'{word}'")).collect();
                 text.push_str(&format!(
@@ -126,7 +189,7 @@ impl Nested {
 #[test]
 fn sys_cineris_run_by_a_sessions_command_is_held_or_refused() {
     let world = Nested::run();
-    let rules: [crate::Rule<Nested>; 3] = [
+    let rules: [crate::Rule<Nested>; 4] = [
         (
             "a_nested_headless_run_is_held_to_read_only_and_says_so",
             a_nested_headless_run_is_held_to_read_only_and_says_so,
@@ -138,6 +201,10 @@ fn sys_cineris_run_by_a_sessions_command_is_held_or_refused() {
         (
             "an_approving_subcommand_refuses_under_a_sessions_command",
             an_approving_subcommand_refuses_under_a_sessions_command,
+        ),
+        (
+            "each_variable_that_moves_the_stores_refuses_a_nested_run",
+            each_variable_that_moves_the_stores_refuses_a_nested_run,
         ),
     ];
     crate::judge(&world, &rules);
@@ -210,6 +277,23 @@ fn a_nested_headless_run_with_its_stores_moved_is_refused(world: &Nested) {
     );
 }
 
+/// Each variable that moves where Cineris's configuration and approvals
+/// are read from, set otherwise than for the session for one nested
+/// headless run, refuses it, naming the variable, before it reads anything
+/// (the review of step 28, finding 19).
+fn each_variable_that_moves_the_stores_refuses_a_nested_run(world: &Nested) {
+    for name in STORES {
+        let said = world.read(&format!("moved-{name}.err"));
+        assert!(
+            said.contains(&format!("{name} is set otherwise")) && said.contains("was refused"),
+            "{name}: {said}\n{}",
+            shown(&world.run)
+        );
+        let out = world.read(&format!("moved-{name}.out"));
+        assert!(out.is_empty(), "{name}: {out}");
+    }
+}
+
 /// The subcommands that approve, run by a session's command that the
 /// permission engine cannot see them in (a script file), refuse, and write
 /// nothing; run from a shell the test starts, under the test runner's own
@@ -231,6 +315,15 @@ fn an_approving_subcommand_refuses_under_a_sessions_command(world: &Nested) {
         "`cineris permissions revoke` was refused",
         "`cineris permissions forget` was refused",
         "`cineris setup skill-folders` was refused",
+        "`cineris project add` was refused",
+        "`cineris project accept` was refused",
+        "`cineris project edit` was refused",
+        "`cineris project promote` was refused",
+        "`cineris project disable` was refused",
+        "`cineris project delete` was refused",
+        "`cineris auth login` was refused",
+        "`cineris auth logout` was refused",
+        "`cineris stats reset` was refused",
     ] {
         assert!(said.contains(what), "{what}: {said}\n{}", shown(&world.run));
     }
@@ -244,6 +337,11 @@ fn an_approving_subcommand_refuses_under_a_sessions_command(world: &Nested) {
         !config.join("extensions").join("tracker").exists(),
         "{said}"
     );
+    // `project add` wrote no entry: the person's own listing has none.
+    let entries = machine.run(&["project", "list", "--all", "--json"]);
+    entries.expect_code(0);
+    let listed: serde_json::Value = serde_json::from_str(&entries.stdout).unwrap();
+    assert_eq!(listed["entries"], serde_json::json!([]), "{listed}\n{said}");
     let binary = Path::new(crate::CINERIS);
     #[cfg(windows)]
     let shell = {

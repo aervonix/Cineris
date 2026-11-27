@@ -1,0 +1,167 @@
+# The fixes to step 28's guards of the harness's own approvals, from its
+# independent review (findings 1, 2, 3, 7, 17 and 19): `cineris project`'s
+# changes, `auth login` and `logout` and `stats reset` refused under a
+# session's command; the Windows walks that fell open at their bound; the
+# RPC socket refusing any harness's commands; a harness that is process 1;
+# `ProgramData` among the variables that move the stores; and each of
+# those variables shown refused.
+#
+# The breaks of code only Windows builds carry `os: windows`; run them on a
+# runner: gh workflow run try --ref <branch> -f os=windows -f command="mutate <break>"
+
+[break] project-change-not-under-a-session
+rule: `cineris project accept`, `disable`, `delete` and `promote` refuse under a session's command before anything is read.
+file: crates/cineris-cli/src/commands.rs
+find: crate::not_under_a_session(name, &format!("project {action}"))?;
+replace: let _ = action;
+caught-by:
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
+
+[break] project-add-not-under-a-session
+rule: `cineris project add` refuses under a session's command before anything is read.
+file: crates/cineris-cli/src/commands.rs
+find: ProjectCommand::Add { .. } => crate::not_under_a_session(name, "project add")?,
+replace: ProjectCommand::Add { .. } => {}
+caught-by:
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
+
+[break] auth-login-not-under-a-session
+rule: `cineris auth login` refuses under a session's command before anything is read.
+file: crates/cineris-cli/src/commands.rs
+find: AuthCommand::Login { .. } => crate::not_under_a_session(name, "auth login")?,
+replace: AuthCommand::Login { .. } => {}
+caught-by:
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
+
+[break] stats-reset-not-under-a-session
+rule: `cineris stats reset` refuses under a session's command before anything is read.
+file: crates/cineris-cli/src/commands.rs
+find: crate::not_under_a_session(name, "stats reset")?;
+replace: let _ = name;
+caught-by:
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
+
+[break] service-walk-falls-open-at-its-bound
+rule: On Windows a service's start through more command interpreters and runtimes than the walk reads is not known, which refuses, and not "no service".
+file: crates/cineris-sandbox/src/session.rs
+find: Under::Unknown(past)
+replace: { let _ = past; Under::Nothing }
+packages: cineris-sandbox
+caught-by:
+    cineris-sandbox session::tests::a_services_start_through_more_interpreters_than_the_bound_is_not_known
+
+[break] line-of-parents-falls-open-at-its-bound
+rule: On Windows a line of parents that goes on past the 64 processes it reads is not known, which refuses where nothing holds the process.
+file: crates/cineris-sandbox/src/session.rs
+find: Runs::Unknown(past)
+replace: { let _ = past; Runs::No }
+packages: cineris-sandbox
+caught-by:
+    cineris-sandbox session::tests::the_line_of_parents_is_read_through_any_program_to_its_end
+
+[break] walk-stops-before-process-1
+rule: On Linux the line of parents ends only at process 0 or at a process that is its own parent: a harness that is process 1 is seen.
+file: crates/cineris-sandbox/src/session.rs
+in: walk
+find: if at == 0 {
+replace: if at <= 1 {
+packages: cineris-sandbox,cineris-cli
+caught-by:
+    cineris-sandbox session::tests::a_harness_that_is_process_1_is_seen_and_the_line_ends_at_process_0
+    cineris-cli::system guards::sys_a_harness_that_is_process_1_is_seen
+
+[break] stores-harness-stops-before-process-1
+rule: On Linux the session's process whose environment a nested run's stores are compared with is found when it is process 1.
+file: crates/cineris-sandbox/src/session.rs
+find: Seen::Of { parent, .. } if parent != at => at = parent,
+replace: Seen::Of { parent, .. } if parent > 1 && parent != at => at = parent,
+packages: cineris-cli
+caught-by:
+    cineris-cli::system guards::sys_a_harness_that_is_process_1_is_seen
+
+[break] stores-not-compared-without-a-harness
+rule: On Linux, under a session's command whose harness is not found on the line, a nested run's stores cannot be compared with the session's, and it is refused.
+file: crates/cineris-sandbox/src/session.rs
+find: return Some("the session's own environment, whose process was not found,".to_owned());
+replace: return None;
+packages: cineris-cli
+caught-by:
+    cineris-cli::system guards::sys_a_nested_run_whose_line_cannot_be_read_is_refused_with_its_stores_moved
+
+[break] a-peers-line-is-not-read
+rule: On Linux another process's line of parents is read as this process's own, from its parent up.
+file: crates/cineris-sandbox/src/session.rs
+find: Seen::Of { parent, .. } => walk(parent, |pid| seen(&own, pid), false),
+replace: Seen::Of { .. } => Under::Nothing,
+packages: cineris-sandbox
+caught-by:
+    cineris-sandbox session::sys::tests::sys_another_processs_line_is_read_as_this_ones
+
+[break] serve-passes-no-peer-check
+rule: `cineris serve` refuses at the socket a client under any harness's session's command, read as the approving subcommands read their own process.
+file: crates/cineris-cli/src/serve.rs
+find: .map_or(Ok(()), Err)
+replace: .map_or(Ok(()), |_| Ok(()))
+packages: cineris-cli
+caught-by:
+    cineris-cli::system guards::sys_another_harnesss_command_is_refused_at_the_socket
+
+[break] socket-ignores-the-peer-check
+rule: The Unix socket's listener refuses a peer its front end's check refuses.
+file: crates/cineris-rpc/src/socket/unix.rs
+find: .and_then(|check| check.refusal(pid))
+replace: .and_then(|check| check.refusal(pid).filter(|_| false))
+packages: cineris-rpc,cineris-cli
+caught-by:
+    cineris-rpc::it socket::a_peer_the_front_ends_check_refuses_is_closed_unanswered
+    cineris-cli::system guards::sys_another_harnesss_command_is_refused_at_the_socket
+
+[break] pipe-ignores-the-peer-check
+rule: The Windows pipe's listener refuses a client its front end's check refuses.
+file: crates/cineris-rpc/src/socket/windows.rs
+find: if let Some(why) = peer_check.and_then(|check| check.refusal(pid)) {
+replace: if let Some(why) = peer_check.and_then(|check| check.refusal(pid).filter(|_| false)) {
+os: windows
+packages: cineris-rpc,cineris-cli
+caught-by:
+    cineris-rpc::it pipe::a_client_the_front_ends_check_refuses_is_closed_unanswered
+    cineris-cli::system guards::sys_another_harnesss_command_is_refused_at_the_socket
+
+[break] a-refuses-no-programdata
+rule: The permission engine refuses a run of Cineris in a line that sets `ProgramData`, which moves the managed configuration on Windows.
+file: crates/cineris-policy/src/approving.rs
+in: moves_stores
+find: | "PROGRAMDATA"
+replace:
+packages: cineris-policy
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] b-stores-no-programdata
+rule: On Windows a nested run with `ProgramData` set otherwise than for its session is refused.
+file: crates/cineris-sandbox/src/session.rs
+find: "ProgramData",
+replace:
+os: windows
+packages: cineris-cli
+caught-by:
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
+
+[break] b-stores-no-xdg-state-home
+rule: On Linux a nested run with `XDG_STATE_HOME` (the folder of `pins.toml` and `trust.toml`) set otherwise than for its session is refused.
+file: crates/cineris-sandbox/src/session.rs
+find: "XDG_STATE_HOME",
+replace:
+packages: cineris-cli
+caught-by:
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
+
+[break] b-stores-no-localappdata
+rule: On Windows a nested run with `LOCALAPPDATA` set otherwise than for its session is refused.
+file: crates/cineris-sandbox/src/session.rs
+find: "LOCALAPPDATA",
+replace:
+os: windows
+packages: cineris-cli
+caught-by:
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
