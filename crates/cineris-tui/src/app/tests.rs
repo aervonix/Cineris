@@ -3536,9 +3536,14 @@ fn the_loop_closes_the_terminal_to_others_while_the_password_is_asked() {
     let modes = Arc::new(Mutex::new(Vec::new()));
     let device = Closing {
         // The core's waker; then `Ctrl+C`, which answers the dialog with
-        // nothing whenever it comes.
+        // nothing whenever it comes; then nothing more has arrived, and the
+        // frame after it is drawn.
         played: played(
-            vec![(Ready::Woken, Vec::new()), (Ready::Input, b"\x03".to_vec())],
+            vec![
+                (Ready::Woken, Vec::new()),
+                (Ready::Input, b"\x03".to_vec()),
+                (Ready::Timeout, Vec::new()),
+            ],
             base,
         ),
         modes: Arc::clone(&modes),

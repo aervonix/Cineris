@@ -21,10 +21,12 @@ use super::tui::{LIMIT, shows_ever};
 use crate::{Machine, shown};
 
 /// The person's password: what [`Machine::person`] sets up.
-pub const PASSWORD: &str = "the person's own password";
+/// Words of its own, so that no eight characters of it in a row are in
+/// anything the binary says.
+pub const PASSWORD: &str = "Vq7 tidemork 91 Plover";
 
 /// Another, which is not theirs.
-const WRONG: &str = "not the person's password";
+const WRONG: &str = "Zr4 bellgrave 55 Mottle";
 
 /// What the binary ended with, as the shell said, and every row it showed.
 pub struct Ended {
@@ -507,10 +509,19 @@ fn sys_approvals_reset_and_status() {
         "{}",
         shown(&after)
     );
-    // The old password no longer signs: `permissions trust` takes the new.
-    let old = machine.signing(&["permissions", "trust"], &[], PASSWORD);
+    // The old password no longer signs: it is asked again, and `Ctrl+C`
+    // trusts nothing.
+    let mut session = machine.tui(&["permissions", "trust"]);
+    type_password(&mut session, PASSWORD);
+    session.wait_for(LIMIT, "asked again", |t| {
+        shows_ever(t, "that is not the password of your approvals")
+    });
+    session.wait_for(LIMIT, "the field", field_ready);
+    session.send(b"\x03");
+    let old = ended(&mut session);
+    old.expect_code(2);
     assert!(
-        old.screen.contains("that is not the password"),
+        old.screen.contains("the project was not trusted"),
         "{}",
         old.screen
     );
@@ -530,15 +541,7 @@ fn sys_the_application_asks_for_the_password_when_a_session_has_approvals_to_use
         .signing(&["permissions", "trust"], &[], PASSWORD)
         .expect_code(0);
 
-    let mut session = machine.tui(&[]);
-    session.wait_for(LIMIT, "the question", |t| {
-        t.shows("to use this session's approvals")
-    });
-    type_password(&mut session, PASSWORD);
-    session.wait_for(LIMIT, "the project's model", |t| {
-        shows_ever(t, "claude-opus-5-5")
-    });
-    super::tui::quit(&mut session, &cineris_testkit::Phases::new("unlocked"));
+    header_with_the_password(&machine, "claude-opus-5-5");
 
     let mut session = machine.tui(&[]);
     session.wait_for(LIMIT, "the question", |t| {
