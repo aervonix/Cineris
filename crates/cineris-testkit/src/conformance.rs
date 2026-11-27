@@ -655,6 +655,7 @@ pub fn scenarios() -> Vec<Scenario> {
                         trusted: true,
                         never: false,
                         keep: false,
+                        signature: None,
                     })
                 }),
                 Step::Finish,
@@ -737,6 +738,7 @@ pub fn scenarios() -> Vec<Scenario> {
                         trusted: true,
                         never: false,
                         keep: false,
+                        signature: None,
                     })
                 }),
                 Step::Finish,

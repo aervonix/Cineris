@@ -1,0 +1,81 @@
+# The signed approvals step, part: the core checks what it uses
+# (docs/steps/signed-approvals/parts/core-wiring.md). What a session uses
+# counts only signed by the key the person opened their approvals with;
+# what the stores pin restricts whatever its signature; a yes to the trust
+# question is the person's signature over what it proposes.
+
+# ------------------------------------------------- the restriction side
+
+[break] uncounted-pins-taken-as-counting
+rule: The user's pins that do not count with the session's key (no key, unsigned, not theirs) leave each of the user's extensions found unjudged, holding its gates, as a pin store that cannot be read does.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: user_pins
+find: Ok(pins) if pins.counts() => Ok(pins),
+replace: Ok(pins) if true => Ok(pins),
+caught-by:
+    cineris-core::it signed::a_pin_taken_out_by_hand_lifts_no_gate
+    cineris-core::it signed::a_pinned_extension_holds_its_gates_without_the_key
+    cineris-core::it signed::an_extension_pinned_with_another_key_is_not_loaded
+    cineris-core::it signed::an_older_pin_store_approves_nothing_and_keeps_its_gates
+    cineris-core::it signed::a_reset_lifts_no_extension_gate
+
+[break] an-uncounted-entry-holds-no-extension-gate
+rule: A project's entry in the trust store that is there and does not count holds the gates of the extensions it pins, the project not trusted.
+file: crates/cineris-core/src/ext/found.rs
+in: Uncounted::of
+find: (stored.has_entry() && !stored.is_trusted()).then(
+replace: (stored.has_entry() && stored.is_trusted()).then(
+caught-by:
+    cineris-core::it signed::a_project_trusted_with_another_key_or_copied_from_another_is_not_trusted
+
+[break] an-uncounted-entry-holds-no-hook-gate
+rule: A project's entry in the trust store that is there and does not count holds each project hook command it pins on its event, failing, the project not trusted.
+file: crates/cineris-core/src/ext/hooks.rs
+in: in_session
+find: stored.has_entry() && !stored.is_trusted()
+replace: stored.has_entry() && stored.is_trusted()
+caught-by:
+    cineris-core ext::hooks::tests::a_hook_an_entry_that_does_not_count_pins_holds_its_event
+    cineris-core::it signed::a_projects_pinned_hook_holds_its_gate_without_the_key
+    cineris-core::it signed::an_older_trust_store_trusts_nothing_and_keeps_its_hooks_gate
+    cineris-core::it signed::a_reset_lifts_no_hook_gate
+
+[break] an-unopened-entry-is-asked-about
+rule: A project whose entry does not count only because the person has not opened their approvals is not asked about as a new project.
+file: crates/cineris-core/src/assemble.rs
+in: look
+find: let unopened = verifier.is_none() && stored.has_entry() && !stored.is_trusted();
+replace: let unopened = false;
+caught-by:
+    cineris-core::it signed::a_projects_pinned_hook_holds_its_gate_without_the_key
+
+# ----------------------------------------------------- a yes is a signature
+
+[break] an-unsigned-yes-is-taken
+rule: A yes to a trust question with a proposal is refused (`invalid_answer`) unless it carries the person's signature over the proposal, checked with the open key: it trusts nothing, and the question stays open.
+file: crates/cineris-core/src/clients.rs
+in: trust_answer_problem
+find: return unsigned_yes(proposal, answer.signature.as_deref(), verifier);
+replace: return None;
+caught-by:
+    cineris-core::it signed::a_yes_trusts_only_signed_by_the_person
+    cineris-core::it signed::an_unsigned_or_wrongly_signed_yes_trusts_nothing
+
+[break] another-keys-yes-is-taken
+rule: A yes signed by another key than the one the person's approvals are open with is refused, and trusts nothing.
+file: crates/cineris-core/src/clients.rs
+in: unsigned_yes
+find: (!verifier.verify(&statement, &signature)).then_some(
+replace: (false).then_some(
+caught-by:
+    cineris-core::it signed::a_yes_trusts_only_signed_by_the_person
+    cineris-core::it signed::an_unsigned_or_wrongly_signed_yes_trusts_nothing
+
+[break] a-moved-yes-is-not-asked-again
+rule: A signed yes whose project entry changed while the question was open writes nothing, and the question is put again with what the entry holds now.
+file: crates/cineris-core/src/assemble.rs
+in: kept_answer
+find: Err(cineris_policy::TrustError::Moved { .. }) => Ok(Answered::AskAgain),
+replace: Err(cineris_policy::TrustError::Moved { .. }) => Ok(Answered::Trust(unsigned_yes(trust))),
+caught-by:
+    cineris-core::it trusting::a_yes_after_the_projects_trust_changed_meanwhile_is_not_used

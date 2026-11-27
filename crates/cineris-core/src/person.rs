@@ -30,7 +30,7 @@ use std::sync::{Arc, PoisonError, RwLock};
 use cineris_policy::signed::{
     Cost, KEY_FILE, KeyError, KeyFile, MIN_PASSWORD_CHARS, PersonKey, Verifier, fresh_salt,
 };
-use cineris_policy::{PinStore, TrustStore};
+use cineris_policy::{Checked, PinStore, TrustStore};
 use cineris_protocol::ids::Timestamp;
 
 use crate::core::Core;
@@ -117,6 +117,42 @@ impl From<KeyError> for KeyRefusal {
             other => Self::Failed(other.to_string()),
         }
     }
+}
+
+/// Why what a store holds approves nothing in this session, in words that
+/// follow a colon (the session is told it): `NoKey`, `Unsigned` and
+/// `NotTheirs`. Empty for the two that count.
+pub(crate) fn uncounted(checked: Checked) -> &'static str {
+    match checked {
+        Checked::NoKey => "your approvals are not open in this session",
+        Checked::Unsigned => {
+            "written by an older version of Cineris, or before your password was reset: asked \
+             again"
+        }
+        Checked::NotTheirs => "not signed by your key: changed by something other than Cineris",
+        Checked::Signed | Checked::Empty => "",
+    }
+}
+
+/// What the session is told, once, of a project whose entry in the trust
+/// store does not count (`checked`): it is not trusted, and what its entry
+/// pins holds its gates.
+pub(crate) fn project_uncounted(checked: Checked) -> String {
+    let out = match checked {
+        Checked::NoKey => {
+            "Open your approvals with your password when a session opens to use its trust"
+        }
+        _ => {
+            "The project's trust question asks about it again when a session opens, and \
+             `cineris permissions trust` trusts it"
+        }
+    };
+    format!(
+        "This project's trust does not count in this session ({}), so nothing of it that \
+         needs trust is used: each hook and extension its trust approved holds its gates, \
+         failing, refusing every call and prompt it gates. {out}.",
+        uncounted(checked)
+    )
 }
 
 /// What a reset took the signature off.
@@ -215,7 +251,7 @@ impl Core {
         if self.approval_key()?.is_some() {
             return Err(KeyRefusal::KeyExists);
         }
-        self.make_key(password)
+        self.make_key(password, Cost::STANDARD)
     }
 
     /// Sets a new key from the password the person chose, after taking the
@@ -227,9 +263,23 @@ impl Core {
     ///
     /// [`KeyRefusal::TooShort`] (nothing changed), or a store or the key
     /// file could not be written.
-    pub fn reset_approvals(
+    pub fn reset_approvals(&self, password: &[u8]) -> Result<(PersonKey, ResetReport), KeyRefusal> {
+        self.reset_approvals_at(password, Cost::STANDARD)
+    }
+
+    /// [`reset_approvals`](Self::reset_approvals), the new key made at
+    /// `cost`: for tests, whose unoptimised builds take seconds at the
+    /// standard cost. Nothing of the product calls it, so that every reset a
+    /// person makes writes the standard cost (the review of the design).
+    ///
+    /// # Errors
+    ///
+    /// As [`reset_approvals`](Self::reset_approvals).
+    #[doc(hidden)]
+    pub fn reset_approvals_at(
         &self,
         password: &[u8],
+        cost: Cost,
     ) -> Result<(PersonKey, ResetReport), KeyRefusal> {
         let state = self
             .state_dir()
@@ -250,16 +300,16 @@ impl Core {
             .strip_signatures()
             .map_err(|failure| KeyRefusal::Failed(failure.to_string()))?;
         move_aside(&state.root().join(KEY_FILE)).map_err(KeyRefusal::Failed)?;
-        let key = self.make_key(password)?;
+        let key = self.make_key(password, cost)?;
         Ok((key, ResetReport { pins, projects }))
     }
 
-    fn make_key(&self, password: &[u8]) -> Result<PersonKey, KeyRefusal> {
+    fn make_key(&self, password: &[u8], cost: Cost) -> Result<PersonKey, KeyRefusal> {
         let path = self
             .approval_key_file()
             .ok_or_else(|| KeyRefusal::Failed("no state directory is known".to_owned()))?;
         let now = self.inner.options.clock.now().to_timestamp();
-        let (file, key) = KeyFile::make(password, fresh_salt()?, Cost::STANDARD, now)?;
+        let (file, key) = KeyFile::make(password, fresh_salt()?, cost, now)?;
         file.write(&path, &*self.inner.options.clock)?;
         // A reset's new key replaces an open one: the old one checks
         // nothing that is left signed.

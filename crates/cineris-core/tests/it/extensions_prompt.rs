@@ -57,13 +57,14 @@ fn write_with_prompt(folder: &Path, name: &str, text: &str) {
 
 /// Pins the user's extension `name` in `folder` as it is now.
 fn pin_named(world: &World, folder: &Path, name: &str) {
-    PinStore::new(state(world).pins_file(), clock(world))
-        .pin(&Definition {
+    crate::person().pin(
+        &PinStore::new(state(world).pins_file(), clock(world)),
+        &Definition {
             kind: TrustResourceKind::Extension,
             name: name.to_owned(),
             hash: Snapshot::read(folder).unwrap().hash(),
-        })
-        .unwrap();
+        },
+    );
 }
 
 /// Registers the extension in `folder` as approving it does, and keeps

@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use cineris_base::{PathOptions, PathResolver};
 use cineris_core::{Client, ClientInfo, Core, OpError, Outgoing};
-use cineris_policy::{Definition, TrustStore};
+use cineris_policy::{Definition, ProjectTrust, TrustStore};
 use cineris_protocol::lease::{Effect, Rule, RuleAction};
 use cineris_protocol::methods::{
     Op, OpResult, ServerRequest, ServerResponse, SessionNewParams, TrustRequest, TrustResourceKind,
@@ -44,11 +44,11 @@ enum Answer {
     },
 }
 
+/// A yes, signed by the person as a front end signs it (`crate::signed`).
 fn trust_it() -> Answer {
     Answer::With(TrustResponse {
         trusted: true,
-        never: false,
-        keep: false,
+        ..TrustResponse::default()
     })
 }
 
@@ -58,9 +58,8 @@ fn not_now() -> Answer {
 
 fn never() -> Answer {
     Answer::With(TrustResponse {
-        trusted: false,
         never: true,
-        keep: false,
+        ..TrustResponse::default()
     })
 }
 
@@ -126,10 +125,22 @@ async fn answering(
                 id,
                 request: ServerRequest::Trust(request),
             }) => {
-                asked.push(request);
+                let first = asked.is_empty();
+                // A yes is signed by the person, as a front end signs it.
+                let yes = crate::yes_to(&request);
+                let signed = |response: &TrustResponse| crate::signed(&request, response.clone());
+                let response = match answer {
+                    Answer::With(response) => Some(signed(response)),
+                    _ => None,
+                };
+                asked.push(request.clone());
                 match answer {
-                    Answer::With(response) => core
-                        .respond(client.id, &id, ServerResponse::Trust(response.clone()))
+                    Answer::With(_) => core
+                        .respond(
+                            client.id,
+                            &id,
+                            ServerResponse::Trust(response.expect("an answer")),
+                        )
                         .expect("the question is open"),
                     Answer::ChangeThenTrust => {
                         // `git pull` brings a new rule while the dialog is
@@ -138,19 +149,20 @@ async fn answering(
                             "{PROJECT}\n[[permissions.rules]]\neffect = \"exec\"\nmatch = \
                              \"curl *\"\naction = \"allow\"\n"
                         ));
-                        core.respond(
-                            client.id,
-                            &id,
-                            ServerResponse::Trust(TrustResponse {
-                                trusted: true,
-                                never: false,
-                                keep: false,
-                            }),
-                        )
-                        .expect("the question is open");
+                        core.respond(client.id, &id, ServerResponse::Trust(yes))
+                            .expect("the question is open");
                     }
                     Answer::Leave => core.disconnect(client.id).await,
                     Answer::ShutDown => core.shutdown().await,
+                    // A question put again (the entry moved under a signed
+                    // yes) is answered not now.
+                    Answer::UntrustThenTrust { .. } if !first => core
+                        .respond(
+                            client.id,
+                            &id,
+                            ServerResponse::Trust(TrustResponse::default()),
+                        )
+                        .expect("the question is open"),
                     Answer::UntrustThenTrust { refuse } => {
                         let (store, key) = store(world);
                         if *refuse {
@@ -158,16 +170,8 @@ async fn answering(
                         } else {
                             assert!(store.revoke(&key).unwrap());
                         }
-                        core.respond(
-                            client.id,
-                            &id,
-                            ServerResponse::Trust(TrustResponse {
-                                trusted: true,
-                                never: false,
-                                keep: false,
-                            }),
-                        )
-                        .expect("the question is open");
+                        core.respond(client.id, &id, ServerResponse::Trust(yes))
+                            .expect("the question is open");
                     }
                 }
             }
@@ -179,6 +183,13 @@ async fn answering(
 
 fn model(state: &SessionState) -> &str {
     state.roles[&ModelRole::Main].model.as_str()
+}
+
+/// The project's trust as a session the person opened reads it.
+fn read_stored(store: &TrustStore, key: &cineris_protocol::ProjectKey) -> ProjectTrust {
+    store
+        .project(key, Some(&crate::person().verifier()))
+        .unwrap()
 }
 
 fn store(world: &World) -> (TrustStore, cineris_protocol::ProjectKey) {
@@ -261,7 +272,7 @@ fn a_yes_pins_what_was_shown_and_the_session_is_trusted() {
     );
     assert_eq!(model(&state), OTHER_MODEL, "the project's model applies");
     let (store, key) = store(&world);
-    let trust = store.project(&key).unwrap();
+    let trust = read_stored(&store, &key);
     assert!(trust.is_trusted());
     // A later core asks nothing, and is trusted.
     let later = world.core();
@@ -283,8 +294,8 @@ fn not_now_is_untrusted_and_not_asked_again_in_this_process() {
     assert!(asked.is_empty(), "asked twice in one process");
     assert_eq!(model(&state.expect("the session opens")), MODEL);
     let (store, key) = store(&world);
-    assert!(!store.project(&key).unwrap().is_trusted());
-    assert!(!store.project(&key).unwrap().is_refused());
+    assert!(!read_stored(&store, &key).is_trusted());
+    assert!(!read_stored(&store, &key).is_refused());
     let later = world.core();
     let (_, asked) = world.run(open(&world, &later, ClientInfo::user(), not_now()));
     assert_eq!(asked.len(), 1, "a later process asks again");
@@ -306,7 +317,7 @@ fn never_is_kept_across_starts_until_the_project_is_trusted() {
         "the session it was said in says it"
     );
     let (store, key) = store(&world);
-    assert!(store.project(&key).unwrap().is_refused());
+    assert!(read_stored(&store, &key).is_refused());
     let later = world.core();
     let (state, asked) = world.run(open(&world, &later, ClientInfo::user(), trust_it()));
     assert!(asked.is_empty(), "a refused project was asked about");
@@ -321,8 +332,8 @@ fn never_is_kept_across_starts_until_the_project_is_trusted() {
     let (_, asked) = world.run(open(&world, &world.core(), ClientInfo::user(), never()));
     assert_eq!(asked.len(), 1, "a forgotten project was not asked about");
     // Trusting it lifts the never.
-    later.trust_project(&project).unwrap();
-    assert!(!store.project(&key).unwrap().is_refused());
+    later.trust_project(&project, &crate::person_key()).unwrap();
+    assert!(!read_stored(&store, &key).is_refused());
     let (state, _) = world.run(open(&world, &world.core(), ClientInfo::user(), not_now()));
     assert_eq!(model(&state.expect("the session opens")), OTHER_MODEL);
 }
@@ -338,9 +349,13 @@ fn a_project_whose_rules_changed_is_asked_about_them() {
         pattern: "docs/**".to_owned(),
         action: RuleAction::Allow,
     };
-    store
-        .trust(&key, "~/work/app", &[Definition::of_rules(&[seen])], true)
-        .unwrap();
+    crate::person().trust(
+        &store,
+        &key,
+        "~/work/app",
+        &[Definition::of_rules(&[seen])],
+        true,
+    );
     let core = world.core();
     let (state, asked) = world.run(open(&world, &core, ClientInfo::user(), trust_it()));
     assert_eq!(asked.len(), 1);
@@ -362,7 +377,9 @@ fn a_project_whose_rules_changed_is_asked_about_them() {
 /// written, a never said meanwhile stays on disk, and the session opens
 /// with the trust as it stands now (the review of step 23's fixes: a yes to
 /// changed rules is no yes to the whole project, git included, nor past a
-/// never). A project revoked meanwhile is asked about afresh.
+/// never). The yes was signed over the entry as it was, which moved: a
+/// project revoked meanwhile is asked about afresh at once, as a project not
+/// trusted (the signed approvals step), and one refused is not asked.
 #[test]
 fn a_yes_after_the_projects_trust_changed_meanwhile_is_not_used() {
     for refuse in [false, true] {
@@ -373,9 +390,13 @@ fn a_yes_after_the_projects_trust_changed_meanwhile_is_not_used() {
             pattern: "docs/**".to_owned(),
             action: RuleAction::Allow,
         };
-        store
-            .trust(&key, "~/work/app", &[Definition::of_rules(&[seen])], true)
-            .unwrap();
+        crate::person().trust(
+            &store,
+            &key,
+            "~/work/app",
+            &[Definition::of_rules(&[seen])],
+            true,
+        );
         let core = world.core();
         let (state, asked) = world.run(open(
             &world,
@@ -383,11 +404,14 @@ fn a_yes_after_the_projects_trust_changed_meanwhile_is_not_used() {
             ClientInfo::user(),
             Answer::UntrustThenTrust { refuse },
         ));
-        assert_eq!(asked.len(), 1);
-        assert!(asked[0].resources.iter().any(|resource| resource.changed));
+        assert_eq!(asked.len(), if refuse { 1 } else { 2 }, "refuse={refuse}");
+        assert!(asked[0].trusted && asked[0].resources.iter().any(|resource| resource.changed));
+        if !refuse {
+            assert!(!asked[1].trusted, "asked again as a project not trusted");
+        }
         let state = state.expect("the session opens");
         assert_eq!(model(&state), MODEL, "refuse={refuse}");
-        let stored = store.project(&key).unwrap();
+        let stored = read_stored(&store, &key);
         assert!(!stored.is_trusted(), "refuse={refuse}");
         assert_eq!(stored.is_refused(), refuse, "the never stays");
         assert_eq!(
@@ -398,16 +422,17 @@ fn a_yes_after_the_projects_trust_changed_meanwhile_is_not_used() {
                 cineris_protocol::session::TrustStanding::Untrusted
             })
         );
+        // Not now to the question put again, or refused: not asked again
+        // in this process.
         let (_, again) = world.run(open(&world, &core, ClientInfo::user(), not_now()));
-        assert_eq!(again.len(), usize::from(!refuse), "refuse={refuse}");
+        assert!(again.is_empty(), "refuse={refuse}");
     }
 }
 
 fn keep() -> Answer {
     Answer::With(TrustResponse {
-        trusted: false,
-        never: false,
         keep: true,
+        ..TrustResponse::default()
     })
 }
 
@@ -420,14 +445,13 @@ fn trusted_with_other_rules(world: &World, git_shown: bool) {
         pattern: "docs/**".to_owned(),
         action: RuleAction::Allow,
     };
-    store
-        .trust(
-            &key,
-            "~/work/app",
-            &[Definition::of_rules(&[seen])],
-            git_shown,
-        )
-        .unwrap();
+    crate::person().trust(
+        &store,
+        &key,
+        "~/work/app",
+        &[Definition::of_rules(&[seen])],
+        git_shown,
+    );
 }
 
 /// A trusted project whose rules changed is asked about what is new in it,
@@ -455,7 +479,7 @@ fn keep_of_a_trusted_project_keeps_its_trust_without_the_new_rules() {
         Some(cineris_protocol::session::TrustStanding::RulesChanged)
     );
     let (store, key) = store(&world);
-    let stored = store.project(&key).unwrap();
+    let stored = read_stored(&store, &key);
     assert!(stored.is_trusted() && !stored.is_refused());
     assert!(stored.git_trusted(), "git trusted before stays trusted");
     // Not asked again while the rules are those, in a later process.
@@ -494,7 +518,7 @@ fn a_first_yes_after_a_never_said_meanwhile_is_not_used() {
         Some(cineris_protocol::session::TrustStanding::Never)
     );
     let (store, key) = store(&world);
-    let stored = store.project(&key).unwrap();
+    let stored = read_stored(&store, &key);
     assert!(stored.is_refused() && !stored.is_trusted());
 }
 
@@ -518,7 +542,7 @@ fn keep_of_new_rules_and_new_git_declines_both() {
     assert!(kinds.contains(&TrustResourceKind::Rules), "{kinds:?}");
     assert_eq!(model(&state.expect("the session opens")), MODEL);
     let (store, key) = store(&world);
-    let stored = store.project(&key).unwrap();
+    let stored = read_stored(&store, &key);
     assert!(stored.is_trusted() && stored.git_declined() && !stored.git_trusted());
     let (_, asked) = world.run(open(&world, &world.core(), ClientInfo::user(), trust_it()));
     assert!(asked.is_empty(), "{asked:#?}");
@@ -542,7 +566,7 @@ fn a_trusted_folder_that_became_a_repository_is_asked_about_git() {
                 .all(|resource| resource.kind != TrustResourceKind::Repository)
         );
         let (store, key) = store(&world);
-        assert!(!store.project(&key).unwrap().git_trusted());
+        assert!(!read_stored(&store, &key).git_trusted());
         // `git init`, as a `.git` the user owns.
         std::fs::create_dir_all(world.workspace.join(".git")).unwrap();
         let given = match answer {
@@ -568,7 +592,7 @@ fn a_trusted_folder_that_became_a_repository_is_asked_about_git() {
             OTHER_MODEL,
             "{answer}: the rules stay trusted"
         );
-        let stored = store.project(&key).unwrap();
+        let stored = read_stored(&store, &key);
         assert_eq!(stored.git_trusted(), answer == "yes", "{answer}");
         assert_eq!(stored.git_declined(), answer == "keep", "{answer}");
         let (_, asked) = world.run(open(&world, &world.core(), ClientInfo::user(), not_now()));
@@ -587,40 +611,57 @@ fn a_trusted_folder_that_became_a_repository_is_asked_about_git() {
         // `cineris permissions trust` in a repository trusts its git with
         // the rest, and says so.
         if answer == "not now" {
-            let trusted = later.trust_project(&project).unwrap();
+            let trusted = later.trust_project(&project, &crate::person_key()).unwrap();
             assert!(trusted.git && trusted.was_trusted);
-            assert!(store.project(&key).unwrap().git_trusted());
+            assert!(read_stored(&store, &key).git_trusted());
         }
     }
 }
 
-/// A store of version 1, from before git was pinned, is read with git
-/// never shown: a trusted repository is asked about git once more, and a
-/// yes writes the store as version 2.
+/// A store of an older version, which signed nothing, approves nothing: a
+/// project trusted by one is asked about again as a project not trusted,
+/// and a yes writes the store as version 3, signed (the signed approvals
+/// step: nothing unsigned is signed in bulk).
 #[test]
-fn a_version_1_store_asks_about_git_once_more() {
+fn a_store_of_an_older_version_is_asked_about_again() {
     let world = world("trusting_v1");
     std::fs::create_dir_all(world.workspace.join(".git")).unwrap();
     let (_, asked) = world.run(open(&world, &world.core(), ClientInfo::user(), trust_it()));
     assert_eq!(asked.len(), 1);
     let (store, key) = store(&world);
-    assert!(store.project(&key).unwrap().git_trusted());
+    assert!(read_stored(&store, &key).git_trusted());
     // The same trust as a build before the follow-ups wrote it.
     let written = std::fs::read_to_string(store.path()).unwrap();
-    let older = written
-        .replace("version = 2", "version = 1")
-        .replace("git = \"trusted\"\n", "");
+    let older: String = written
+        .replace("version = 3", "version = 1")
+        .lines()
+        .filter(|line| {
+            !line.starts_with("git =")
+                && !line.starts_with("revision =")
+                && !line.starts_with("signature =")
+        })
+        .map(|line| format!("{line}\n"))
+        .collect();
     assert_ne!(older, written);
     std::fs::write(store.path(), &older).unwrap();
-    assert!(store.project(&key).unwrap().from_older_store());
+    let old = read_stored(&store, &key);
+    assert!(old.from_older_store() && old.has_entry() && !old.is_trusted());
     let (state, asked) = world.run(open(&world, &world.core(), ClientInfo::user(), trust_it()));
-    assert_eq!(asked.len(), 1, "git is asked about once more");
-    assert!(asked[0].trusted);
+    assert_eq!(asked.len(), 1, "an older store is asked about again");
+    assert!(!asked[0].trusted, "as a project not trusted");
+    assert!(
+        asked[0]
+            .summary
+            .iter()
+            .any(|line| line.contains("not signed by your key")),
+        "{:?}",
+        asked[0].summary
+    );
     assert_eq!(model(&state.expect("the session opens")), OTHER_MODEL);
     assert!(
         std::fs::read_to_string(store.path())
             .unwrap()
-            .starts_with("version = 2")
+            .starts_with("version = 3")
     );
     let (_, asked) = world.run(open(&world, &world.core(), ClientInfo::user(), not_now()));
     assert!(asked.is_empty());
@@ -641,7 +682,7 @@ fn a_change_while_the_question_is_open_is_not_pinned() {
     ));
     assert_eq!(asked.len(), 1);
     let (store, key) = store(&world);
-    assert!(store.project(&key).unwrap().is_trusted());
+    assert!(read_stored(&store, &key).is_trusted());
     // The rule added meanwhile was not seen: what it would loosen is set
     // aside, the model with it.
     assert_eq!(model(&state.expect("the session opens")), MODEL);
@@ -908,14 +949,14 @@ fn an_answer_the_store_cannot_keep_still_opens_the_session() {
         Some(cineris_protocol::session::TrustStanding::ForTheRun)
     );
     let (store, key) = store(&world);
-    assert!(!store.project(&key).unwrap().is_trusted());
+    assert!(!read_stored(&store, &key).is_trusted());
     // Asked again by the same core, since nothing was kept; a never that
     // cannot be kept is not now: the session opens untrusted, and the core
     // does not ask again.
     let (state, asked) = world.run(open(&world, &core, ClientInfo::user(), never()));
     assert_eq!(asked.len(), 1);
     assert_eq!(model(&state.expect("the session opens")), MODEL);
-    assert!(!store.project(&key).unwrap().is_refused());
+    assert!(!read_stored(&store, &key).is_refused());
     let (_, asked) = world.run(open(&world, &core, ClientInfo::user(), trust_it()));
     assert!(asked.is_empty(), "{asked:#?}");
 }
@@ -931,6 +972,7 @@ fn an_answer_that_cannot_be_read_is_refused() {
         trusted,
         never,
         keep,
+        signature: None,
     };
     for (trusted_project, wrong) in [
         (false, answer(true, true, false)),
@@ -946,7 +988,7 @@ fn an_answer_that_cannot_be_read_is_refused() {
         }
         refused_then_not_now(&world, &wrong);
         let (store, key) = store(&world);
-        let stored = store.project(&key).unwrap();
+        let stored = read_stored(&store, &key);
         assert_eq!(stored.is_trusted(), trusted_project, "{wrong:?}");
         assert!(!stored.is_refused(), "{wrong:?}");
         assert_eq!(stored.git_trusted(), trusted_project, "{wrong:?}");
@@ -1037,7 +1079,7 @@ fn a_profile_only_the_project_defines_can_be_selected_and_its_settings_are_shown
     assert_eq!(model(&state.expect("the session opens")), OTHER_MODEL);
 
     let project = core.project(&world.workspace).unwrap();
-    let trusted = core.trust_project(&project).unwrap();
+    let trusted = core.trust_project(&project, &crate::person_key()).unwrap();
     let listed: Vec<(Option<&str>, String)> = trusted
         .settings
         .iter()

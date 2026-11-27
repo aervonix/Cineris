@@ -725,7 +725,7 @@ fn a_projects_hooks_reach_a_session_only_through_trust() {
     std::fs::remove_dir_all(&lock).unwrap();
     assert!(
         !trust_store(&world)
-            .project(&project_key(&world))
+            .project(&project_key(&world), Some(&crate::person().verifier()))
             .unwrap()
             .is_trusted()
     );
@@ -809,7 +809,9 @@ fn a_projects_hooks_reach_a_session_only_through_trust() {
         "{}",
         listed.detail
     );
-    let trusted = core.trust_project_with(&key, &[], &hooks).unwrap();
+    let trusted = core
+        .trust_project_with(&key, &[], &hooks, &crate::person_key())
+        .unwrap();
     assert_eq!(trusted.hooks, ["lint"]);
     assert!(core.project_hook_commands(&key).unwrap().is_empty());
     world.run(async {

@@ -236,8 +236,27 @@ fn refused(code: &str, message: impl Into<String>) -> Box<ErrorData> {
 /// trusted, and keep to one trusted already: a never to a question about
 /// what is new in a trusted project would take away the trust given before
 /// (the follow-ups of step 23).
-fn trust_answer_problem(request: &ServerRequest, answer: &TrustResponse) -> Option<&'static str> {
+///
+/// A yes to a question with a proposal is the person's signature over it
+/// (the signed approvals step): one with no signature, with one that is not
+/// one, or with one that is not the key's the core's approvals are open with
+/// (`verifier`), over exactly what the question proposed, is refused, and
+/// trusts nothing, not even for the session. So is any yes while the
+/// approvals are not open: the front end opens them before it answers.
+fn trust_answer_problem(
+    request: &ServerRequest,
+    answer: &TrustResponse,
+    verifier: Option<&cineris_policy::signed::Verifier>,
+) -> Option<&'static str> {
     let trusted_project = matches!(request, ServerRequest::Trust(request) if request.trusted);
+    if answer.trusted
+        && !answer.never
+        && !answer.keep
+        && let ServerRequest::Trust(asked) = request
+        && let Some(proposal) = &asked.proposal
+    {
+        return unsigned_yes(proposal, answer.signature.as_deref(), verifier);
+    }
     match answer {
         TrustResponse {
             trusted: true,
@@ -251,6 +270,7 @@ fn trust_answer_problem(request: &ServerRequest, answer: &TrustResponse) -> Opti
             keep: true,
             trusted,
             never,
+            ..
         } if *trusted || *never => Some(
             "A trust answer cannot be `keep` with `trusted` or `never`: `keep` goes with both \
              false.",
@@ -265,6 +285,44 @@ fn trust_answer_problem(request: &ServerRequest, answer: &TrustResponse) -> Opti
         ),
         _ => None,
     }
+}
+
+/// What is wrong with a yes's `signature` over `proposal`, checked with
+/// `verifier`: see [`trust_answer_problem`].
+fn unsigned_yes(
+    proposal: &cineris_protocol::methods::ApprovalProposal,
+    signature: Option<&str>,
+    verifier: Option<&cineris_policy::signed::Verifier>,
+) -> Option<&'static str> {
+    let Some(signature) = signature else {
+        return Some(
+            "A yes to this question is the person's signature over what it proposes: one \
+             without a `signature` trusts nothing, not even for this session. The question stays \
+             open.",
+        );
+    };
+    let Some(signature) = cineris_policy::signed::Signature::from_hex(signature) else {
+        return Some(
+            "A trust answer's `signature` is 128 lowercase hexadecimal digits: this one is not, \
+             so it trusts nothing. The question stays open.",
+        );
+    };
+    let Some(verifier) = verifier else {
+        return Some(
+            "The person's approvals are not open in this core, so no yes can be checked: open \
+             them with the person's password, then answer. The question stays open.",
+        );
+    };
+    let Ok(statement) = cineris_policy::signed::statement_of(proposal) else {
+        return Some(
+            "What this question proposes cannot be signed as it stands, so no yes is taken. The \
+             question stays open.",
+        );
+    };
+    (!verifier.verify(&statement, &signature)).then_some(
+        "The `signature` is not the one the person's key makes over what this question \
+         proposes, so it trusts nothing, not even for this session. The question stays open.",
+    )
 }
 
 impl Clients {
@@ -533,6 +591,7 @@ impl Clients {
         client: ClientId,
         id: &RequestId,
         response: ServerResponse,
+        verifier: Option<&cineris_policy::signed::Verifier>,
     ) -> Result<SessionId, Box<ErrorData>> {
         let who = lock(&self.clients)
             .get(&client.0)
@@ -573,7 +632,7 @@ impl Clients {
         // of a grant is, and the question stays open for an answer that
         // can be read (the review of step 23: it was taken as a yes).
         if let ServerResponse::Trust(answer) = &response
-            && let Some(problem) = trust_answer_problem(&request.request, answer)
+            && let Some(problem) = trust_answer_problem(&request.request, answer, verifier)
         {
             return Err(refused("invalid_answer", problem));
         }
@@ -806,14 +865,16 @@ mod tests {
             None,
         );
         for client in [observer, supervisor] {
-            let refused = clients.answer(client, &id, allow()).unwrap_err();
+            let refused = clients.answer(client, &id, allow(), None).unwrap_err();
             assert_eq!(refused.code, code::ROLE_NOT_ALLOWED);
         }
         // A user client that was not asked is refused too.
-        let refused = clients.answer(other_user, &id, allow()).unwrap_err();
+        let refused = clients.answer(other_user, &id, allow(), None).unwrap_err();
         assert_eq!(refused.code, code::ROLE_NOT_ALLOWED);
         // A client that is not connected at all.
-        let refused = clients.answer(ClientId(999), &id, allow()).unwrap_err();
+        let refused = clients
+            .answer(ClientId(999), &id, allow(), None)
+            .unwrap_err();
         assert_eq!(refused.code, code::ROLE_NOT_ALLOWED);
         assert!(answer.try_recv().is_err(), "a refused answer was delivered");
 
@@ -827,6 +888,7 @@ mod tests {
                     choice: ApprovalChoice::AllowOnce,
                     note: None,
                 }),
+                None,
             )
             .unwrap_err();
         assert_eq!(wrong.code, "request_not_open");
@@ -834,12 +896,12 @@ mod tests {
             answer.try_recv().is_err(),
             "an answer of another kind was delivered"
         );
-        assert_eq!(clients.answer(user, &id, allow()).unwrap(), session);
+        assert_eq!(clients.answer(user, &id, allow(), None).unwrap(), session);
         assert_eq!(
             answer_of(answer.try_recv().unwrap()).as_deref(),
             Some("yes")
         );
-        let late = clients.answer(user, &id, allow()).unwrap_err();
+        let late = clients.answer(user, &id, allow(), None).unwrap_err();
         assert_eq!(late.code, "request_not_open");
         assert!(!clients.close(&id), "an answered request is closed");
     }
@@ -876,9 +938,9 @@ mod tests {
         assert_eq!(put, id);
         assert!(queue.is_empty(), "only this session's, and once");
         // A question of another session is not this client's to answer.
-        let refused = clients.answer(late, &elsewhere, allow()).unwrap_err();
+        let refused = clients.answer(late, &elsewhere, allow(), None).unwrap_err();
         assert_eq!(refused.code, code::ROLE_NOT_ALLOWED);
-        assert_eq!(clients.answer(late, &id, allow()).unwrap(), session);
+        assert_eq!(clients.answer(late, &id, allow(), None).unwrap(), session);
         assert_eq!(
             answer_of(answer.try_recv().unwrap()).as_deref(),
             Some("yes")
@@ -1017,17 +1079,19 @@ mod tests {
             ApprovalChoice::AllowSession,
             ApprovalChoice::AllowProject,
         ] {
-            let refused = clients.answer(layer, &id, approval(choice)).unwrap_err();
+            let refused = clients
+                .answer(layer, &id, approval(choice), None)
+                .unwrap_err();
             assert_eq!(refused.code, code::ROLE_NOT_ALLOWED);
         }
         // A supervisor with no grant answers nothing, even a denial.
         let refused = clients
-            .answer(bare, &id, approval(ApprovalChoice::Deny))
+            .answer(bare, &id, approval(ApprovalChoice::Deny), None)
             .unwrap_err();
         assert_eq!(refused.code, code::ROLE_NOT_ALLOWED);
         assert!(answer.try_recv().is_err(), "a refused answer was delivered");
         clients
-            .answer(user, &id, approval(ApprovalChoice::AllowSession))
+            .answer(user, &id, approval(ApprovalChoice::AllowSession), None)
             .unwrap();
         let taken = answer.try_recv().unwrap();
         assert_eq!(taken.response, approval(ApprovalChoice::AllowSession));
@@ -1041,14 +1105,14 @@ mod tests {
             Some(Arc::clone(&judge)),
         );
         clients
-            .answer(layer, &id, approval(ApprovalChoice::Deny))
+            .answer(layer, &id, approval(ApprovalChoice::Deny), None)
             .unwrap();
         let taken = answer.try_recv().unwrap();
         assert_eq!(taken.response, approval(ApprovalChoice::Deny));
         assert!(taken.by_supervisor);
         // The first answer taken settles it: the user's is late.
         let late = clients
-            .answer(user, &id, approval(ApprovalChoice::AllowOnce))
+            .answer(user, &id, approval(ApprovalChoice::AllowOnce), None)
             .unwrap_err();
         assert_eq!(late.code, "request_not_open");
 
@@ -1062,7 +1126,7 @@ mod tests {
             Some(Arc::clone(&judge)),
         );
         clients
-            .answer(layer, &id, approval(ApprovalChoice::AllowProject))
+            .answer(layer, &id, approval(ApprovalChoice::AllowProject), None)
             .unwrap();
         let taken = answer.try_recv().unwrap();
         assert_eq!(taken.response, approval(ApprovalChoice::AllowOnce));
@@ -1072,7 +1136,7 @@ mod tests {
         // supervisor's allow.
         let (id, mut answer) = clients.ask(&session, &asked, |_| approval_request(&session), None);
         let refused = clients
-            .answer(layer, &id, approval(ApprovalChoice::AllowOnce))
+            .answer(layer, &id, approval(ApprovalChoice::AllowOnce), None)
             .unwrap_err();
         assert_eq!(refused.code, code::ROLE_NOT_ALLOWED);
         assert!(answer.try_recv().is_err());

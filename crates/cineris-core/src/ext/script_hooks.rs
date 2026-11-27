@@ -237,6 +237,10 @@ pub(crate) enum Stand<'a> {
     /// The store that holds its approval, `file` as the user is shown it,
     /// cannot be read.
     StoreUnreadable(&'a str),
+    /// What the store holds of its approval does not count with the key
+    /// the person opened their approvals with (the signed approvals step):
+    /// no key, unsigned, or not the person's.
+    Uncounted(cineris_policy::Checked),
 }
 
 /// `name` as a key of a TOML table's header: bare when it can be, quoted
@@ -349,6 +353,27 @@ pub(crate) fn way_out(
         (Source::Project, Stand::StoreUnreadable(file)) => format!(
             "repair or remove `{file}`, then trust the project again (`cineris permissions trust`)"
         ),
+        // Signed and not opened: the person's password opens it. Unsigned,
+        // or not the person's: only their yes signs it again.
+        (Source::User, Stand::Uncounted(cineris_policy::Checked::NoKey)) => format!(
+            "open your approvals with your password when a session opens, or turn it off \
+             ({disable}, which sets {table} in your configuration)"
+        ),
+        (Source::User, Stand::Uncounted(_)) => format!(
+            "approve it again as it is now ({add}), which signs it with your key, or turn it off \
+             ({disable}, which sets {table} in your configuration)"
+        ),
+        (Source::Project, Stand::Uncounted(cineris_policy::Checked::NoKey)) => {
+            "open your approvals with your password when a session opens, or take the project's \
+             trust away (`cineris permissions untrust`)"
+                .to_owned()
+        }
+        (Source::Project, Stand::Uncounted(_)) => "trust the project again (the project's trust \
+                                                   question asks when a session opens, and \
+                                                   `cineris permissions trust` trusts it), or \
+                                                   take the project's trust away (`cineris \
+                                                   permissions untrust`)"
+            .to_owned(),
     }
 }
 

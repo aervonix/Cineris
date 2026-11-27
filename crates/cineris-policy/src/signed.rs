@@ -115,7 +115,7 @@ impl fmt::Debug for Statement {
 
 /// Fields written with their lengths: what [`StatementBuilder`] and an
 /// entry of it share.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct Fields {
     bytes: Vec<u8>,
 }
@@ -146,6 +146,7 @@ impl Fields {
 }
 
 /// A [`Statement`] being built: [`Statement::build`].
+#[derive(Debug)]
 pub struct StatementBuilder {
     fields: Fields,
 }
@@ -239,7 +240,7 @@ impl fmt::Display for Signature {
 
 impl fmt::Debug for Signature {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Signature({}…)", &to_hex(&self.0[..4]))
+        write!(f, "Signature({}…)", to_hex(&self.0[..4]))
     }
 }
 
@@ -355,7 +356,9 @@ pub fn statement_of(
     proposal: &cineris_protocol::methods::ApprovalProposal,
 ) -> Result<Statement, String> {
     use cineris_protocol::methods::{ApprovalProposal, ProposedPin};
-    let read = |pins: &'_ [ProposedPin]| -> Result<Vec<SignedPin<'_>>, String> {
+    // A function, not a closure: the pins it gives borrow from what it is
+    // given, which a closure's signature cannot say.
+    fn read(pins: &[ProposedPin]) -> Result<Vec<SignedPin<'_>>, String> {
         let mut read = Vec::with_capacity(pins.len());
         for pin in pins {
             let hash = from_hex::<32>(&pin.hash)
@@ -386,7 +389,7 @@ pub fn statement_of(
             });
         }
         Ok(read)
-    };
+    }
     Ok(match proposal {
         ApprovalProposal::Project {
             key,
@@ -428,7 +431,7 @@ fn from_hex<const N: usize>(text: &str) -> Option<[u8; N]> {
         _ => None,
     };
     let mut bytes = [0; N];
-    for (byte, pair) in bytes.iter_mut().zip(digits.chunks_exact(2)) {
+    for (byte, pair) in bytes.iter_mut().zip(digits.as_chunks::<2>().0) {
         *byte = (value(pair[0])? << 4) | value(pair[1])?;
     }
     Some(bytes)

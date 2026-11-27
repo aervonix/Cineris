@@ -19,6 +19,24 @@ struct World {
     core: Core,
     project: Project,
     runtime: tokio::runtime::Runtime,
+    /// The person's key, made from a password at a cost small enough for a
+    /// test, which signs each change of their pins; the core's approvals
+    /// are open with it, as after the person typed their password.
+    key: cineris_core::signed::PersonKey,
+}
+
+/// The person's key of every [`World`]: one password and one salt, at a
+/// test's cost.
+fn person_key() -> cineris_core::signed::PersonKey {
+    use cineris_core::signed::{Cost, KeyFile, Salt};
+    let (_, key) = KeyFile::make(
+        b"the person's own password",
+        Salt::from_bytes([7; Salt::LEN]),
+        Cost::new(64, 1, 1).unwrap(),
+        cineris_protocol::ids::Timestamp::new("2026-11-25T10:00:00Z"),
+    )
+    .unwrap();
+    key
 }
 
 impl World {
@@ -41,6 +59,8 @@ impl World {
         options.dirs = Some(dirs.clone());
         options.clock = Arc::new(clock);
         let core = Core::start(options).unwrap();
+        let key = person_key();
+        core.open_approvals(&key).unwrap();
         let project = core.project(&workspace).unwrap();
         Self {
             _scratch: scratch,
@@ -51,6 +71,7 @@ impl World {
             runtime: tokio::runtime::Builder::new_current_thread()
                 .build()
                 .unwrap(),
+            key,
         }
     }
 
@@ -130,7 +151,7 @@ fn an_extension_is_added_listed_turned_off_and_removed() {
     std::fs::write(source.join("main.js"), "throw new Error('changed');").unwrap();
     let added = world
         .runtime
-        .block_on(world.core.add_extension(to_add))
+        .block_on(world.core.add_extension(to_add, &world.key))
         .unwrap();
     assert!(added.written);
     assert_eq!(added.registered.tools, ["find"]);
@@ -197,7 +218,10 @@ fn an_extension_is_added_listed_turned_off_and_removed() {
         "{question}"
     );
     assert_eq!(removal.hash, removal.pin.as_ref().map(|(hash, _)| *hash));
-    let removed = world.core.remove_extension(&removal, false).unwrap();
+    let removed = world
+        .core
+        .remove_extension(&removal, false, Some(&world.key))
+        .unwrap();
     assert!(removed.unpinned && !removed.deleted);
     assert!(kept.exists());
     let listing = world.core.extensions(&world.project).unwrap();
@@ -219,7 +243,10 @@ fn an_extension_is_added_listed_turned_off_and_removed() {
     // Not pinned, it is named by its folder's hash.
     assert!(removal.hash.is_some());
     assert!(removal_text(&removal).contains(&removal.hash.unwrap().to_string()));
-    let removed = world.core.remove_extension(&removal, true).unwrap();
+    let removed = world
+        .core
+        .remove_extension(&removal, true, Some(&world.key))
+        .unwrap();
     assert!(!removed.unpinned && removed.deleted);
     assert!(!kept.exists());
     // A project's extension: pointed at the project's trust.
@@ -239,7 +266,10 @@ fn an_extension_is_added_listed_turned_off_and_removed() {
         .extension_removal(&world.project, "theirs")
         .unwrap();
     assert!(removal.project_only);
-    let refused = world.core.remove_extension(&removal, true).unwrap_err();
+    let refused = world
+        .core
+        .remove_extension(&removal, true, Some(&world.key))
+        .unwrap_err();
     assert!(
         refused.message.contains("`cineris permissions trust`"),
         "{}",
@@ -322,7 +352,7 @@ fn what_cannot_be_added_or_removed_is_refused_first() {
         .unwrap();
     let refused = world
         .runtime
-        .block_on(world.core.add_extension(to_add))
+        .block_on(world.core.add_extension(to_add, &world.key))
         .unwrap_err();
     assert!(
         refused.message.contains("nothing was written or pinned"),
@@ -577,7 +607,7 @@ fn the_place_is_looked_at_again_at_the_yes_and_leftovers_are_cleared() {
     let hash = to_add.hash;
     world
         .runtime
-        .block_on(world.core.add_extension(to_add))
+        .block_on(world.core.add_extension(to_add, &world.key))
         .unwrap();
     let kept = world.users().join("tracker");
     let again = world.core.extension_to_add(&world.project, &kept).unwrap();
@@ -596,7 +626,7 @@ fn the_place_is_looked_at_again_at_the_yes_and_leftovers_are_cleared() {
     std::fs::create_dir_all(&other).unwrap();
     let added = world
         .runtime
-        .block_on(world.core.add_extension(again))
+        .block_on(world.core.add_extension(again, &world.key))
         .unwrap();
     assert!(added.written, "what was changed is put back");
     let there = world.core.extension_to_add(&world.project, &kept).unwrap();
@@ -629,7 +659,9 @@ fn a_folder_set_aside_that_cannot_be_removed_does_not_fail_the_write() {
         .extension_to_add(&world.project, &source)
         .unwrap();
     let hash = to_add.hash;
-    let added = world.runtime.block_on(world.core.add_extension(to_add));
+    let added = world
+        .runtime
+        .block_on(world.core.add_extension(to_add, &world.key));
     // Whatever happened, the folder can be removed afterwards.
     let aside: Vec<PathBuf> = std::fs::read_dir(world.users())
         .unwrap()
@@ -715,7 +747,7 @@ fn sys_a_junction_or_a_directory_link_is_neither_followed_nor_written_through() 
             .unwrap();
         world
             .runtime
-            .block_on(world.core.add_extension(to_add))
+            .block_on(world.core.add_extension(to_add, &world.key))
             .unwrap();
         assert!(
             !std::fs::symlink_metadata(&place)
@@ -736,7 +768,10 @@ fn sys_a_junction_or_a_directory_link_is_neither_followed_nor_written_through() 
             removal.folder.as_ref().is_some_and(|(_, link)| *link),
             "{kind}: {removal:?}"
         );
-        let removed = world.core.remove_extension(&removal, true).unwrap();
+        let removed = world
+            .core
+            .remove_extension(&removal, true, Some(&world.key))
+            .unwrap();
         assert!(removed.deleted, "{kind}");
         assert!(
             std::fs::symlink_metadata(&place).is_err(),

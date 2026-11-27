@@ -276,7 +276,7 @@ impl Person {
             Self::cost(),
             cineris_protocol::ids::Timestamp::new(START),
         )
-        .expect("a test's key is made");
+        .unwrap_or_else(|failure| panic!("a test's key is not made: {failure}"));
         Self { file, key }
     }
 
@@ -287,7 +287,8 @@ impl Person {
     /// Never: the cost is within the caps.
     #[must_use]
     pub fn cost() -> crate::signed::Cost {
-        crate::signed::Cost::new(64, 1, 1).expect("within the caps")
+        crate::signed::Cost::new(64, 1, 1)
+            .unwrap_or_else(|failure| panic!("a test's cost is past the caps: {failure}"))
     }
 
     /// The key file the person's key is made with, as set-up writes it.
@@ -323,7 +324,8 @@ impl Person {
             .iter()
             .map(|definition| crate::trust::PinChange::Pin(definition.clone().into()))
             .collect();
-        self.change_pins(store, &changes).expect("the pins change")
+        self.change_pins(store, &changes)
+            .unwrap_or_else(|failure| panic!("the pins do not change: {failure}"))
     }
 
     /// Pins one definition: [`pin_all`](Self::pin_all).
@@ -357,9 +359,11 @@ impl Person {
         };
         let before = store
             .pins(Some(&self.verifier()))
-            .expect("the pins are read")
+            .unwrap_or_else(|failure| panic!("the pins are not read: {failure}"))
             .revision();
-        let after = self.change_pins(store, &[change]).expect("the pins change");
+        let after = self
+            .change_pins(store, &[change])
+            .unwrap_or_else(|failure| panic!("the pins do not change: {failure}"));
         after.revision() != before
     }
 
@@ -385,7 +389,7 @@ impl Person {
             lift_refusal: true,
         };
         self.change_trust(store, key, change)
-            .expect("the project is trusted")
+            .unwrap_or_else(|failure| panic!("the project is not trusted: {failure}"))
     }
 
     /// Approves `definitions` of the trusted project `key`, as the person's
@@ -406,7 +410,7 @@ impl Person {
             git_shown,
         };
         self.change_trust(store, key, change)
-            .expect("the definitions are approved")
+            .unwrap_or_else(|failure| panic!("the definitions are not approved: {failure}"))
     }
 
     /// Makes `change` to the project `key` in `store`, as the person's yes
@@ -423,7 +427,7 @@ impl Person {
         change: crate::trust::TrustChange,
     ) -> Result<crate::trust::ProjectTrust, crate::trust::TrustError> {
         let verifier = self.verifier();
-        match store.propose(key, change, &verifier)? {
+        match store.propose(key, change, Some(&verifier))? {
             Some(proposal) => store.commit(&proposal, &self.sign(proposal.statement()), &verifier),
             None => store.project(key, Some(&verifier)),
         }

@@ -264,6 +264,33 @@ pub(crate) fn in_session(
             .map(|(_, said)| said.clone()),
     );
     let mut hooks = configured.user;
+    // A project whose entry in the trust store does not count (no key,
+    // unsigned, or not the person's) is not trusted, and none of its hooks
+    // runs; each its entry pins, signed or not, holds its event, failing,
+    // as an approved hook that changed does (the signed approvals step). The
+    // session is told of the entry once, as it opens.
+    if !trusted
+        && let Some(stored) = stored.filter(|stored| stored.has_entry() && !stored.is_trusted())
+    {
+        let pinned = stored.held(&TrustResourceKind::Hook);
+        let why = crate::person::uncounted(stored.checked());
+        for hook in &configured.project {
+            if pinned.iter().any(|(name, _)| *name == hook.name) {
+                refused.push(Refused {
+                    name: hook.name.clone(),
+                    source: Source::Project,
+                    event: Some(hook.event),
+                    observe: hook.observe,
+                    filter: Some(hook.filter.clone()),
+                    reason: format!(
+                        "this project's trust does not count in this session ({why}), so its \
+                         gate holds: the project's trust question asks again when a session \
+                         opens, and `cineris permissions trust` trusts it"
+                    ),
+                });
+            }
+        }
+    }
     if trusted {
         // Told once, and on no event: an entry nobody approved holds no
         // gate. Only one approved as it was and changed since does (below).
@@ -612,10 +639,13 @@ mod tests {
                 .project_key();
         let store = |name: &str, pinned: &Definition| {
             let store = cineris_policy::TrustStore::new(scratch.join(name), clock.clone());
-            store
-                .trust(&key, "~/work", std::slice::from_ref(pinned), false)
-                .unwrap();
-            store.project(&key).unwrap()
+            cineris_policy::test_support::Person::new().trust(
+                &store,
+                &key,
+                "~/work",
+                std::slice::from_ref(pinned),
+                false,
+            )
         };
         let approved = store("approved.toml", &definition);
         let pinned = in_session(configured.clone(), true, Some(&approved), &[]);
@@ -636,5 +666,63 @@ mod tests {
         };
         assert_eq!(held.name, "lint");
         assert!(held.reason.contains("changed since you approved it"));
+    }
+
+    /// A project whose entry in the trust store does not count (here, no
+    /// key: the person did not open their approvals) is not trusted, and
+    /// none of its hooks runs; each its entry pins holds its event, failing,
+    /// as it is now or changed. A project with no entry holds nothing: no
+    /// repository gates a session by itself (the signed approvals step).
+    #[test]
+    fn a_hook_an_entry_that_does_not_count_pins_holds_its_event() {
+        let configured = one_project_hook();
+        let definition = configured.project[0].definition();
+        let scratch = cineris_testkit::Scratch::outside("cineris-core-unit", "hooks_uncounted");
+        let clock: cineris_base::SharedClock = std::sync::Arc::new(
+            cineris_testkit::FakeClock::starting_at("2026-11-27T10:00:00Z").unwrap(),
+        );
+        let key =
+            cineris_base::PathResolver::new(&scratch.dir("work"), cineris_base::PathOptions::new())
+                .unwrap()
+                .root()
+                .project_key();
+        let store = cineris_policy::TrustStore::new(scratch.join("trust.toml"), clock);
+        let person = cineris_policy::test_support::Person::new();
+        let model = cineris_policy::test_support::Person::with_password("the model's password");
+        // Nothing stored: nothing held.
+        let nothing = store.project(&key, None).unwrap();
+        let session = in_session(configured.clone(), false, Some(&nothing), &[]);
+        assert!(session.refused.is_empty() && session.hooks.is_empty());
+        for (pinned, label) in [
+            (definition.clone(), "as it is"),
+            (
+                Definition {
+                    hash: cineris_base::ContentHash::of(b"another"),
+                    ..definition.clone()
+                },
+                "changed",
+            ),
+        ] {
+            person.trust(&store, &key, "~/work", std::slice::from_ref(&pinned), false);
+            for (reader, why) in [
+                (None, "your approvals are not open"),
+                (Some(model.verifier()), "not signed by your key"),
+            ] {
+                let stored = store.project(&key, reader.as_ref()).unwrap();
+                assert!(!stored.is_trusted());
+                let session = in_session(configured.clone(), false, Some(&stored), &[]);
+                assert!(session.hooks.is_empty(), "{label}: it does not run");
+                let [held] = session.refused.as_slice() else {
+                    panic!("{label}: {:?}", session.refused);
+                };
+                assert_eq!(held.name, "lint", "{label}");
+                assert_eq!(held.event, Some(Event::ToolAfter), "{label}");
+                assert!(held.reason.contains(why), "{label}: {}", held.reason);
+            }
+            // With the person's key it counts, and runs as it stands.
+            let mine = store.project(&key, Some(&person.verifier())).unwrap();
+            let session = in_session(configured.clone(), true, Some(&mine), &[]);
+            assert_eq!(session.hooks.is_empty(), label == "changed", "{label}");
+        }
     }
 }

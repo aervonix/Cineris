@@ -116,9 +116,10 @@ pub(crate) fn definition(folder: &Path) -> Definition {
 /// Pins the user's extension in `folder` as it is now, as approving it
 /// does.
 pub(crate) fn pin(world: &World, folder: &Path) {
-    PinStore::new(state(world).pins_file(), clock(world))
-        .pin(&definition(folder))
-        .unwrap();
+    crate::person().pin(
+        &PinStore::new(state(world).pins_file(), clock(world)),
+        &definition(folder),
+    );
 }
 
 /// The world's registration cache.
@@ -155,16 +156,21 @@ pub(crate) fn trust_store(world: &World) -> TrustStore {
 /// Trusts the project with `definitions` pinned, as a yes to its question
 /// pins them.
 pub(crate) fn trust(world: &World, definitions: &[Definition]) {
-    trust_store(world)
-        .trust(&project_key(world), "~/work/app", definitions, false)
-        .unwrap();
+    crate::person().trust(
+        &trust_store(world),
+        &project_key(world),
+        "~/work/app",
+        definitions,
+        false,
+    );
 }
 
+/// A yes, which the front end signs as the person's over what each
+/// question proposes (`crate::signed`).
 pub(crate) fn yes() -> TrustResponse {
     TrustResponse {
         trusted: true,
-        never: false,
-        keep: false,
+        ..TrustResponse::default()
     }
 }
 
@@ -259,9 +265,12 @@ async fn open_kept_or_not(
                         id,
                         request: ServerRequest::Trust(request),
                     }) => {
+                        // A yes is signed by the person, as a front end
+                        // signs it.
+                        let answer = crate::signed(&request, answer.clone());
                         asked.push(request);
                         meanwhile();
-                        core.respond(client.id, &id, ServerResponse::Trust(answer.clone()))
+                        core.respond(client.id, &id, ServerResponse::Trust(answer))
                             .expect("the question is open");
                     }
                     Some(other) => read.push(other),
@@ -581,14 +590,13 @@ fn the_registration_cache_is_taken_and_pruned_as_the_pins_say() {
     );
     // Another project's extension, trusted there; and one no pin names.
     let theirs = Definition::of(TrustResourceKind::Extension, "tracker", ["theirs"]);
-    trust_store(&world)
-        .trust(
-            &ProjectKey::new("another"),
-            "~/another",
-            std::slice::from_ref(&theirs),
-            false,
-        )
-        .unwrap();
+    crate::person().trust(
+        &trust_store(&world),
+        &ProjectKey::new("another"),
+        "~/another",
+        std::slice::from_ref(&theirs),
+        false,
+    );
     let gone = Definition::of(TrustResourceKind::Extension, "gone", ["old"]).hash;
     cache_file(&world)
         .put(&theirs.hash, entry("tracker", Vec::new()))
@@ -755,7 +763,9 @@ fn a_projects_extension_walks_through_its_trust() {
         assert!(found_probe(&front), "{:?}", front.results());
         front.close().await;
     });
-    let stored = trust_store(&world).project(&project_key(&world)).unwrap();
+    let stored = trust_store(&world)
+        .project(&project_key(&world), Some(&crate::person().verifier()))
+        .unwrap();
     assert_eq!(stored.standing(&definition(&folder)), Standing::Approved);
     // 2. The next session is asked nothing, and loads it from the cache.
     let made = cineris_ext::engine::runtimes_made();
@@ -846,7 +856,9 @@ fn a_projects_extension_walks_through_its_trust() {
         }
         front.close().await;
     });
-    let stored = trust_store(&world).project(&project_key(&world)).unwrap();
+    let stored = trust_store(&world)
+        .project(&project_key(&world), Some(&crate::person().verifier()))
+        .unwrap();
     assert_eq!(
         stored.standing(&definition(&outside.join("extensions").join(NAME))),
         Standing::Approved

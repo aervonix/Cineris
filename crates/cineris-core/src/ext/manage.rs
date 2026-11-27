@@ -37,7 +37,8 @@ use cineris_ext::discover::{self, Discovered, Root};
 use cineris_ext::folder::Snapshot;
 use cineris_ext::manifest::Manifest;
 use cineris_ext::source::Source;
-use cineris_policy::{Definition, PinStore, ProjectTrust, UserPins};
+use cineris_policy::signed::{PersonKey, Verifier};
+use cineris_policy::{Definition, PinChange, PinError, PinStore, ProjectTrust, UserPins};
 use cineris_protocol::ErrorKind;
 use cineris_protocol::methods::TrustResourceKind;
 
@@ -812,22 +813,15 @@ impl Core {
         let mut listing = ExtensionsListing::default();
         let home = options.env.home();
         let file_shown = |path: &Path| in_code(&shown_path(path, home.as_deref())).into_owned();
+        let verifier = self.verifier();
         let pins_read = match &state {
-            Some(state) => PinStore::new(state.pins_file(), Arc::clone(&options.clock))
-                .pins()
-                .map_err(|failure| {
-                    super::found::with_paths_shown(
-                        &failure.to_string(),
-                        &[&state.pins_file()],
-                        home.as_deref(),
-                    )
-                }),
+            Some(state) => pins_judged(state, &options.clock, verifier.as_ref(), home.as_deref()),
             None => Ok(UserPins::default()),
         };
         let trust_read = match &state {
             Some(state) => {
                 cineris_policy::TrustStore::new(state.trust_file(), Arc::clone(&options.clock))
-                    .project(&project.key)
+                    .project(&project.key, verifier.as_ref())
                     .map_err(|_| {
                         format!(
                             "the trust store `{}` could not be read",
@@ -1020,7 +1014,7 @@ impl Core {
                 false,
             ),
         };
-        let pins = self.pin_store()?.pins().map_err(|failure| {
+        let pins = self.pin_store()?.pins(self.verifier().as_ref()).map_err(|failure| {
             usage(format!(
                 "The extension `{code}` cannot be added: {}. Repair or remove the file, then add \
                  it again.",
@@ -1186,12 +1180,23 @@ impl Core {
     /// holds it as shown is left, anything else is put back as shown (the
     /// early review's L3).
     ///
+    /// The pin is the person's signed change of their pins (the signed
+    /// approvals step): proposed against the pins as they stand with `key`,
+    /// signed with `key`, which their password made at the yes, and
+    /// committed; and the core's approvals are opened with `key`, so that
+    /// what it pinned counts in the core from then on.
+    ///
     /// # Errors
     ///
     /// When its evaluation fails (nothing is written or pinned then), its
-    /// folder cannot be written, or the pin cannot be kept.
+    /// folder cannot be written, or the pin cannot be kept (the pins changed
+    /// while the person was asked among the reasons: add it again).
     #[cfg(feature = "scripts")]
-    pub async fn add_extension(&self, mut to_add: ToAdd) -> Result<Added, OpError> {
+    pub async fn add_extension(
+        &self,
+        mut to_add: ToAdd,
+        key: &PersonKey,
+    ) -> Result<Added, OpError> {
         let failed = |message: String| error(ErrorKind::Internal, "extension_not_added", message);
         let code = in_code(&to_add.name).into_owned();
         if to_add.registration.is_none() {
@@ -1228,19 +1233,25 @@ impl Core {
                 )
             });
         }
-        self.pin_store()?
-            .pin(&Definition {
+        // What it registered is not bound to the pin yet: the registration
+        // cache's entry is used while its folder's hash is the one pinned.
+        let pin = PinChange::Pin(cineris_policy::Approved {
+            definition: Definition {
                 kind: TrustResourceKind::Extension,
                 name: to_add.name.clone(),
                 hash: to_add.hash,
-            })
-            .map_err(|failure| {
-                failed(format!(
-                    "The extension `{code}` was written to `{}` and not pinned, so it is not \
-                     loaded: {failure}",
-                    to_add.destination
-                ))
-            })?;
+            },
+            registration: None,
+        });
+        signed_pins(&self.pin_store()?, &[pin], key).map_err(|failure| {
+            failed(format!(
+                "The extension `{code}` was written to `{}` and not pinned, so it is not loaded: \
+                 {failure}",
+                to_add.destination
+            ))
+        })?;
+        self.open_approvals(key)
+            .map_err(|refusal| failed(refusal.to_string()))?;
         let prompt = manifest
             .prompt
             .as_deref()
@@ -1330,8 +1341,12 @@ impl Core {
         }) || self
             .pin_store()
             .ok()
-            .and_then(|store| store.pins().ok())
-            .is_some_and(|pins| pins.get(&TrustResourceKind::Extension, name).is_some());
+            .and_then(|store| store.pins(None).ok())
+            .is_some_and(|pins| {
+                pins.held()
+                    .iter()
+                    .any(|pin| pin.kind == TrustResourceKind::Extension && pin.name == name)
+            });
         if !mine {
             let theirs =
                 discover::names(&[Root::project(&resolver.root().to_fs_path())], &resolver)
@@ -1404,17 +1419,24 @@ impl Core {
             )
         })?;
         let root = config.join(discover::USER_FOLDER);
-        let pins = self.pin_store()?.pins().map_err(|failure| {
+        // Every pin, signed or not: a removal takes away what holds a gate,
+        // whoever wrote it, and is the person's signed change.
+        let pins = self.pin_store()?.pins(None).map_err(|failure| {
             usage(format!(
                 "`{code}` was not removed: {}. Repair or remove the file first.",
                 visible(&failure.to_string())
             ))
         })?;
+        let held = |name: &str| {
+            pins.held()
+                .iter()
+                .find(|pin| pin.kind == TrustResourceKind::Extension && pin.name == name)
+        };
         // The name as the folder holds it, or as it is pinned: names that
         // differ only in case are one name on Windows, where a removal of
         // `Tracker` deleted `tracker` and left its pin (the early review's
         // L6). Its pin and its folder go by that one name.
-        let held = std::fs::read_dir(&root)
+        let held_name = std::fs::read_dir(&root)
             .into_iter()
             .flatten()
             .flatten()
@@ -1425,17 +1447,15 @@ impl Core {
                 if better { Some(entry) } else { found }
             })
             .or_else(|| {
-                pins.list()
+                pins.held()
                     .iter()
                     .filter(|pin| pin.kind == TrustResourceKind::Extension)
                     .map(|pin| pin.name.clone())
                     .find(|pinned| pinned.eq_ignore_ascii_case(name))
             });
-        let name = held.as_deref().unwrap_or(name);
+        let name = held_name.as_deref().unwrap_or(name);
         let target = root.join(name);
-        let pin = pins
-            .get(&TrustResourceKind::Extension, name)
-            .map(|pin| (pin.hash, pin.at.as_str().to_owned()));
+        let pin = held(name).map(|pin| (pin.hash, pin.at.as_str().to_owned()));
         let folder = std::fs::symlink_metadata(&target)
             .ok()
             .map(|found| (self.shown(&target), found.file_type().is_symlink()));
@@ -1475,12 +1495,24 @@ impl Core {
     /// never through a link, and only where it is directly in the user's
     /// folder of extensions, resolved.
     ///
+    /// Taking a pin away is the person's signed change of their pins (the
+    /// signed approvals step; a pin can hold a gate, and a gate dropped
+    /// quietly is a widening): `key`, which their password made at the yes,
+    /// signs it, and the core's approvals are opened with it. With nothing
+    /// pinned of the name, signed or not, there is nothing to sign, and
+    /// `key` may be `None`.
+    ///
     /// # Errors
     ///
-    /// When it is a project's, the pin store cannot be written (nothing is
-    /// deleted then), or the folder is not where it should be or cannot be
-    /// deleted.
-    pub fn remove_extension(&self, removal: &Removal, delete: bool) -> Result<Removed, OpError> {
+    /// When it is a project's, it is pinned and no key is given, the pin
+    /// store cannot be written (nothing is deleted then), or the folder is
+    /// not where it should be or cannot be deleted.
+    pub fn remove_extension(
+        &self,
+        removal: &Removal,
+        delete: bool,
+        key: Option<&PersonKey>,
+    ) -> Result<Removed, OpError> {
         let code = in_code(&removal.name).into_owned();
         if removal.project_only {
             return Err(error(
@@ -1494,15 +1526,34 @@ impl Core {
             ));
         }
         let failed = |message: String| error(ErrorKind::Internal, "extension_not_removed", message);
-        let unpinned = self
-            .pin_store()?
-            .unpin(&TrustResourceKind::Extension, &removal.name)
-            .map_err(|failure| {
+        let unpinned = if removal.pin.is_some() {
+            let Some(key) = key else {
+                return Err(error(
+                    ErrorKind::Usage,
+                    "extension_refused",
+                    format!(
+                        "`{code}` was not removed, and nothing was deleted: taking its pin away \
+                         is signed with your key, and none was given."
+                    ),
+                ));
+            };
+            let unpin = PinChange::Unpin {
+                kind: TrustResourceKind::Extension,
+                name: removal.name.clone(),
+            };
+            let pins = signed_pins(&self.pin_store()?, &[unpin], key).map_err(|failure| {
                 failed(format!(
                     "`{code}` was not removed, and nothing was deleted: its pin could not be \
                      taken away: {failure}"
                 ))
             })?;
+            self.open_approvals(key)
+                .map_err(|refusal| failed(refusal.to_string()))?;
+            pins.get(&TrustResourceKind::Extension, &removal.name)
+                .is_none()
+        } else {
+            false
+        };
         let mut deleted = false;
         if delete && std::fs::symlink_metadata(&removal.target).is_ok() {
             if !within(&removal.root, &removal.target) {
@@ -1552,12 +1603,14 @@ pub(crate) fn status(
             problems: Vec::new(),
         };
     };
+    let verifier = core.verifier();
     let (listed, problems) = judge(
         &JudgedFrom {
             resolver: &resolver,
             config: config.as_deref(),
             state: state.as_ref(),
             project: project.as_ref(),
+            verifier: verifier.as_ref(),
             for_the_run: &for_the_run,
             disabled: &disabled,
             clock: &options.clock,
@@ -1630,6 +1683,9 @@ pub(crate) struct JudgedFrom<'a> {
     pub(crate) config: Option<&'a Path>,
     pub(crate) state: Option<&'a cineris_config::StateDir>,
     pub(crate) project: Option<&'a cineris_protocol::ProjectKey>,
+    /// The key the stores' signatures are checked with: the person's, when
+    /// they opened their approvals.
+    pub(crate) verifier: Option<&'a Verifier>,
     pub(crate) for_the_run: &'a [Definition],
     pub(crate) disabled: &'a [String],
     pub(crate) clock: &'a cineris_base::SharedClock,
@@ -1648,17 +1704,13 @@ pub(crate) fn judge<R>(
     let home = from.home;
     let mut problems = Vec::new();
     let pins = match from.state {
-        Some(state) => PinStore::new(state.pins_file(), Arc::clone(clock))
-            .pins()
-            .map_err(|failure| {
-                super::found::with_paths_shown(&failure.to_string(), &[&state.pins_file()], home)
-            }),
+        Some(state) => pins_judged(state, clock, from.verifier, home),
         None => Ok(UserPins::default()),
     };
     let trust = match (from.state, from.project) {
         (Some(state), Some(key)) => {
             cineris_policy::TrustStore::new(state.trust_file(), Arc::clone(clock))
-                .project(key)
+                .project(key, from.verifier)
                 .map_err(|_| {
                     format!(
                         "the trust store `{}` could not be read",
@@ -1697,6 +1749,49 @@ pub(crate) fn judge<R>(
         confined: false,
     });
     (made, problems)
+}
+
+/// The user's pins as a listing and a session judge them: those that count
+/// with `verifier`, or why none does, in words that follow a colon. A store
+/// that cannot be read, and pins that do not count (no key, unsigned, or not
+/// the person's), leave each of the user's extensions unjudged: not loaded,
+/// and holding the gates its cached registration or manifest names (the
+/// signed approvals step).
+pub(crate) fn pins_judged(
+    state: &cineris_config::StateDir,
+    clock: &cineris_base::SharedClock,
+    verifier: Option<&Verifier>,
+    home: Option<&Path>,
+) -> Result<UserPins, String> {
+    let file = state.pins_file();
+    match PinStore::new(&file, Arc::clone(clock)).pins(verifier) {
+        Ok(pins) if pins.counts() => Ok(pins),
+        Ok(pins) => Err(format!(
+            "your approvals of your own extensions (`{}`) do not count in this session: {}",
+            in_code(&shown_path(&file, home)),
+            crate::person::uncounted(pins.checked())
+        )),
+        Err(failure) => Err(super::found::with_paths_shown(
+            &failure.to_string(),
+            &[&file],
+            home,
+        )),
+    }
+}
+
+/// Makes `changes` to the user's pins in `store` as the person's yes does:
+/// proposed against the pins as they stand with `key`, signed with it, and
+/// committed. With nothing to change, the pins as they are.
+fn signed_pins(
+    store: &PinStore,
+    changes: &[PinChange],
+    key: &PersonKey,
+) -> Result<UserPins, PinError> {
+    let verifier = key.verifier();
+    match store.propose(changes, &verifier)? {
+        Some(proposal) => store.commit(&proposal, &key.sign(proposal.statement()), &verifier),
+        None => store.pins(Some(&verifier)),
+    }
 }
 
 /// The state an extension is in, from its standing and, in a session,

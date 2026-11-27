@@ -676,13 +676,14 @@ fn a_changed_gate(world: &World) {
     .unwrap();
     let gate = "cineris.on('prompt.submit', () => undefined);\n";
     std::fs::write(folder.join("main.js"), gate).unwrap();
-    cineris_policy::PinStore::new(state(world).pins_file(), clock(world))
-        .pin(&cineris_policy::Definition {
+    crate::person().pin(
+        &cineris_policy::PinStore::new(state(world).pins_file(), clock(world)),
+        &cineris_policy::Definition {
             kind: TrustResourceKind::Extension,
             name: "gate".to_owned(),
             hash: cineris_ext::folder::Snapshot::read(&folder).unwrap().hash(),
-        })
-        .unwrap();
+        },
+    );
     std::fs::write(folder.join("main.js"), format!("// changed\n{gate}")).unwrap();
 }
 
@@ -776,9 +777,11 @@ fn a_command_runs_nothing_where_its_prompt_would_be_refused_and_its_stop_is_the_
             &error,
             "has changed since you approved it, so it is not loaded.",
         );
-        cineris_policy::PinStore::new(state(&world).pins_file(), clock(&world))
-            .unpin(&TrustResourceKind::Extension, "gate")
-            .unwrap();
+        crate::person().unpin(
+            &cineris_policy::PinStore::new(state(&world).pins_file(), clock(&world)),
+            &TrustResourceKind::Extension,
+            "gate",
+        );
 
         // A turn runs, held at its response.
         front.prompt("first").await;

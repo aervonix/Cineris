@@ -597,6 +597,8 @@ fn trust_question() -> TrustRequest {
     TrustRequest {
         session_id: SessionId::from(SESSION),
         trusted: false,
+        proposal: None,
+        summary: Vec::new(),
         workspace: "~/src/parser".to_owned(),
         resources: vec![
             resource(

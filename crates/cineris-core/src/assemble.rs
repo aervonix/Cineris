@@ -563,6 +563,20 @@ pub(crate) struct TrustQuestion {
     /// The project's hooks that were listed, as they were read: a yes pins
     /// each, kind `hook`, by the hash of what was shown (step 28).
     pub(crate) hooks: Vec<Definition>,
+    /// What a yes would write to the trust store, worked out when the
+    /// question was put, which the person signs (the signed approvals
+    /// step): `None` with no state directory, where nothing can be kept.
+    pub(crate) proposal: Option<cineris_policy::TrustProposal>,
+}
+
+/// What the trust question's answer came to.
+pub(crate) enum Answered {
+    /// The trust to put the session together with.
+    Trust(Box<Trust>),
+    /// The project's entry changed between the question and a signed yes,
+    /// so nothing was written: the question is put again, with what the
+    /// entry holds now.
+    AskAgain,
 }
 
 /// A person's answer to the trust question.
@@ -677,7 +691,14 @@ pub(crate) fn look(
         return Ok((trust, None));
     };
     let key = place.root.project_key();
+    let verifier = inner.person.verifier();
+    // A project whose entry does not count only because the person has not
+    // opened their approvals is not asked about as a new project: it was
+    // trusted, and their password is what is missing (the signed approvals
+    // step). One unsigned, or not theirs, is asked about again.
+    let unopened = verifier.is_none() && stored.has_entry() && !stored.is_trusted();
     if stored.is_refused()
+        || unopened
         || inner
             .not_now
             .lock()
@@ -844,7 +865,7 @@ pub(crate) fn look(
     if resources.is_empty() {
         return Ok((trust, None));
     }
-    let question = TrustQuestion {
+    let mut question = TrustQuestion {
         root: shown_root(&place.root, inner.options.env.home().as_deref()),
         key,
         resources,
@@ -854,8 +875,60 @@ pub(crate) fn look(
         git_shown,
         extensions: extensions.pins,
         hooks: hooks.pins,
+        proposal: None,
     };
+    // What a yes writes, worked out now against the entry as it is, for the
+    // person to sign: a first question's trust with or without their
+    // approvals open, what is new in a trusted project with them (it is
+    // trusted only with them). A store that cannot work it out (it cannot
+    // be read now, or the project's trust was taken away since the reading
+    // the question is shaped by) puts no question, and the session is put
+    // together with the trust as it stands now, never the reading before.
+    if let Some(state) = place.state.as_ref() {
+        let store = TrustStore::new(state.trust_file(), Arc::clone(&inner.options.clock));
+        match store.propose(&question.key, question.change(), verifier.as_ref()) {
+            Ok(proposal) => question.proposal = proposal,
+            Err(_) => {
+                let now = self::trust(inner, place.state.as_ref(), &place.root, &place.load)?;
+                return Ok((now, None));
+            }
+        }
+    }
     Ok((trust, Some(question)))
+}
+
+impl TrustQuestion {
+    /// Everything a yes approves: the rules when they were listed, and each
+    /// extension and hook listed, as each was read when it was listed.
+    fn approved(&self) -> Vec<cineris_policy::Approved> {
+        let mut pin = if self.rules_shown {
+            vec![self.pin.clone()]
+        } else {
+            Vec::new()
+        };
+        pin.extend(self.extensions.iter().cloned());
+        pin.extend(self.hooks.iter().cloned());
+        pin.into_iter().map(Into::into).collect()
+    }
+
+    /// What a yes changes in the trust store: what is new approved, in a
+    /// project trusted already; otherwise the project trusted for exactly
+    /// what was shown, a never said while it was open outranking the yes.
+    fn change(&self) -> cineris_policy::TrustChange {
+        if self.trusted {
+            cineris_policy::TrustChange::Approve {
+                approved: self.approved(),
+                git_shown: self.git_shown,
+            }
+        } else {
+            cineris_policy::TrustChange::Trust {
+                root: self.root.clone(),
+                approved: self.approved(),
+                git_shown: self.git_shown,
+                lift_refusal: false,
+            }
+        }
+    }
 }
 
 /// Keeps a person's answer to the trust question, and gives the trust to
@@ -867,19 +940,35 @@ pub(crate) fn look(
 /// notice (the review of step 23): a yes trusts the project for this
 /// session alone, as `--trust-project` would, while its rules are still the
 /// ones shown; a never or a keep is taken as not now.
+///
+/// A yes is kept only signed (the signed approvals step): `signature` is the
+/// person's over the question's proposal, committed with the key their
+/// approvals are open with. A yes whose entry moved since the question was
+/// put writes nothing, and is asked again ([`Answered::AskAgain`]); a yes
+/// with no signature, or one that is not the person's, trusts nothing, not
+/// even for the session (the client's answer is refused before it gets
+/// here, and the question stays open). Only a signed yes whose write failed
+/// trusts the project for the session alone.
 pub(crate) fn answer_trust(
     inner: &Inner,
     wanted: &Wanted,
     question: &TrustQuestion,
     answer: TrustAnswer,
+    signature: Option<&cineris_policy::signed::Signature>,
     mut trust: Trust,
-) -> Result<Trust, Box<ErrorData>> {
+) -> Result<Answered, Box<ErrorData>> {
     // What the question found in the project's folder goes on to the
     // session, whatever the answer made of the trust.
     let found = trust.found.take();
-    let mut answered = kept_answer(inner, wanted, question, answer, trust)?;
-    answered.found = found;
-    Ok(answered)
+    Ok(
+        match kept_answer(inner, wanted, question, answer, signature, trust)? {
+            Answered::Trust(mut answered) => {
+                answered.found = found;
+                Answered::Trust(answered)
+            }
+            Answered::AskAgain => Answered::AskAgain,
+        },
+    )
 }
 
 /// [`answer_trust`], but for what the question found.
@@ -888,13 +977,15 @@ fn kept_answer(
     wanted: &Wanted,
     question: &TrustQuestion,
     answer: TrustAnswer,
+    signature: Option<&cineris_policy::signed::Signature>,
     trust: Trust,
-) -> Result<Trust, Box<ErrorData>> {
+) -> Result<Answered, Box<ErrorData>> {
     let place = place(inner, wanted)?;
     let Some(state) = place.state.as_ref() else {
-        return Ok(trust);
+        return Ok(Answered::Trust(Box::new(trust)));
     };
     let store = TrustStore::new(state.trust_file(), Arc::clone(&inner.options.clock));
+    let verifier = inner.person.verifier();
     let not_now = || {
         inner
             .not_now
@@ -910,13 +1001,15 @@ fn kept_answer(
     // open (the review of the follow-ups of step 23).
     let gone = |failure: &cineris_policy::TrustError| {
         matches!(failure, cineris_policy::TrustError::NotUnderstood { .. })
-            && store.project(&question.key).is_ok_and(|now| {
-                if question.trusted {
-                    !now.is_trusted()
-                } else {
-                    now.is_refused()
-                }
-            })
+            && store
+                .project(&question.key, verifier.as_ref())
+                .is_ok_and(|now| {
+                    if question.trusted {
+                        !now.is_trusted()
+                    } else {
+                        now.is_refused()
+                    }
+                })
     };
     let gone_trust = || -> Result<Trust, Box<ErrorData>> {
         let mut now = self::trust(inner, place.state.as_ref(), &place.root, &place.load)?;
@@ -928,30 +1021,46 @@ fn kept_answer(
         );
         Ok(now)
     };
+    let kept =
+        |trust: Result<Trust, Box<ErrorData>>| trust.map(|trust| Answered::Trust(Box::new(trust)));
     match answer {
         TrustAnswer::Yes => {
-            let mut pin = if question.rules_shown {
-                vec![question.pin.clone()]
-            } else {
-                Vec::new()
+            // A yes is the person's signature over what the question
+            // proposed, checked with the key their approvals are open
+            // with. Without either it trusts nothing: the client's answer is
+            // refused before it reaches here, so this is a key closed, or a
+            // question put with no proposal, in between.
+            let (Some(proposal), Some(signature), Some(verifier)) =
+                (question.proposal.as_ref(), signature, verifier.as_ref())
+            else {
+                return Ok(Answered::Trust(Box::new(unsigned_yes(trust))));
             };
-            // Each extension and hook listed, as it was read when it was
-            // listed.
-            pin.extend(question.extensions.iter().cloned());
-            pin.extend(question.hooks.iter().cloned());
-            let kept = if question.trusted {
-                store.approve(&question.key, &pin, question.git_shown)
-            } else {
-                store.trust_unless_refused(&question.key, &question.root, &pin, question.git_shown)
-            };
-            match kept {
-                Ok(_) => self::trust(inner, place.state.as_ref(), &place.root, &place.load),
+            match store.commit(proposal, signature, verifier) {
+                Ok(_) => kept(self::trust(
+                    inner,
+                    place.state.as_ref(),
+                    &place.root,
+                    &place.load,
+                )),
+                // The entry changed while the question was open: nothing
+                // was written, and the person is asked again about what it
+                // holds now.
+                Err(cineris_policy::TrustError::Moved { .. }) => Ok(Answered::AskAgain),
+                Err(cineris_policy::TrustError::NotSigned { .. }) => {
+                    Ok(Answered::Trust(Box::new(unsigned_yes(trust))))
+                }
                 // Nothing is written, and the session opens with the trust
                 // as it stands now (the review of step 23's fixes).
-                Err(failure) if gone(&failure) => gone_trust(),
-                Err(failure) => {
-                    trusted_unkept(inner, &place.load, question, &failure, trust.repository)
-                }
+                Err(failure) if gone(&failure) => kept(gone_trust()),
+                // A signed yes the store could not keep: the project trusted
+                // for this session alone.
+                Err(failure) => kept(trusted_unkept(
+                    inner,
+                    &place.load,
+                    question,
+                    &failure,
+                    trust.repository,
+                )),
             }
         }
         // Only of a project trusted already; of one that is not, it is not
@@ -959,26 +1068,31 @@ fn kept_answer(
         TrustAnswer::Keep => {
             let rules = question.rules_shown.then_some(&question.pin);
             match store.keep_without(&question.key, rules, question.git_shown) {
-                Ok(_) => {
+                Ok(()) => {
                     // The extensions and hooks listed stay unapproved, and
                     // the store keeps no record of a keep of them: they are
                     // not asked about again in this core, as after not now.
                     if !question.extensions.is_empty() || !question.hooks.is_empty() {
                         not_now();
                     }
-                    self::trust(inner, place.state.as_ref(), &place.root, &place.load)
+                    kept(self::trust(
+                        inner,
+                        place.state.as_ref(),
+                        &place.root,
+                        &place.load,
+                    ))
                 }
-                Err(failure) if gone(&failure) => gone_trust(),
+                Err(failure) if gone(&failure) => kept(gone_trust()),
                 Err(failure) => {
                     not_now();
-                    Ok(Trust {
+                    Ok(Answered::Trust(Box::new(Trust {
                         problem: Some(format!(
                             "Your answer could not be kept, so this project will be asked about \
                              again when the harness starts next; until then what is new in it \
                              is not used: {failure}"
                         )),
                         ..trust
-                    })
+                    })))
                 }
             }
         }
@@ -987,23 +1101,44 @@ fn kept_answer(
             // the project refused, as a later start is, not with the trust
             // worked out before the answer (the review of the second pull
             // request).
-            Ok(()) => self::trust(inner, place.state.as_ref(), &place.root, &place.load),
+            Ok(()) => kept(self::trust(
+                inner,
+                place.state.as_ref(),
+                &place.root,
+                &place.load,
+            )),
             Err(failure) => {
                 not_now();
-                Ok(Trust {
+                Ok(Answered::Trust(Box::new(Trust {
                     problem: Some(format!(
                         "Your answer could not be kept, so this project will be asked about \
                          again when the harness starts next; until then it is not trusted: \
                          {failure}"
                     )),
                     ..trust
-                })
+                })))
             }
         },
         TrustAnswer::NotNow => {
             not_now();
-            Ok(trust)
+            Ok(Answered::Trust(Box::new(trust)))
         }
+    }
+}
+
+/// The trust after a yes that was not signed by the person, or not over
+/// what the question proposed: it trusts nothing, not even for the session
+/// (the signed approvals step). The client's answer is refused before it is
+/// taken, so this is a key closed in between, said.
+fn unsigned_yes(trust: Trust) -> Trust {
+    Trust {
+        problem: Some(
+            "Your yes was not signed with the key your approvals are open with, so it trusts \
+             nothing, not even for this session: the project's trust question asks again when a \
+             session opens."
+                .to_owned(),
+        ),
+        ..trust
     }
 }
 
@@ -1185,7 +1320,7 @@ fn trust(
     let (stored, problem) = match state {
         Some(state) => {
             let store = TrustStore::new(state.trust_file(), Arc::clone(&inner.options.clock));
-            match store.project(&root.project_key()) {
+            match store.project(&root.project_key(), inner.person.verifier().as_ref()) {
                 Ok(trust) => (trust, None),
                 // A trust store that cannot be read trusts nothing.
                 Err(error) => (
@@ -1209,14 +1344,22 @@ fn trust(
     let read = (problem.is_none() && state.is_some()).then(|| stored.clone());
     if !stored.is_trusted() {
         // A project the user said never to trust is not asked about: the
-        // session says so, with the command that changes it.
-        let problem = problem.or_else(|| {
-            stored.is_refused().then(|| {
-                "You said never to trust this project, so nothing of it that needs trust is \
-                 used, and it is not asked about. `cineris permissions trust` trusts it."
-                    .to_owned()
+        // session says so, with the command that changes it. One whose
+        // entry does not count with the session's key says why, once, and
+        // what its entry pins holds its gates (the signed approvals step).
+        let problem = problem
+            .or_else(|| {
+                stored.is_refused().then(|| {
+                    "You said never to trust this project, so nothing of it that needs trust is \
+                     used, and it is not asked about. `cineris permissions trust` trusts it."
+                        .to_owned()
+                })
             })
-        });
+            .or_else(|| {
+                stored
+                    .has_entry()
+                    .then(|| crate::person::project_uncounted(stored.checked()))
+            });
         let standing = if stored.is_refused() {
             TrustStanding::Never
         } else {
@@ -1774,7 +1917,7 @@ fn judge_pins(
     let (stored, problem) = match state {
         Some(state) => {
             let store = TrustStore::new(state.trust_file(), Arc::clone(&inner.options.clock));
-            match store.project(&root.project_key()) {
+            match store.project(&root.project_key(), inner.person.verifier().as_ref()) {
                 Ok(trust) => (trust, None),
                 Err(error) => (
                     cineris_policy::ProjectTrust::untrusted(),
@@ -3052,6 +3195,13 @@ pub(crate) fn assemble(
         standing,
         TrustStanding::Trusted | TrustStanding::RulesChanged | TrustStanding::ForTheRun
     );
+    // A project's entry that is there and does not count: what it pins holds
+    // its gates, the project not trusted (the signed approvals step). The
+    // key the stores' signatures are checked with, for the session.
+    let uncounted = (!projects_looked_in)
+        .then(|| stored.as_ref().and_then(crate::ext::found::Uncounted::of))
+        .flatten();
+    let verifier = inner.person.verifier();
     // What a build without the script engine judges the session's
     // extensions from, as the finding would look: the user's folder, and the
     // project's while it is trusted.
@@ -3061,6 +3211,8 @@ pub(crate) fn assemble(
         config_dir: load.dirs.config.clone(),
         state: state_dir.clone(),
         project: projects_looked_in.then(|| project.clone()),
+        verifier,
+        uncounted,
         for_the_run: for_the_run
             .as_ref()
             .map(|run| run.extensions.clone())
@@ -3091,7 +3243,7 @@ pub(crate) fn assemble(
             None if options.trust_project && !configured.project.is_empty() => {
                 state_dir.as_ref().and_then(|state| {
                     TrustStore::new(state.trust_file(), Arc::clone(&clock))
-                        .project(&project)
+                        .project(&project, verifier.as_ref())
                         .ok()
                 })
             }
@@ -3153,6 +3305,8 @@ pub(crate) fn assemble(
             .map(|run| run.extensions.clone())
             .unwrap_or_default(),
         trust_project: options.trust_project,
+        verifier,
+        uncounted,
         disabled: settings
             .extensions
             .iter()

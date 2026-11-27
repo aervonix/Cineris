@@ -24,7 +24,8 @@ use cineris_base::{ContentHash, PathOptions, PathResolver, Secret};
 use cineris_config::{
     CredentialStatus, LoadOptions, Loaded, ProjectTrust as ConfigTrust, StateDir, Withheld,
 };
-use cineris_policy::{ApprovalStore, Definition, TrustStore};
+use cineris_policy::signed::PersonKey;
+use cineris_policy::{ApprovalStore, Definition, TrustChange, TrustError, TrustStore};
 use cineris_protocol::lease::Rule;
 use cineris_protocol::methods::{ProjectEntriesResult, StoredApproval};
 use cineris_protocol::project::{EntryChange, NewEntry};
@@ -405,7 +406,7 @@ impl Core {
     pub fn project_trust(&self, project: &Project) -> Result<TrustState, OpError> {
         let stored = self
             .trust_store()?
-            .project(&project.key)
+            .project(&project.key, self.verifier().as_ref())
             .map_err(|failure| error(ErrorKind::Internal, "store_failed", failure.to_string()))?;
         if stored.is_refused() {
             return Ok(TrustState::Never);
@@ -429,12 +430,18 @@ impl Core {
     /// a git repository git is trusted with it, and said to be
     /// ([`Trusted::git`]), as the trust question lists it.
     ///
+    /// The change is the person's signed change of the project's trust
+    /// (the signed approvals step): proposed against the entry as it stands
+    /// with `key`, which their password made at the yes, signed with it, and
+    /// committed; and the core's approvals are opened with `key`.
+    ///
     /// # Errors
     ///
     /// When the project's configuration is invalid, or the trust store
-    /// cannot be read or written.
-    pub fn trust_project(&self, project: &Project) -> Result<Trusted, OpError> {
-        self.trust_project_with(project, &[], &[])
+    /// cannot be read or written (the entry changed while the person was
+    /// asked among the reasons: ask again).
+    pub fn trust_project(&self, project: &Project, key: &PersonKey) -> Result<Trusted, OpError> {
+        self.trust_project_with(project, &[], &[], key)
     }
 
     /// What trusting the project would turn the sandbox off with, in the
@@ -490,7 +497,7 @@ impl Core {
             .map_err(|failure| error(ErrorKind::Usage, "invalid_workspace", failure.to_string()))?;
         let stored = self
             .trust_store()?
-            .project(&project.key)
+            .project(&project.key, self.verifier().as_ref())
             .map_err(|failure| error(ErrorKind::Internal, "store_failed", failure.to_string()))?;
         let (found, _) = crate::ext::found::in_project(&resolver, &options.clock);
         if found.found.is_empty() {
@@ -544,7 +551,7 @@ impl Core {
         }
         let stored = self
             .trust_store()?
-            .project(&project.key)
+            .project(&project.key, self.verifier().as_ref())
             .map_err(|failure| error(ErrorKind::Internal, "store_failed", failure.to_string()))?;
         let root = self.resolver(&project.root)?.root().clone();
         // Whether a hook's program would be confined, which what it is
@@ -582,6 +589,7 @@ impl Core {
         project: &Project,
         extensions: &[ProjectExtension],
         hooks: &[ProjectHookCommand],
+        key: &PersonKey,
     ) -> Result<Trusted, OpError> {
         let rules = self.pinned(project)?;
         // What an untrusted load holds back is what trust now turns on.
@@ -590,10 +598,14 @@ impl Core {
                 self.load_profile(project, profile, ConfigTrust::Untrusted)
             })?;
         let store = self.trust_store()?;
-        let failed = |failure: cineris_policy::TrustError| {
-            error(ErrorKind::Internal, "store_failed", failure.to_string())
-        };
-        let stored = store.project(&project.key).map_err(failed)?;
+        let failed =
+            |failure: TrustError| error(ErrorKind::Internal, "store_failed", failure.to_string());
+        let verifier = key.verifier();
+        // Trusted is trusted by this key: an entry that does not count with
+        // it is replaced whole, as a project never trusted is trusted.
+        let stored = store
+            .project(&project.key, Some(&verifier))
+            .map_err(failed)?;
         let (was_trusted, was_refused) = (stored.is_trusted(), stored.is_refused());
         let mut pin = vec![Definition::of_project_rules(&rules)];
         pin.extend(
@@ -602,14 +614,37 @@ impl Core {
                 .map(|extension| extension.definition.clone()),
         );
         pin.extend(hooks.iter().map(|hook| hook.definition.clone()));
+        let approved: Vec<cineris_policy::Approved> = pin.into_iter().map(Into::into).collect();
         let git = in_git_at(&project.root);
-        if was_trusted {
-            store.approve(&project.key, &pin, git).map_err(failed)?;
+        let change = if was_trusted {
+            TrustChange::Approve {
+                approved,
+                git_shown: git,
+            }
         } else {
+            // The person's own command lifts a never said of the project.
+            TrustChange::Trust {
+                root: project.shown.clone(),
+                approved,
+                git_shown: git,
+                lift_refusal: true,
+            }
+        };
+        if let Some(proposal) = store
+            .propose(&project.key, change, Some(&verifier))
+            .map_err(failed)?
+        {
             store
-                .trust(&project.key, &project.shown, &pin, git)
+                .commit(&proposal, &key.sign(proposal.statement()), &verifier)
                 .map_err(failed)?;
         }
+        self.open_approvals(key).map_err(|refusal| {
+            error(
+                ErrorKind::Usage,
+                "approvals_not_opened",
+                refusal.to_string(),
+            )
+        })?;
         Ok(Trusted {
             rules: rules
                 .each()
@@ -659,10 +694,10 @@ impl Core {
     pub fn trusted_projects(&self) -> Result<Vec<String>, OpError> {
         Ok(self
             .trust_store()?
-            .list()
+            .list(self.verifier().as_ref())
             .map_err(|failure| error(ErrorKind::Internal, "store_failed", failure.to_string()))?
             .into_iter()
-            .map(|(_, root)| root)
+            .map(|(_, root, _)| root)
             .collect())
     }
 

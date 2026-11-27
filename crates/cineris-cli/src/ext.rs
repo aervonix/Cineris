@@ -268,7 +268,7 @@ pub(crate) fn ext(command: ExtCommand, name: &'static str) -> Done {
                 if removal.project_only {
                     // The core refuses it, naming the commands for a
                     // project's extensions.
-                    return match core.remove_extension(&removal, false) {
+                    return match core.remove_extension(&removal, false, None) {
                         Err(error) => Err(fail(error)),
                         Ok(_) => Err(exit::USAGE),
                     };
@@ -298,8 +298,20 @@ pub(crate) fn ext(command: ExtCommand, name: &'static str) -> Done {
                     );
                     return Err(exit::USAGE);
                 }
+                // Taking a pin away is signed with the person's key; a folder
+                // with no pin is deleted without it.
+                let key = match removal.pin {
+                    Some(_) => Some(crate::commands::person_key(&core).map_err(|why| {
+                        say(
+                            name,
+                            &format!("`{}` was not removed: {why}", in_code(&removal.name)),
+                        );
+                        exit::USAGE
+                    })?),
+                    None => None,
+                };
                 let removed = core
-                    .remove_extension(&removal, removal.folder.is_some())
+                    .remove_extension(&removal, removal.folder.is_some(), key.as_ref())
                     .map_err(fail)?;
                 out(&removed_text(&removal, removed));
                 Ok(exit::COMPLETED)
@@ -352,7 +364,16 @@ pub(crate) fn ext(command: ExtCommand, name: &'static str) -> Done {
                     );
                     return Err(exit::USAGE);
                 }
-                let added = runtime.block_on(core.add_extension(to_add)).map_err(fail)?;
+                let key = crate::commands::person_key(&core).map_err(|why| {
+                    say(
+                        name,
+                        &format!("`{}` was not added: {why}", in_code(&to_add.name)),
+                    );
+                    exit::USAGE
+                })?;
+                let added = runtime
+                    .block_on(core.add_extension(to_add, &key))
+                    .map_err(fail)?;
                 out(&added_text(&added));
                 Ok(exit::COMPLETED)
             }

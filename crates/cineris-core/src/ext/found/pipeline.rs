@@ -41,14 +41,15 @@ use cineris_ext::discover::{self, Discovered, LeftOut, Root, Seen};
 use cineris_ext::folder::Snapshot;
 use cineris_ext::skills;
 use cineris_ext::source::Source;
-use cineris_policy::{Definition, PinStore, ProjectTrust, Standing, TrustStore, UserPins};
+use cineris_policy::signed::Verifier;
+use cineris_policy::{Checked, Definition, PinStore, ProjectTrust, Standing, TrustStore, UserPins};
 use cineris_protocol::ProjectKey;
 use cineris_protocol::methods::TrustResourceKind;
 use cineris_tools::ToolRegistry;
 
 use super::{
     BEFORE_AN_EXTENSION_IS_REGISTERED, BEFORE_THE_CACHE_IS_KEPT, Extensions, Listed, Looked,
-    Pending, UserNames, in_project, sentence, with_paths_shown,
+    Pending, Uncounted, UserNames, in_project, sentence, with_paths_shown,
 };
 use crate::ext::prompt::PromptParts;
 use crate::ext::watched::{MAX_PLACES_PER_ROOT, Watched};
@@ -84,6 +85,14 @@ pub(crate) struct Finding {
     /// The project is trusted for the run by the command line
     /// (`--trust-project`), which approves no extension.
     pub(crate) trust_project: bool,
+    /// The key the person opened their approvals with in this core, when
+    /// they had as the session opened: what the stores' signatures are
+    /// checked with (the signed approvals step). With none, nothing in them
+    /// counts, and what they pin holds its gates.
+    pub(crate) verifier: Option<Verifier>,
+    /// The project's entry in the trust store, when it is there and does
+    /// not count: each extension it pins holds its gates.
+    pub(crate) uncounted: Option<Uncounted>,
     /// The names the user's configuration turns off
     /// (`[extensions.<name>] enabled = false`).
     pub(crate) disabled: Vec<String>,
@@ -182,6 +191,8 @@ struct Inputs {
     project: Option<ProjectKey>,
     for_the_run: Vec<Definition>,
     trust_project: bool,
+    verifier: Option<Verifier>,
+    uncounted: Option<Uncounted>,
     disabled: Vec<String>,
     skills: Vec<skills::Root>,
     read_skill_folders: bool,
@@ -210,9 +221,11 @@ struct Decided {
     held: Vec<Gate>,
     /// Each extension found, by where it comes from and its name.
     found: Vec<(Source, String)>,
-    /// The stores of approvals that could not be read, by the source whose
-    /// approvals they hold, with the file as the user is shown it.
-    unread: Vec<(Source, String)>,
+    /// The stores of approvals that could not be read, or whose approvals
+    /// do not count, by the source whose approvals they hold, with the file
+    /// as the user is shown it and, for the user's pins that do not count,
+    /// how they stand with the session's key.
+    unread: Vec<(Source, String, Option<Checked>)>,
     /// The sources whose store of approvals was read whole.
     judged: Vec<Source>,
     /// The extensions of those sources that stand approved, at any hash.
@@ -288,6 +301,8 @@ async fn first(extensions: &Extensions, finding: Finding) {
         project_found,
         for_the_run,
         trust_project,
+        verifier,
+        uncounted,
         disabled,
         registry,
         parts,
@@ -306,6 +321,8 @@ async fn first(extensions: &Extensions, finding: Finding) {
         project,
         for_the_run,
         trust_project,
+        verifier,
+        uncounted,
         disabled,
         skills,
         read_skill_folders,
@@ -516,13 +533,13 @@ impl Held {
         // of that source and is not found now (removed, or its folder left
         // out) keeps its gates, from what the session saw it register (the
         // re-check of the full review, M1').
-        for (source, file) in &unread {
+        for (source, file, checked) in &unread {
             for (name, hash) in self.scripts.loaded_of(*source) {
                 if found.contains(&(*source, name.clone())) {
                     continue;
                 }
                 let was = match source {
-                    Source::User => Unstood::PinsUnreadable(Vec::new(), file.clone()),
+                    Source::User => Unstood::PinsUnused(Vec::new(), file.clone(), *checked),
                     Source::Project => Unstood::TrustUnreadable(Vec::new(), file.clone()),
                 };
                 held.push(gate(
@@ -780,6 +797,12 @@ impl Held {
                      and every call they are on"
                 }
             };
+            // One whose notice is empty is said elsewhere, once: an
+            // extension of a project whose trust does not count, which the
+            // session is told of as it opens.
+            if notices[index].is_empty() {
+                continue;
+            }
             let told = notices[index].replace(GATES_HELD, held);
             // Said once a session, as all the finding tells.
             self.tell(told);
@@ -988,16 +1011,18 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
         }));
         project_read = read;
     }
-    let mut pins: Option<Option<UserPins>> = None;
+    let mut pins: Option<PinsRead> = None;
     let mut trust: Option<ProjectTrust> = Some(trust_read);
     let mut standing_approved = Vec::new();
     let mut changed: Vec<(Source, String, String)> = Vec::new();
     // Where no store can say what was approved (it cannot be read), each
     // found holds the gates its manifest lists, and is not loaded.
     let mut store_held: Vec<Gate> = Vec::new();
-    // The user's found while their pins cannot be read: gated once the
-    // registration cache is read (the third re-check of the full review, L2).
-    let mut pins_unread: Vec<(String, String, ContentHash, Vec<Event>)> = Vec::new();
+    // The user's found while their pins cannot be read, or do not count
+    // with the session's key: gated once the registration cache is read
+    // (the third re-check of the full review, L2; the signed approvals
+    // step).
+    let mut pins_unread: Vec<Unjudged> = Vec::new();
     let pins_file = inputs.state.as_ref().map(|state| {
         let file = state.pins_file();
         with_paths_shown(
@@ -1039,27 +1064,44 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
                     );
                     continue;
                 }
-                let Some(pins) = pins
+                let pins = match pins
                     .get_or_insert_with(|| user_pins(inputs, &mut decided.told))
                     .as_ref()
-                else {
-                    because(
-                        &mut decided.told,
-                        format!(
-                            "Your extension `{name}` (`{}`) is not loaded: the pin store, which \
-                             holds what you approved of your own, could not be read (said \
-                             above).",
-                            listed.shown
-                        ),
-                        true,
-                    );
-                    pins_unread.push((
-                        listed.manifest.name.clone(),
-                        listed.shown.clone(),
-                        listed.hash,
-                        listed.manifest.capabilities.hooks.clone(),
-                    ));
-                    continue;
+                {
+                    Ok(pins) => pins,
+                    Err(unused) => {
+                        let why = match unused.checked {
+                            None => "the pin store, which holds what you approved of your own, \
+                                     could not be read (said above)"
+                                .to_owned(),
+                            Some(checked) => {
+                                // Said once, before the first of them.
+                                decided.told.push(pins_uncounted(
+                                    pins_file.as_deref().unwrap_or_default(),
+                                    checked,
+                                ));
+                                "your approvals of your own extensions do not count in this \
+                                 session (said above)"
+                                    .to_owned()
+                            }
+                        };
+                        because(
+                            &mut decided.told,
+                            format!(
+                                "Your extension `{name}` (`{}`) is not loaded: {why}.",
+                                listed.shown
+                            ),
+                            true,
+                        );
+                        pins_unread.push((
+                            listed.manifest.name.clone(),
+                            listed.shown.clone(),
+                            listed.hash,
+                            listed.manifest.capabilities.hooks.clone(),
+                            unused.checked,
+                        ));
+                        continue;
+                    }
                 };
                 pins.standing(&definition)
             }
@@ -1165,6 +1207,7 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
             Source::User => pins
                 .get_or_insert_with(|| user_pins(inputs, &mut decided.told))
                 .as_ref()
+                .ok()
                 .and_then(|pins| pins.get(&TrustResourceKind::Extension, &name))
                 .map(|pin| pin.hash),
             Source::Project => inputs
@@ -1185,10 +1228,32 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
             pending.push((source, name, shown, hash, was));
         }
     }
+    // The extensions a project's entry pins where the entry does not count:
+    // each holds its gates, at the hash pinned, though the project is not
+    // trusted and none of it is looked at (the signed approvals step). One
+    // whose name the user's folder takes holds nothing, as when it counts.
+    if let Some(uncounted) = &inputs.uncounted {
+        for (name, hash) in &uncounted.extensions {
+            if users.takes(name)
+                || pending
+                    .iter()
+                    .any(|held| held.0 == Source::Project && held.1 == *name)
+            {
+                continue;
+            }
+            pending.push((
+                Source::Project,
+                name.clone(),
+                String::new(),
+                *hash,
+                Unstood::ProjectUncounted(uncounted.checked),
+            ));
+        }
+    }
     decided.unread = unread_stores(&pins, trust_unreadable.as_ref(), pins_file.as_ref());
     // What stands approved where its store was read whole: what left the
     // session for good is the rest.
-    if let Some(Some(pins)) = &pins {
+    if let Some(Ok(pins)) = &pins {
         decided.judged.push(Source::User);
         decided.standing.extend(
             pins.list()
@@ -1309,8 +1374,11 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
             .and_then(|(_, loaded)| loaded.cache.get(&hash))
             .filter(|entry| entry.name == name)
             .map(|entry| entry.registration.hooks.clone());
-        // One not found has no folder to show, nor to approve from.
-        let shown = (!matches!(was, Unstood::Missing)).then_some(shown.as_str());
+        // One not found has no folder to show, nor to approve from; nor has
+        // one of a project whose trust does not count, which is not looked
+        // in.
+        let shown = (!matches!(was, Unstood::Missing | Unstood::ProjectUncounted(_)))
+            .then_some(shown.as_str());
         decided.held.push(gate(
             source,
             &name,
@@ -1328,7 +1396,7 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
     // where it has none. The cache keys an entry by its hash, and names it,
     // with no source: an entry of a project's of the same name counts too,
     // which errs toward a gate.
-    for (name, shown, hash, events) in pins_unread {
+    for (name, shown, hash, events, checked) in pins_unread {
         let approved: Option<Vec<cineris_ext::registration::HookDef>> =
             loaded.as_ref().and_then(|(_, loaded)| {
                 let mut entries = loaded.cache.iter().filter(|(_, entry)| entry.name == name);
@@ -1344,7 +1412,7 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
             &name,
             Some(&shown),
             hash,
-            &Unstood::PinsUnreadable(events, pins_file.clone().unwrap_or_default()),
+            &Unstood::PinsUnused(events, pins_file.clone().unwrap_or_default(), checked),
             approved,
             inputs.trust_project,
         ));
@@ -1354,18 +1422,23 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
 }
 
 /// The stores of approvals the finding could not read: the user's pins,
-/// when they were read and could not be, and the trust store.
+/// when they were read and could not be, or do not count, and the trust
+/// store.
 fn unread_stores(
-    pins: &Option<Option<UserPins>>,
+    pins: &Option<PinsRead>,
     trust: Option<&String>,
     pins_file: Option<&String>,
-) -> Vec<(Source, String)> {
+) -> Vec<(Source, String, Option<Checked>)> {
     let mut unread = Vec::new();
-    if matches!(pins, Some(None)) {
-        unread.push((Source::User, pins_file.cloned().unwrap_or_default()));
+    if let Some(Err(unused)) = pins {
+        unread.push((
+            Source::User,
+            pins_file.cloned().unwrap_or_default(),
+            unused.checked,
+        ));
     }
     if let Some(file) = trust {
-        unread.push((Source::Project, file.clone()));
+        unread.push((Source::Project, file.clone(), None));
     }
     unread
 }
@@ -1391,8 +1464,12 @@ enum Unstood {
     /// (said as it did): the events its manifest lets it hook.
     Unregistered(Vec<Event>),
     /// Found while the store of the user's pins, `file` as shown, cannot be
-    /// read: the events its manifest lets it hook.
-    PinsUnreadable(Vec<Event>, String),
+    /// read (`None`), or what it holds does not count with the session's
+    /// key (how it stands): the events its manifest lets it hook.
+    PinsUnused(Vec<Event>, String, Option<Checked>),
+    /// Pinned by a project's entry that does not count (how it stands): the
+    /// project is not trusted, and nothing of it is looked at.
+    ProjectUncounted(Checked),
     /// A project's, found while the trust store, `file` as shown, cannot be
     /// read: the events its manifest lets it hook.
     TrustUnreadable(Vec<Event>, String),
@@ -1414,8 +1491,11 @@ fn gate(
     let both = || vec![Event::PromptSubmit, Event::ToolBefore];
     let stand = match was {
         Unstood::Missing => Stand::Gone,
-        Unstood::PinsUnreadable(_, file) | Unstood::TrustUnreadable(_, file) => {
+        Unstood::PinsUnused(_, file, None) | Unstood::TrustUnreadable(_, file) => {
             Stand::StoreUnreadable(file)
+        }
+        Unstood::PinsUnused(_, _, Some(checked)) | Unstood::ProjectUncounted(checked) => {
+            Stand::Uncounted(*checked)
         }
         _ => Stand::Unapproved { trust_project },
     };
@@ -1423,37 +1503,54 @@ fn gate(
     // What the model is told, short, and the user, with where it was said.
     let (what, told, unknown) = match was {
         Unstood::Changed => (
-            "has changed since it was approved",
+            "has changed since it was approved".to_owned(),
             "has changed since you approved it",
             both(),
         ),
         Unstood::Unreadable => (
-            "cannot be read as it was approved",
+            "cannot be read as it was approved".to_owned(),
             "cannot be read as you approved it (said above)",
             both(),
         ),
         Unstood::Missing => (
-            "cannot be found where it was approved",
+            "cannot be found where it was approved".to_owned(),
             "cannot be found where you approved it",
             both(),
         ),
         Unstood::Unloaded => (
-            "could not be loaded",
+            "could not be loaded".to_owned(),
             "could not be loaded (said above)",
             both(),
         ),
         Unstood::Unregistered(events) => (
-            "could not be registered",
+            "could not be registered".to_owned(),
             "could not be registered (said above)",
             events.clone(),
         ),
-        Unstood::PinsUnreadable(events, _) => (
-            "cannot be judged: the pin store could not be read",
+        Unstood::PinsUnused(events, _, None) => (
+            "cannot be judged: the pin store could not be read".to_owned(),
             "",
             events.clone(),
         ),
+        Unstood::PinsUnused(events, _, Some(checked)) => (
+            format!(
+                "cannot be judged: the approvals of the user's own extensions do not count in \
+                 this session ({})",
+                crate::person::uncounted(*checked)
+            ),
+            "",
+            events.clone(),
+        ),
+        Unstood::ProjectUncounted(checked) => (
+            format!(
+                "is not loaded: this project's trust does not count in this session ({})",
+                crate::person::uncounted(*checked)
+            ),
+            "",
+            both(),
+        ),
         Unstood::TrustUnreadable(events, _) => (
-            "cannot be judged: the trust store could not be read",
+            "cannot be judged: the trust store could not be read".to_owned(),
             "",
             events.clone(),
         ),
@@ -1475,7 +1572,7 @@ fn gate(
         // the same words for each.
         notice: match was {
             Unstood::Missing => format!("{whose} `{code}` {told}. {GATES_HELD}: {out}."),
-            Unstood::PinsUnreadable(_, file) => format!(
+            Unstood::PinsUnused(_, file, None) => format!(
                 "The pin store (`{file}`) could not be read, so your extensions cannot be judged, \
                  and are not loaded: each one this session loaded keeps the gating hooks it \
                  registered, and each other one found holds a gate on each gating event its \
@@ -1483,15 +1580,23 @@ fn gate(
                  is on. For each, {}.",
                 way_out(source, name, None, stand)
             ),
+            Unstood::PinsUnused(_, file, Some(checked)) => format!(
+                "Your approvals of your own extensions (`{file}`) do not count in this session \
+                 ({}), so your extensions cannot be judged, and are not loaded: each one this \
+                 session loaded keeps the gating hooks it registered, and each other one found \
+                 holds a gate on each gating event its manifest lists (`tool.before`, \
+                 `prompt.submit`), refusing every call or prompt it is on. For each, {}.",
+                crate::person::uncounted(*checked),
+                way_out(source, name, None, stand)
+            ),
+            // Said once, as the session opens, of the project's whole entry.
+            Unstood::ProjectUncounted(_) => String::new(),
             Unstood::TrustUnreadable(_, file) => trust_unread_notice(file, &out),
             _ => format!("{whose} `{code}`{at} {told}. {GATES_HELD}, until you {out}."),
         },
         hooks,
         unknown,
-        by_name: matches!(
-            was,
-            Unstood::PinsUnreadable(..) | Unstood::TrustUnreadable(..)
-        ),
+        by_name: matches!(was, Unstood::PinsUnused(..) | Unstood::TrustUnreadable(..)),
     }
 }
 
@@ -1513,13 +1618,13 @@ fn trust_unread_notice(file: &str, out: &str) -> String {
 fn not_found(
     inputs: &Inputs,
     seen: &[(Source, String)],
-    pins: &mut Option<Option<UserPins>>,
+    pins: &mut Option<PinsRead>,
     trust: &mut Option<ProjectTrust>,
     told: &mut Vec<String>,
 ) -> Vec<(Source, String, String, Unstood)> {
     let mut missing = Vec::new();
     if inputs.config_dir.is_some()
-        && let Some(pins) = pins.get_or_insert_with(|| user_pins(inputs, told)).as_ref()
+        && let Ok(pins) = pins.get_or_insert_with(|| user_pins(inputs, told)).as_ref()
     {
         for pin in pins.list() {
             if pin.kind == TrustResourceKind::Extension
@@ -1567,24 +1672,58 @@ fn project_standing(
     }
 }
 
-/// The user's own pins. `None` when the store cannot be read: nothing is
-/// taken as pinned, and the session is told why, with the file under `~`.
-fn user_pins(inputs: &Inputs, told: &mut Vec<String>) -> Option<UserPins> {
+/// The user's pins as the finding reads them: those that count with the
+/// session's key, or why none does.
+type PinsRead = Result<UserPins, PinsUnused>;
+
+/// One of the user's extensions found while their pins cannot be judged: its
+/// name, its folder as shown, its hash, the events its manifest lets it
+/// hook, and how the pins stand with the session's key (`None`: the store
+/// cannot be read).
+type Unjudged = (String, String, ContentHash, Vec<Event>, Option<Checked>);
+
+/// Why none of the user's pins counts in the session.
+#[derive(Debug, Clone, Copy)]
+struct PinsUnused {
+    /// `None`: the store cannot be read. Otherwise how what it holds stands
+    /// with the session's key: no key, unsigned, or not the person's.
+    checked: Option<Checked>,
+}
+
+/// The user's own pins, as they stand with the session's key. An error
+/// when the store cannot be read, and the session is told why, with the
+/// file under `~`; or when what it holds does not count with the key, as
+/// it is told before the first extension that it leaves unjudged (the
+/// signed approvals step). Either way nothing is taken as pinned, and each
+/// of the user's extensions found holds its gates.
+fn user_pins(inputs: &Inputs, told: &mut Vec<String>) -> PinsRead {
     let Some(state) = &inputs.state else {
-        return Some(UserPins::default());
+        return Ok(UserPins::default());
     };
     let file = state.pins_file();
-    match PinStore::new(&file, Arc::clone(&inputs.clock)).pins() {
-        Ok(pins) => Some(pins),
+    match PinStore::new(&file, Arc::clone(&inputs.clock)).pins(inputs.verifier.as_ref()) {
+        Ok(pins) if pins.counts() => Ok(pins),
+        Ok(pins) => Err(PinsUnused {
+            checked: Some(pins.checked()),
+        }),
         Err(error) => {
             told.push(sentence(&with_paths_shown(
                 &error.to_string(),
                 &[&file],
                 inputs.home.as_deref(),
             )));
-            None
+            Err(PinsUnused { checked: None })
         }
     }
+}
+
+/// What the session is told, once, when the user's pins at `file`, as
+/// shown, do not count with its key.
+fn pins_uncounted(file: &str, checked: Checked) -> String {
+    format!(
+        "Your approvals of your own extensions (`{file}`) do not count in this session: {}.",
+        crate::person::uncounted(checked)
+    )
 }
 
 /// The project's trust as the store holds it (none while the project is
@@ -1602,7 +1741,7 @@ fn read_trust(inputs: &Inputs) -> (ProjectTrust, Option<String>) {
     let Some(key) = &inputs.project else {
         return (ProjectTrust::untrusted(), None);
     };
-    match store.project(key) {
+    match store.project(key, inputs.verifier.as_ref()) {
         Ok(trust) => (trust, None),
         Err(_) => (
             ProjectTrust::untrusted(),
@@ -1620,7 +1759,7 @@ fn read_trust(inputs: &Inputs) -> (ProjectTrust, Option<String>) {
 fn project_trust(inputs: &Inputs) -> ProjectTrust {
     match (&inputs.state, &inputs.project) {
         (Some(state), Some(key)) => TrustStore::new(state.trust_file(), Arc::clone(&inputs.clock))
-            .project(key)
+            .project(key, inputs.verifier.as_ref())
             .unwrap_or_default(),
         _ => ProjectTrust::untrusted(),
     }
@@ -1700,15 +1839,18 @@ impl Kept {
 }
 
 /// Every hash a pin of an extension names: the user's own and every
-/// trusted project's, whose cache this is too. `None` when either store
-/// cannot be read: nothing is pruned then.
+/// project's, whose cache this is too, signed or not (keeping more than
+/// counts is the safe side: the cache only restricts what a pin that counts
+/// may use, and an entry of a pin that does not count is what its gates are
+/// held from). `None` when either store cannot be read: nothing is pruned
+/// then.
 fn pinned(state: &StateDir, clock: &SharedClock) -> Option<Vec<ContentHash>> {
     let kind = TrustResourceKind::Extension;
     let mine = PinStore::new(state.pins_file(), Arc::clone(clock))
-        .pins()
+        .pins(None)
         .ok()?;
     let mut pinned: Vec<ContentHash> = mine
-        .list()
+        .held()
         .iter()
         .filter(|pin| pin.kind.as_str() == kind.as_str())
         .map(|pin| pin.hash)
@@ -1757,6 +1899,8 @@ mod tests {
             project: Some(key.clone()),
             for_the_run: Vec::new(),
             trust_project: false,
+            verifier: Some(cineris_policy::test_support::Person::new().verifier()),
+            uncounted: None,
             disabled: Vec::new(),
             skills: Vec::new(),
             read_skill_folders: false,
@@ -1777,12 +1921,18 @@ mod tests {
             if case == "present" {
                 // A pin of the user's that names no extension: one that
                 // names an extension not found would hold its gates.
-                PinStore::new(state.pins_file(), Arc::clone(&clock))
-                    .pin(&Definition::of(TrustResourceKind::Hook, "elsewhere", ["x"]))
-                    .unwrap();
-                TrustStore::new(state.trust_file(), Arc::clone(&clock))
-                    .trust(&key, "~/work", &[], false)
-                    .unwrap();
+                let person = cineris_policy::test_support::Person::new();
+                person.pin(
+                    &PinStore::new(state.pins_file(), Arc::clone(&clock)),
+                    &Definition::of(TrustResourceKind::Hook, "elsewhere", ["x"]),
+                );
+                person.trust(
+                    &TrustStore::new(state.trust_file(), Arc::clone(&clock)),
+                    &key,
+                    "~/work",
+                    &[],
+                    false,
+                );
             }
             let whole = median(&|| {
                 let decided = decide(&inputs, None);

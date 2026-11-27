@@ -536,9 +536,25 @@ pub fn probing(test: &str, connect: &str) -> Option<(World, CoreThread)> {
     let project = core.core.project(&world.workspace).unwrap();
     let to_add = core.core.extension_to_add(&project, &folder).unwrap();
     let adding = core.core.clone();
-    core.on(async move { adding.add_extension(to_add).await })
+    // Signed with the person's key, as `cineris ext add` signs it, which
+    // opens the core's approvals with it (the signed approvals step).
+    core.on(async move { adding.add_extension(to_add, &person_key()).await })
         .expect("the probe extension is approved");
     Some((world, core))
+}
+
+/// The person's key, made from a password at a cost small enough for a
+/// test: what signs an approval of the tests' own.
+fn person_key() -> cineris_core::signed::PersonKey {
+    use cineris_core::signed::{Cost, KeyFile, Salt};
+    KeyFile::make(
+        b"the person's own password",
+        Salt::from_bytes([7; Salt::LEN]),
+        Cost::new(64, 1, 1).expect("within the caps"),
+        cineris_protocol::ids::Timestamp::new("2026-11-25T10:00:00Z"),
+    )
+    .expect("a test's key is made")
+    .1
 }
 
 /// What the `probing` world's probes said: every request of the session's

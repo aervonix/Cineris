@@ -812,7 +812,9 @@ impl Core {
         request: &RequestId,
         response: ServerResponse,
     ) -> Result<(), OpError> {
-        self.inner.clients.answer(client, request, response)?;
+        self.inner
+            .clients
+            .answer(client, request, response, self.verifier().as_ref())?;
         Ok(())
     }
 
@@ -1081,20 +1083,49 @@ impl Core {
         {
             return Ok(None);
         }
-        let inner = Arc::clone(&self.inner);
-        let look = wanted.clone();
-        let (trust, question) = Self::blocking(move || assemble::look(&inner, &look)).await?;
-        let Some(question) = question else {
-            return Ok(Some(trust));
-        };
+        // A signed yes whose entry moved while the question was open wrote
+        // nothing, and the question is put again with what the entry holds
+        // now (the signed approvals step). Each round waits for the person.
+        loop {
+            let inner = Arc::clone(&self.inner);
+            let look = wanted.clone();
+            let (trust, question) = Self::blocking(move || assemble::look(&inner, &look)).await?;
+            let Some(question) = question else {
+                return Ok(Some(trust));
+            };
+            match self.ask_trust(client, wanted, question, trust).await? {
+                assemble::Answered::Trust(trust) => return Ok(Some(*trust)),
+                assemble::Answered::AskAgain => {}
+            }
+        }
+    }
+
+    /// Puts `question` to the client, and keeps its answer: one round of
+    /// [`trust_for`](Self::trust_for).
+    async fn ask_trust(
+        &self,
+        client: ClientId,
+        wanted: &Wanted,
+        question: assemble::TrustQuestion,
+        trust: assemble::Trust,
+    ) -> Result<assemble::Answered, OpError> {
         let session = match &wanted.which {
             Which::New { id, .. } | Which::Resume { id } => id.clone(),
         };
+        // What a yes would write, which the person signs, and what it
+        // changes, for them to read.
+        let (proposal, summary) = question
+            .proposal
+            .as_ref()
+            .map(|proposal| (Some(proposal.view()), proposal.summary().to_vec()))
+            .unwrap_or_default();
         let request = TrustRequest {
             session_id: session.clone(),
             workspace: question.root.clone(),
             resources: question.resources.clone(),
             trusted: question.trusted,
+            proposal,
+            summary,
         };
         let (id, answer) = self.inner.clients.ask_once(&session, &[client.0], |_| {
             ServerRequest::Trust(request.clone())
@@ -1109,6 +1140,9 @@ impl Core {
         let answered = self.inner.options.cancel.race(answer).await;
         let answered = answered.map(|got| got.map(|answer| answer.response));
         self.inner.clients.close(&id);
+        // The signature of a yes, read as it was checked where the answer
+        // was given.
+        let mut signature = None;
         let answer = match answered {
             // Only a yes and nothing else is a yes: an answer that says
             // both is refused where it is given, and would be read here as
@@ -1117,7 +1151,13 @@ impl Core {
                 trusted: true,
                 never: false,
                 keep: false,
-            }))) => Some(TrustAnswer::Yes),
+                signature: signed,
+            }))) => {
+                signature = signed
+                    .as_deref()
+                    .and_then(cineris_policy::signed::Signature::from_hex);
+                Some(TrustAnswer::Yes)
+            }
             // Never is an answer to a project not trusted, and keep to one
             // trusted already; the other way round it is refused where it
             // is given, and would be read here as not now.
@@ -1125,11 +1165,13 @@ impl Core {
                 trusted: false,
                 never: true,
                 keep: false,
+                ..
             }))) if !question.trusted => Some(TrustAnswer::Never),
             Some(Ok(ServerResponse::Trust(TrustResponse {
                 trusted: false,
                 never: false,
                 keep: true,
+                ..
             }))) if question.trusted => Some(TrustAnswer::Keep),
             Some(Ok(_)) => Some(TrustAnswer::NotNow),
             // The client went away, or the core is ending.
@@ -1145,11 +1187,17 @@ impl Core {
         };
         let inner = Arc::clone(&self.inner);
         let wanted = wanted.clone();
-        let trust = Self::blocking(move || {
-            assemble::answer_trust(&inner, &wanted, &question, answer, trust)
+        Self::blocking(move || {
+            assemble::answer_trust(
+                &inner,
+                &wanted,
+                &question,
+                answer,
+                signature.as_ref(),
+                trust,
+            )
         })
-        .await?;
-        Ok(Some(trust))
+        .await
     }
 
     /// Asks a local server what context size it loaded the main role's

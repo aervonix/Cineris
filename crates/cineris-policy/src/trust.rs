@@ -877,22 +877,36 @@ impl TrustStore {
     }
 
     /// Works out `change` to the project `key` against its entry as it
-    /// stands with `verifier`, the key the person's password just made: what
-    /// the entry would then hold, and the statement the person signs for
-    /// it. `None` when the change changes nothing (a drop of what is not
-    /// pinned), so that nobody is asked.
+    /// stands with `verifier`, the session's key, when the person's
+    /// approvals are open: what the entry would then hold, and the statement
+    /// the person signs for it. `None` when the change changes nothing (a
+    /// drop of what is not pinned), so that nobody is asked.
+    ///
+    /// A trust replaces the whole entry, so it is worked out with no key
+    /// too: a project's first question is put before the person has opened
+    /// their approvals, and the yes is signed, and committed, once they
+    /// have. An approval and a drop keep what the entry holds, so each needs
+    /// the key the entry is checked with.
     ///
     /// # Errors
     ///
     /// When the file cannot be read or is not understood; or when an
     /// approval or a drop is of a project that is not trusted, which
-    /// approving one definition must not make it.
+    /// approving one definition must not make it, or is worked out with no
+    /// key.
     pub fn propose(
         &self,
         key: &ProjectKey,
         change: TrustChange,
-        verifier: &Verifier,
+        verifier: Option<&Verifier>,
     ) -> Result<Option<TrustProposal>, TrustError> {
+        if verifier.is_none() && !matches!(change, TrustChange::Trust { .. }) {
+            return Err(self.not_understood(
+                "your approvals are not open, so what the project's trust holds cannot be kept \
+                 or changed"
+                    .to_owned(),
+            ));
+        }
         let file = self.read()?;
         let base = file
             .projects
@@ -901,7 +915,7 @@ impl TrustStore {
             .cloned();
         let signed = base
             .as_ref()
-            .filter(|project| project.checked(Some(verifier)) == Checked::Signed);
+            .filter(|project| project.checked(verifier) == Checked::Signed);
         let revision = base.as_ref().map_or(0, |project| project.revision) + 1;
         let mut summary = Vec::new();
         let (next, lift_refusal, approves_rules) = match change {
@@ -912,8 +926,11 @@ impl TrustStore {
                 lift_refusal,
             } => {
                 if base.is_some() && signed.is_none() {
-                    summary
-                        .push("its earlier trust, not signed by your key, is replaced".to_owned());
+                    summary.push(if verifier.is_some() {
+                        "its earlier trust, not signed by your key, is replaced".to_owned()
+                    } else {
+                        "its earlier trust is replaced".to_owned()
+                    });
                 }
                 summary.push(format!("trust the project at {root}"));
                 summary.extend(approved.iter().map(approve_line));
@@ -1652,7 +1669,7 @@ mod tests {
                     approved: vec![hook("h", &["y"]).into()],
                     git_shown: false,
                 },
-                &mine,
+                Some(&mine),
             )
             .unwrap()
             .unwrap();
@@ -1854,12 +1871,12 @@ mod tests {
         };
         // Not trusted: approving one definition must not make it so.
         assert!(matches!(
-            store.propose(&key, approve(hook("a", &["x"])), &mine),
+            store.propose(&key, approve(hook("a", &["x"])), Some(&mine)),
             Err(TrustError::NotUnderstood { .. })
         ));
         person.trust(&store, &key, "~/app", &[], false);
         let proposal = store
-            .propose(&key, approve(hook("a", &["x"])), &mine)
+            .propose(&key, approve(hook("a", &["x"])), Some(&mine))
             .unwrap()
             .unwrap();
         // The entry changes in between: the answer is not used.
@@ -1880,7 +1897,7 @@ mod tests {
                 TrustChange::Drop {
                     pins: vec![(TrustResourceKind::Hook, "b".to_owned())],
                 },
-                &mine,
+                Some(&mine),
             )
             .unwrap()
             .unwrap();
@@ -1902,7 +1919,7 @@ mod tests {
                     TrustChange::Drop {
                         pins: vec![(TrustResourceKind::Hook, "none".to_owned())],
                     },
-                    &mine,
+                    Some(&mine),
                 )
                 .unwrap()
                 .is_none()
@@ -1925,7 +1942,7 @@ mod tests {
                     git_shown: false,
                     lift_refusal: false,
                 },
-                &mine,
+                Some(&mine),
             )
             .unwrap()
             .unwrap();
@@ -1939,6 +1956,65 @@ mod tests {
         person.trust(&store, &key, "~/app", &[], false);
         let trust = store.project(&key, Some(&mine)).unwrap();
         assert!(trust.is_trusted() && !trust.is_refused());
+    }
+
+    /// A first question is put before the person opens their approvals: a
+    /// trust is worked out with no key, and signed and committed once they
+    /// have. What keeps the entry's pins needs the key it is checked with.
+    #[test]
+    fn a_trust_is_proposed_without_a_key_and_an_approval_or_a_drop_is_not() {
+        let scratch = crate::store_lock::tests::Scratch::new();
+        let store = store_in(&scratch);
+        let key = ProjectKey::new("k");
+        let person = Person::new();
+        let mine = person.verifier();
+        let first = store
+            .propose(
+                &key,
+                TrustChange::Trust {
+                    root: "~/app".to_owned(),
+                    approved: vec![hook("a", &["x"]).into()],
+                    git_shown: false,
+                    lift_refusal: false,
+                },
+                None,
+            )
+            .unwrap()
+            .unwrap();
+        store
+            .commit(&first, &person.sign(first.statement()), &mine)
+            .unwrap();
+        assert!(store.project(&key, Some(&mine)).unwrap().is_trusted());
+        for change in [
+            TrustChange::Approve {
+                approved: vec![hook("b", &["y"]).into()],
+                git_shown: false,
+            },
+            TrustChange::Drop {
+                pins: vec![(TrustResourceKind::Hook, "a".to_owned())],
+            },
+        ] {
+            assert!(matches!(
+                store.propose(&key, change, None),
+                Err(TrustError::NotUnderstood { .. })
+            ));
+        }
+        // An entry there already is replaced, and the summary says so
+        // without saying whose it was.
+        let again = store
+            .propose(
+                &key,
+                TrustChange::Trust {
+                    root: "~/app".to_owned(),
+                    approved: Vec::new(),
+                    git_shown: false,
+                    lift_refusal: false,
+                },
+                None,
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(again.summary()[0], "its earlier trust is replaced");
     }
 
     #[test]
@@ -1963,7 +2039,7 @@ mod tests {
                     git_shown: true,
                     lift_refusal: false,
                 },
-                &mine,
+                Some(&mine),
             )
             .unwrap()
             .unwrap();

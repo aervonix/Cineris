@@ -2108,6 +2108,8 @@ fn trust_request(resources: Vec<cineris_protocol::methods::TrustResource>) -> Se
     ServerRequest::Trust(cineris_protocol::methods::TrustRequest {
         session_id: SessionId::from(SESSION),
         trusted: false,
+        proposal: None,
+        summary: Vec::new(),
         workspace: "~/src/app".to_owned(),
         resources,
     })
@@ -2153,11 +2155,13 @@ fn the_trust_question_lists_what_trust_turns_on_and_takes_three_answers() {
         trusted: true,
         never: false,
         keep: false,
+        signature: None,
     };
     let never = TrustResponse {
         trusted: false,
         never: true,
         keep: false,
+        signature: None,
     };
     for (binding, expected) in [
         ("y", trusted),
@@ -2348,6 +2352,7 @@ fn a_trust_question_that_does_not_fit_cannot_be_trusted_from_there() {
                 trusted: false,
                 never: true,
                 keep: false,
+                signature: None,
             })
         )]
     );

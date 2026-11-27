@@ -26,9 +26,10 @@ use crate::{World, calls, poll_once, says, settle};
 /// Pins something else of the user's: `pins.toml` changes, and the next
 /// turn's look finds a change.
 fn pin_something_else(world: &World, name: &str) {
-    PinStore::new(state(world).pins_file(), clock(world))
-        .pin(&Definition::of(TrustResourceKind::Extension, name, ["x"]))
-        .unwrap();
+    crate::person().pin(
+        &PinStore::new(state(world).pins_file(), clock(world)),
+        &Definition::of(TrustResourceKind::Extension, name, ["x"]),
+    );
 }
 
 // ------------------------------------------------------------ H1
@@ -96,7 +97,9 @@ fn a_folder_changed_while_the_question_is_open_is_pinned_as_listed_and_withdrawn
         );
         front.close().await;
     });
-    let stored = trust_store(&world).project(&project_key(&world)).unwrap();
+    let stored = trust_store(&world)
+        .project(&project_key(&world), Some(&crate::person().verifier()))
+        .unwrap();
     assert_eq!(
         stored.standing(&listed),
         Standing::Approved,
@@ -575,9 +578,10 @@ fn a_cached_entry_that_does_not_fit_the_extension_is_not_used() {
         std::fs::write(folder.join("prompt.md"), "Use the probe.").unwrap();
         let defined = named_definition(&folder, name);
         if of_the_user {
-            PinStore::new(state(&world).pins_file(), clock(&world))
-                .pin(&defined)
-                .unwrap();
+            crate::person().pin(
+                &PinStore::new(state(&world).pins_file(), clock(&world)),
+                &defined,
+            );
         } else {
             trusted.push(defined);
         }

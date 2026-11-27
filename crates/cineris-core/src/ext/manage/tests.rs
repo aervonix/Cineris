@@ -97,30 +97,47 @@ fn each_extension_stands_as_a_session_would_judge_it() {
     let off = found(Source::User, "off", "c");
     let new = found(Source::User, "new", "d");
     let pins = PinStore::new(scratch.join("pins.toml"), Arc::clone(&clock));
-    pins.pin(&definition(&approved)).unwrap();
-    pins.pin(&Definition {
-        kind: TrustResourceKind::Extension,
-        name: "changed".to_owned(),
-        hash: ContentHash::of(b"another"),
-    })
-    .unwrap();
+    cineris_policy::test_support::Person::new().pin(&pins, &definition(&approved));
+    cineris_policy::test_support::Person::new().pin(
+        &pins,
+        &Definition {
+            kind: TrustResourceKind::Extension,
+            name: "changed".to_owned(),
+            hash: ContentHash::of(b"another"),
+        },
+    );
     let gone_hash = ContentHash::of(b"gone");
-    pins.pin(&Definition {
-        kind: TrustResourceKind::Extension,
-        name: "gone".to_owned(),
-        hash: gone_hash,
-    })
-    .unwrap();
-    let user_pins = pins.pins().unwrap();
+    cineris_policy::test_support::Person::new().pin(
+        &pins,
+        &Definition {
+            kind: TrustResourceKind::Extension,
+            name: "gone".to_owned(),
+            hash: gone_hash,
+        },
+    );
+    let user_pins = pins
+        .pins(Some(
+            &cineris_policy::test_support::Person::new().verifier(),
+        ))
+        .unwrap();
     let theirs = found(Source::Project, "theirs", "e");
     let taken = found(Source::Project, "APPROVED", "f");
     let unpinned = found(Source::Project, "unpinned", "g");
     let key = ProjectKey::new("p_1");
     let trust_store = TrustStore::new(scratch.join("trust.toml"), Arc::clone(&clock));
-    trust_store
-        .trust(&key, "~/work", &[definition(&theirs)], false)
+    cineris_policy::test_support::Person::new().trust(
+        &trust_store,
+        &key,
+        "~/work",
+        &[definition(&theirs)],
+        false,
+    );
+    let trust = trust_store
+        .project(
+            &key,
+            Some(&cineris_policy::test_support::Person::new().verifier()),
+        )
         .unwrap();
-    let trust = trust_store.project(&key).unwrap();
     let user = discovered(
         Source::User,
         vec![approved.clone(), changed, off, new],

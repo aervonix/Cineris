@@ -79,6 +79,7 @@ pub use crate::manage::{
     Project, ProjectExtension, ProjectFiles, ProjectHookCommand, ProviderCredential, TrustState,
     Trusted,
 };
+pub use crate::person::{KeyRefusal, ResetReport};
 pub use crate::policy::{
     AFTER_THE_LOOK, BEFORE_THE_APPROVAL_IS_OPEN, BEFORE_THE_NEW_LEVEL_IS_IN_FORCE,
     CHANGING_APPROVALS, PermissionDenial,
@@ -96,6 +97,5 @@ pub use cineris_llm::TokioTimer;
 /// The harness's own approving commands, as the permission engine refuses
 /// them: what a front end gives its grammar to (`CoreOptions::own_commands`).
 pub use cineris_policy::{approving, signed};
-pub use crate::person::{KeyRefusal, ResetReport};
 /// What `cineris stats` found where the aggregates file is.
 pub use cineris_stats::Found as AggregatesFound;

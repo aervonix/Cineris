@@ -130,6 +130,27 @@ export type ApprovalDetail = ({
 /** One stored approval. */
 export type ApprovalId = string;
 
+/** A unit of a store of approvals as a yes would write it, which the person signs whole (since the signed approvals step; `docs/architecture/06-permissions-and-sandbox.md`, "Signed approvals"). Hashes are lowercase hexadecimal. The bytes signed are made from it by `cineris_policy::signed`, in one way only, so that a front end and the store agree on them. */
+export type ApprovalProposal = {
+    /** Whether git may read the repository's own configuration. */
+    git_trusted: boolean;
+    /** The project's key. */
+    key: ProjectKey;
+    /** Every pin of the entry after the change. */
+    pins: Array<ProposedPin>;
+    /** The entry's revision after the change. */
+    revision: number;
+    /** The root, as it is shown to a person. */
+    root: string;
+    unit: "project";
+  } | {
+    /** Every pin after the change. */
+    pins: Array<ProposedPin>;
+    /** The revision after the change. */
+    revision: number;
+    unit: "user_pins";
+  };
+
 /** `approval/request`: may this tool call run? */
 export interface ApprovalRequest {
   /** The rules that `allow_session` or `allow_project` would add, so that a front end can show exactly what such an answer allows from then on. Empty when only this one call can be allowed. */
@@ -1503,6 +1524,18 @@ export interface PromptReturnedNotice {
   parts: Array<Part>;
 }
 
+/** One pin of an [`ApprovalProposal`]. */
+export interface ProposedPin {
+  /** The hash of what is approved. */
+  hash: string;
+  /** What kind of thing it is. */
+  kind: TrustResourceKind;
+  /** Its name. */
+  name: string;
+  /** The hash of what it registered, for an extension evaluated before the question. */
+  registration?: string | null;
+}
+
 /** Something the provider produced that the neutral model does not name: server-side tool use and its results, compaction blocks, fallback markers. */
 export interface ProviderBlockPart {
   /** The provider's name for the block type, for display. */
@@ -2307,10 +2340,14 @@ export interface ToolTime {
 
 /** `trust/request`: may this project's executable resources be used? */
 export interface TrustRequest {
+  /** What a yes would write, which the person signs (since the signed approvals step): the project's whole entry as it would then be. A front end that answers yes rebuilds the bytes signed from it, checks that it holds what it shows, asks the person for their password, and answers with the signature. Absent when nothing a yes would write can be kept (no state directory): a yes then holds for the session alone. */
+  proposal?: ApprovalProposal | null;
   /** What it asks to be trusted with. */
   resources: Array<TrustResource>;
   /** The session. */
   session_id: SessionId;
+  /** What a yes changes, one line each, for the person to read before they sign. */
+  summary?: Array<string>;
   /** The project is trusted already, and the question is about what is new in it: its rules changed (each resource marked `changed`), git, now that it is a repository, or (since step 28) an extension new in it or changed since it was approved (`changed`). `never` is not an answer to it; `keep` is (since the follow-ups of step 23), which of an extension is kept by the core for its run alone. */
   trusted?: boolean;
   /** The project's workspace root. */
@@ -2338,6 +2375,8 @@ export interface TrustResponse {
   keep?: boolean;
   /** With `trusted` false: remember the refusal, so that the project is not asked about at later starts either (since step 23). It is kept beside the trusted projects, and `cineris permissions trust` lifts it. An answer with both `trusted` and `never` is refused (`invalid_answer`), and the question stays open. */
   never?: boolean;
+  /** With `trusted`, to a request with a `proposal`: the person's signature over it, 128 lowercase hexadecimal digits (since the signed approvals step). A yes without one, or with one that is not the person's key's over the proposal, trusts nothing, not even for the session, and the question stays open. */
+  signature?: string | null;
   /** Whether the resources listed may be used. */
   trusted?: boolean;
 }

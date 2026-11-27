@@ -336,6 +336,33 @@ pub(crate) fn start(pending: Pending) -> Arc<Extensions> {
     Arc::new(extensions)
 }
 
+/// A project whose entry in the trust store does not count in the session
+/// (the signed approvals step): there is one, and it is not signed by the
+/// key the person opened their approvals with (`checked`: no key, unsigned,
+/// or not theirs). The project is not trusted, and each extension its entry
+/// pins, signed or not, holds its gates, failing, as an approved one that
+/// changed does: from what the registration cache keeps at the hash
+/// pinned, or both gates where it keeps nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Uncounted {
+    /// How the entry stands with the session's key.
+    pub(crate) checked: cineris_policy::Checked,
+    /// The extensions it pins, each with the hash pinned.
+    pub(crate) extensions: Vec<(String, ContentHash)>,
+}
+
+impl Uncounted {
+    /// The project's entry as `stored` holds it, when it is there and does
+    /// not count; `None` otherwise: a project with no entry holds nothing,
+    /// since no repository gates a session by itself.
+    pub(crate) fn of(stored: &ProjectTrust) -> Option<Self> {
+        (stored.has_entry() && !stored.is_trusted()).then(|| Self {
+            checked: stored.checked(),
+            extensions: stored.held(&TrustResourceKind::Extension),
+        })
+    }
+}
+
 /// An extension as the trust question found it, handed to the session
 /// without its bytes: where it is, how it is shown, the hash it was read
 /// at, and its manifest (the early review: a project's folders were held

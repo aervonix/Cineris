@@ -969,20 +969,20 @@ fn an_extensions_gates_are_held_while_it_does_not_stand_approved() {
         }
 
         // Its pin taken away: nothing held.
-        cineris_policy::PinStore::new(state(&world).pins_file(), clock(&world))
-            .unpin(
-                &cineris_protocol::methods::TrustResourceKind::Extension,
-                "probe",
-            )
-            .unwrap();
+        crate::person().unpin(
+            &cineris_policy::PinStore::new(state(&world).pins_file(), clock(&world)),
+            &cineris_protocol::methods::TrustResourceKind::Extension,
+            "probe",
+        );
         front.turn("unpinned").await;
         let (outcome, text) = last(&front);
         assert_ne!(outcome, "denied", "{text}");
         front.close().await;
         // Pinned again, for the next session, at the second's hash.
-        cineris_policy::PinStore::new(state(&world).pins_file(), clock(&world))
-            .pin(&second)
-            .unwrap();
+        crate::person().pin(
+            &cineris_policy::PinStore::new(state(&world).pins_file(), clock(&world)),
+            &second,
+        );
         linked
     });
     // Turned off by the user: nothing is held, unreadable and pinned.
@@ -2233,12 +2233,11 @@ fn an_extension_unpinned_gets_no_gate_back_when_the_pin_store_breaks() {
         front.turn("loaded").await;
         let (outcome, text) = last(&front);
         assert_eq!(outcome, "success", "{text}");
-        cineris_policy::PinStore::new(state(&world).pins_file(), clock(&world))
-            .unpin(
-                &cineris_protocol::methods::TrustResourceKind::Extension,
-                "probe",
-            )
-            .unwrap();
+        crate::person().unpin(
+            &cineris_policy::PinStore::new(state(&world).pins_file(), clock(&world)),
+            &cineris_protocol::methods::TrustResourceKind::Extension,
+            "probe",
+        );
         front.turn("unpinned").await;
         let (outcome, text) = last(&front);
         assert_eq!(outcome, "success", "{text}");

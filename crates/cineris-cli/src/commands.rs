@@ -116,6 +116,21 @@ impl Context {
     }
 }
 
+/// The person's key, from the password they type at the terminal, for a
+/// change of their approvals that is signed (the signed approvals step:
+/// `permissions trust`, `ext add`, `ext remove` of a pinned extension).
+///
+/// Not built yet: the command line's part of the step asks for the
+/// password here, at the controlling terminal. Until then each such change
+/// is refused, and nothing is written.
+pub(crate) fn person_key(_core: &Core) -> Result<cineris_core::signed::PersonKey, String> {
+    Err(
+        "this change is signed with your key, and signing at a terminal comes with the CLI \
+         part of the signed approvals step: nothing was written"
+            .to_owned(),
+    )
+}
+
 fn result(outcome: Result<Done, Done>) -> Done {
     match outcome {
         Ok(code) | Err(code) => code,
@@ -857,8 +872,12 @@ pub(crate) fn permissions(command: PermissionsCommand, name: &'static str) -> Do
                         ));
                     }
                 }
+                let key = person_key(&core).map_err(|why| {
+                    context.say(&format!("the project was not trusted: {why}"));
+                    exit::USAGE
+                })?;
                 let trusted = core
-                    .trust_project_with(&project, &approved.0, &approved.1)
+                    .trust_project_with(&project, &approved.0, &approved.1, &key)
                     .map_err(fail)?;
                 let mut out = format!(
                     "{} {}{}.\n",

@@ -70,6 +70,7 @@ mod sandbox;
 mod secrets;
 mod settings;
 mod shell;
+mod signed;
 #[cfg(feature = "scripts")]
 mod skill_reads;
 mod start;
@@ -532,11 +533,30 @@ impl World {
         env
     }
 
+    /// A core whose approvals the person has opened ([`person`]), as after
+    /// they typed their password: what the stores' signatures are checked
+    /// with.
     pub fn core(&self) -> Core {
         self.core_with(|_| {})
     }
 
+    /// [`core`](Self::core), with its options changed first.
     pub fn core_with(&self, change: impl FnOnce(&mut CoreOptions)) -> Core {
+        let core = self.closed_core_with(change);
+        core.open_approvals(&person_key())
+            .expect("the approvals open");
+        core
+    }
+
+    /// A core whose approvals nobody opened (the signed approvals step): a
+    /// headless run's, or a session opened with Esc at the password. Nothing
+    /// in the stores counts, and what they pin holds its gates.
+    pub fn closed_core(&self) -> Core {
+        self.closed_core_with(|_| {})
+    }
+
+    /// [`closed_core`](Self::closed_core), with its options changed first.
+    pub fn closed_core_with(&self, change: impl FnOnce(&mut CoreOptions)) -> Core {
         let _starting = cineris_testkit::profile::phase("start a core");
         let mut options = self.options();
         change(&mut options);
@@ -683,6 +703,69 @@ pub async fn not_now(
         .await
     };
     (result, read)
+}
+
+/// The person every world's core opens its approvals for, and who signs
+/// what the tests approve: one password and one salt, at a test's cost, so
+/// that every `Person::new()` is this person (the signed approvals step).
+pub fn person() -> cineris_policy::test_support::Person {
+    cineris_policy::test_support::Person::new()
+}
+
+/// The key [`person`]'s password makes, as a front end makes it at a yes.
+pub fn person_key() -> cineris_core::signed::PersonKey {
+    cineris_core::signed::PersonKey::derive(
+        cineris_policy::test_support::PASSWORD.as_bytes(),
+        person().key_file(),
+    )
+    .expect("the person's key is made")
+}
+
+/// Another program's key: what the model's code signs with, which no
+/// session the person opened accepts.
+pub fn model_key() -> cineris_policy::test_support::Person {
+    cineris_policy::test_support::Person::with_password("the model's own password")
+}
+
+/// `response` to the trust question `request`, signed as a front end signs
+/// a yes: by `signer`, over the statement it rebuilds from what the
+/// question proposes. Anything but a yes, or a question with no proposal,
+/// is sent as it is.
+pub fn signed_by(
+    signer: &cineris_policy::test_support::Person,
+    request: &cineris_protocol::methods::TrustRequest,
+    response: TrustResponse,
+) -> TrustResponse {
+    match &request.proposal {
+        Some(proposal) if response.trusted && !response.never && !response.keep => {
+            let statement = cineris_core::signed::statement_of(proposal)
+                .expect("the question's proposal is one a front end can sign");
+            TrustResponse {
+                signature: Some(signer.sign(&statement).to_string()),
+                ..response
+            }
+        }
+        _ => response,
+    }
+}
+
+/// [`signed_by`] the [`person`].
+pub fn signed(
+    request: &cineris_protocol::methods::TrustRequest,
+    response: TrustResponse,
+) -> TrustResponse {
+    signed_by(&person(), request, response)
+}
+
+/// A yes to the trust question `request`, signed by the [`person`].
+pub fn yes_to(request: &cineris_protocol::methods::TrustRequest) -> TrustResponse {
+    signed(
+        request,
+        TrustResponse {
+            trusted: true,
+            ..TrustResponse::default()
+        },
+    )
 }
 
 /// The standard bounds of the look at protected paths, with a time no

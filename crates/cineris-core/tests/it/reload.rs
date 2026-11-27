@@ -240,14 +240,13 @@ fn a_broken_project_file_is_said_once_by_the_looks_and_again_when_asked() {
 fn an_allow_rule_added_while_trusted_is_not_in_force() {
     let world = World::new("reload_new_rule", [says("Done.")]);
     let (store, key) = trust_store(&world);
-    store
-        .trust(
-            &key,
-            "~/work/app",
-            &[Definition::of_rules(&[allow_github()])],
-            true,
-        )
-        .unwrap();
+    crate::person().trust(
+        &store,
+        &key,
+        "~/work/app",
+        &[Definition::of_rules(&[allow_github()])],
+        true,
+    );
     world.project_config(ALLOW_GITHUB);
     let core = world.core();
     world.run(async {
@@ -286,7 +285,7 @@ fn an_allow_rule_added_while_trusted_is_not_in_force() {
 fn trust_taken_away_from_outside_is_seen_by_the_next_look() {
     let world = World::new("reload_untrust", [says("Done.")]);
     let (store, key) = trust_store(&world);
-    store.trust(&key, "~/work/app", &[], true).unwrap();
+    crate::person().trust(&store, &key, "~/work/app", &[], true);
     world.project_config("[retry]\nattempts = 9\n");
     let core = world.core();
     world.run(async {
@@ -331,7 +330,7 @@ fn a_reload_reads_the_git_pin_as_an_open_does() {
         [git_status(), says("Done."), git_status(), says("Done.")],
     );
     let (store, key) = trust_store(&world);
-    store.trust(&key, "~/work/app", &[], false).unwrap();
+    crate::person().trust(&store, &key, "~/work/app", &[], false);
     // A repository, whose git the person was not shown.
     std::fs::create_dir_all(world.workspace.join(".git")).unwrap();
     let core = world.core();
@@ -611,14 +610,13 @@ fn an_artifact_is_read_back_whole_and_one_not_there_is_refused() {
 fn the_load_uses_the_trust_just_judged() {
     let world = World::new("reload_judged_first", [says("Done.")]);
     let (store, key) = trust_store(&world);
-    store
-        .trust(
-            &key,
-            "~/work/app",
-            &[Definition::of_rules(&[allow_github()])],
-            true,
-        )
-        .unwrap();
+    crate::person().trust(
+        &store,
+        &key,
+        "~/work/app",
+        &[Definition::of_rules(&[allow_github()])],
+        true,
+    );
     world.project_config(ALLOW_GITHUB);
     let core = world.core();
     let judged = cineris_testkit::Hold::new(cineris_core::TRUST_JUDGED);
@@ -646,9 +644,12 @@ fn the_load_uses_the_trust_just_judged() {
             pattern: "curl *".to_owned(),
             action: RuleAction::Allow,
         };
-        store
-            .approve(&key, &[Definition::of_rules(&[allow_github(), curl])], true)
-            .unwrap();
+        crate::person().approve(
+            &store,
+            &key,
+            &[Definition::of_rules(&[allow_github(), curl])],
+            true,
+        );
         judged.release();
         let result = reloading.await;
         assert!(
@@ -749,7 +750,7 @@ fn a_reload_never_undoes_a_model_or_a_level_chosen_in_the_session() {
 fn trust_taken_away_with_a_broken_file_is_taken_away() {
     let world = World::new("reload_untrust_broken", [says("Done.")]);
     let (store, key) = trust_store(&world);
-    store.trust(&key, "~/work/app", &[], true).unwrap();
+    crate::person().trust(&store, &key, "~/work/app", &[], true);
     world.project_config("[retry]\nattempts = 9\n");
     let core = world.core();
     world.run(async {
@@ -787,7 +788,7 @@ fn trust_taken_away_with_a_broken_file_is_taken_away() {
 fn trust_taken_away_holds_when_another_part_of_the_reload_fails() {
     let world = World::new("reload_untrust_partial", [says("Done.")]);
     let (store, key) = trust_store(&world);
-    store.trust(&key, "~/work/app", &[], true).unwrap();
+    crate::person().trust(&store, &key, "~/work/app", &[], true);
     world.raw_user_config(
         "[session]\ndurability = \"never\"\n\n[credentials]\nstore = \"file\"\n\n[model]\nmain = \
          \"no-such-model\"\n",
@@ -848,7 +849,7 @@ fn a_limit_a_reload_added_stays_through_the_next() {
 fn two_reloads_of_a_session_never_interleave() {
     let world = World::new("reload_one_at_a_time", [says("Done.")]);
     let (store, key) = trust_store(&world);
-    store.trust(&key, "~/work/app", &[], true).unwrap();
+    crate::person().trust(&store, &key, "~/work/app", &[], true);
     world.project_config("[retry]\nattempts = 9\n");
     let core = world.core();
     let judged = cineris_testkit::Hold::new(cineris_core::TRUST_JUDGED);
@@ -933,14 +934,13 @@ fn a_profile_that_cannot_be_applied_keeps_the_sessions_choices() {
 fn a_rule_written_between_the_judgement_and_the_load_is_not_in_force() {
     let world = World::new("reload_written_between", [says("Done.")]);
     let (store, key) = trust_store(&world);
-    store
-        .trust(
-            &key,
-            "~/work/app",
-            &[Definition::of_rules(&[allow_github()])],
-            true,
-        )
-        .unwrap();
+    crate::person().trust(
+        &store,
+        &key,
+        "~/work/app",
+        &[Definition::of_rules(&[allow_github()])],
+        true,
+    );
     world.project_config(ALLOW_GITHUB);
     let core = world.core();
     let judged = cineris_testkit::Hold::new(cineris_core::TRUST_JUDGED);
@@ -1112,14 +1112,13 @@ fn a_chosen_model_without_the_files_reasoning_level_does_not_refuse_a_reload() {
 fn trust_taken_away_between_the_judgement_and_the_load_is_said_as_untrusted() {
     let world = World::new("reload_forgot_between", [says("Done.")]);
     let (store, key) = trust_store(&world);
-    store
-        .trust(
-            &key,
-            "~/work/app",
-            &[Definition::of_rules(&[allow_github()])],
-            true,
-        )
-        .unwrap();
+    crate::person().trust(
+        &store,
+        &key,
+        "~/work/app",
+        &[Definition::of_rules(&[allow_github()])],
+        true,
+    );
     world.project_config(ALLOW_GITHUB);
     let core = world.core();
     let judged = cineris_testkit::Hold::new(cineris_core::TRUST_JUDGED);
@@ -1255,7 +1254,7 @@ fn trust_taken_away_with_a_part_that_fails_still_gives_the_epoch_its_keys() {
         [says("One."), says("Goal: the summary.")],
     );
     let (store, key) = trust_store(&world);
-    store.trust(&key, "~/work/app", &[], true).unwrap();
+    crate::person().trust(&store, &key, "~/work/app", &[], true);
     let user = "[session]\ndurability = \"never\"\n\n[credentials]\nstore = \"file\"\n\n[model]\nmain = \
                 \"no-such-model\"\n";
     world.raw_user_config(user);
@@ -1339,7 +1338,7 @@ fn a_prompt_queued_behind_a_turn_not_yet_begun_does_not_look() {
 fn trust_taken_away_holds_when_the_reload_brings_a_level_the_core_may_not_give() {
     let world = World::new("reload_untrust_unrestricted", [says("Done.")]);
     let (store, key) = trust_store(&world);
-    store.trust(&key, "~/work/app", &[], true).unwrap();
+    crate::person().trust(&store, &key, "~/work/app", &[], true);
     let core = world.core_with(|options| options.allow_unrestricted = false);
     world.run(async {
         let front = Front::start(&world, &core).await;
@@ -1440,7 +1439,7 @@ fn a_refused_profile_leaves_nothing_of_it_beside_trust_taken_away() {
     let profile = "[profiles.loose.permissions]\nmode = \"unrestricted\"\n\n[profiles.loose.retry]\nattempts = 7\n";
     world.user_config(profile);
     let (store, key) = trust_store(&world);
-    store.trust(&key, "~/work/app", &[], false).unwrap();
+    crate::person().trust(&store, &key, "~/work/app", &[], false);
     let core = world.core_with(|options| options.allow_unrestricted = false);
     world.run(async {
         let front = Front::start(&world, &core).await;
@@ -1543,7 +1542,7 @@ fn a_projects_profile_is_offered_and_loaded_only_once_it_is_trusted() {
     // Trusted, the project's is offered.
     let world = World::new("reload_project_profile_trusted", [says("Done.")]);
     let (store, key) = trust_store(&world);
-    store.trust(&key, "~/work/app", &[], true).unwrap();
+    crate::person().trust(&store, &key, "~/work/app", &[], true);
     world.user_config("[profiles.careful.retry]\nattempts = 1\n");
     world.project_config("[profiles.loose.retry]\nattempts = 2\n");
     let core = world.core();

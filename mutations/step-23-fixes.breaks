@@ -761,7 +761,7 @@ caught-by:
 [break] a-trust-question-put-after-shutdown-stays-open
 rule: A trust question put after the core's end began (its withdrawal came before the question) is taken back at once.
 file: crates/cineris-core/src/core.rs
-in: Core::trust_for
+in: Core::ask_trust
 find:
     if self.inner.shutting_down.load(Ordering::SeqCst) {
             self.inner.clients.close(&id);
@@ -783,13 +783,15 @@ caught-by:
     cineris-core::it asking::an_undos_question_put_as_the_core_ends_is_taken_back
 
 [break] a-yes-after-untrust-is-trust-afresh
-rule: A yes to a rules-changed question whose project's trust was taken away meanwhile (revoked or refused) writes nothing and trusts nothing: a never said meanwhile stays.
-file: crates/cineris-core/src/assemble.rs
-in: kept_answer
-find: store.approve(&question.key, &pin, question.git_shown)
-replace: store.approve(&question.key, &pin, question.git_shown).or_else(|_| store.trust(&question.key, &question.root, &pin, question.git_shown))
+rule: A yes to a rules-changed question whose project's trust was taken away meanwhile (revoked or refused) writes nothing and trusts nothing: a never said meanwhile stays. (Since the signed approvals step the yes is signed over the entry as it was, and is committed only while the entry is still that.)
+file: crates/cineris-policy/src/trust.rs
+in: TrustStore::commit
+find: if now != proposal.base.as_ref() {
+replace: if false {
+packages: cineris-policy,cineris-core
 caught-by:
     cineris-core::it trusting::a_yes_after_the_projects_trust_changed_meanwhile_is_not_used
+    cineris-policy trust::tests::an_approval_needs_a_trusted_project_and_its_entry_as_it_was
 
 [break] a-yes-after-untrust-is-kept-for-the-session
 rule: A yes to a rules-changed question whose project's trust was taken away meanwhile is not taken as an answer the store could not keep: the session is not trusted for itself.

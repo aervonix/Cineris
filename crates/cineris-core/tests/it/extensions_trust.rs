@@ -358,7 +358,9 @@ fn keeping_the_trust_without_a_changed_extension_leaves_it_off_until_the_next_st
         assert!(asked.is_empty(), "this core asks no more: {asked:?}");
         front.close().await;
     });
-    let stored = trust_store(&world).project(&project_key(&world)).unwrap();
+    let stored = trust_store(&world)
+        .project(&project_key(&world), Some(&crate::person().verifier()))
+        .unwrap();
     assert_eq!(
         stored.standing(&first),
         Standing::Approved,
@@ -462,7 +464,7 @@ fn a_yes_the_store_cannot_keep_loads_the_extensions_shown_for_the_session() {
     });
     assert!(
         !trust_store(&world)
-            .project(&project_key(&world))
+            .project(&project_key(&world), Some(&crate::person().verifier()))
             .unwrap()
             .is_trusted()
     );

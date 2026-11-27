@@ -3481,9 +3481,9 @@ caught-by:
 [break] pinned-yes-pins-no-extension
 rule: A yes to the trust question pins each extension it listed, as it was read, with the project's other definitions.
 file: crates/cineris-core/src/assemble.rs
-in: kept_answer
-find: pin.extend(question.extensions.iter().cloned());
-replace: pin.extend(question.extensions.iter().take(0).cloned());
+in: TrustQuestion::approved
+find: pin.extend(self.extensions.iter().cloned());
+replace: pin.extend(self.extensions.iter().take(0).cloned());
 caught-by:
     extensions_found::a_projects_extension_walks_through_its_trust
 
@@ -3695,8 +3695,8 @@ caught-by:
 rule: When the pin store cannot be read, nothing is pruned from the cache.
 file: crates/cineris-core/src/ext/found/pipeline.rs
 in: pinned
-find: .pins().ok()?
-replace: .pins().unwrap_or_default()
+find: .pins(None).ok()?
+replace: .pins(None).unwrap_or_default()
 caught-by:
     extensions_trust::an_unreadable_pin_store_loads_none_of_the_users_says_why_and_prunes_nothing
 
@@ -3704,8 +3704,8 @@ caught-by:
 rule: A pin store that cannot be read is said to be why the user's extensions are not loaded, not that they were never approved.
 file: crates/cineris-core/src/ext/found/pipeline.rs
 in: user_pins
-find: match PinStore::new(&file, Arc::clone(&inputs.clock)).pins() {
-replace: match PinStore::new(&file, Arc::clone(&inputs.clock)).pins().or_else(|_| Ok::<_, cineris_policy::PinError>(UserPins::default())) {
+find: match PinStore::new(&file, Arc::clone(&inputs.clock)).pins(inputs.verifier.as_ref()) {
+replace: match PinStore::new(&file, Arc::clone(&inputs.clock)).pins(inputs.verifier.as_ref()).or_else(|_| Ok::<_, cineris_policy::PinError>(UserPins::default())) {
 caught-by:
     extensions_trust::an_unreadable_pin_store_loads_none_of_the_users_says_why_and_prunes_nothing
 
@@ -4365,8 +4365,8 @@ caught-by:
 rule: A pin store of a version this build does not read (a newer one) refuses the whole file.
 file: crates/cineris-policy/src/trust/pins.rs
 in: PinStore::read
-find: if file.version != VERSION {
-replace: if file.version < VERSION {
+find: if !(UNSIGNED_VERSION..=VERSION).contains(&file.version) {
+replace: if file.version < UNSIGNED_VERSION {
 caught-by:
     pins::a_pin_store_that_is_not_understood_pins_nothing_and_is_left_as_it_is
 
@@ -4392,8 +4392,8 @@ caught-by:
 rule: A missing pin store pins nothing, and is not an error: the first pin makes it.
 file: crates/cineris-policy/src/trust/pins.rs
 in: PinStore::read
-find: Err(OpenError::NotFound) => {
-replace: Err(OpenError::NotFound) if false => {
+find: Err(OpenError::NotFound) => return
+replace: Err(OpenError::NotFound) if false => return
 caught-by:
     pins::a_missing_file_pins_nothing_and_the_first_pin_makes_it
 
@@ -4433,40 +4433,39 @@ caught-by:
 [break] pins-lock-let-go-at-once
 rule: A change to the pin store holds its lock from the read to the write; a lock taken and let go at once keeps no second writer out.
 file: crates/cineris-policy/src/trust/pins.rs
-in: PinStore::update
+in: PinStore::commit
 find: let _lock = store_lock::hold(&self.file)
 replace: let _ = store_lock::hold(&self.file)
 caught-by:
-    trust::pins::tests::every_change_to_the_pins_is_made_under_their_lock
-    pins::a_writer_between_anothers_read_and_write_waits_and_both_keep_their_pins
+    pins::a_writer_between_anothers_read_and_write_waits_and_loses_no_pin
 
 [break] pins-lock-let-go-before-the-write
 rule: The lock is held until the write is done: a second writer that reads before the first one's write and writes after it loses the first one's pin.
 file: crates/cineris-policy/src/trust/pins.rs
-in: PinStore::update
-find: if changed {
-replace: drop(_lock); if changed {
+in: PinStore::commit
+find: cineris_base::hook::point(BEFORE_THE_PINS_ARE_WRITTEN);
+replace: drop(_lock); cineris_base::hook::point(BEFORE_THE_PINS_ARE_WRITTEN);
 caught-by:
-    pins::a_writer_between_anothers_read_and_write_waits_and_both_keep_their_pins
+    pins::a_writer_between_anothers_read_and_write_waits_and_loses_no_pin
 
 [break] pins-no-lock-taken
 rule: Every change takes the lock, and a lock that cannot be taken stops the change.
 file: crates/cineris-policy/src/trust/pins.rs
-in: PinStore::update
+in: PinStore::commit
 find: store_lock::hold(&self.file).map_err
 replace: Ok::<Option<std::fs::File>, io::Error>(None).map_err
 caught-by:
     pins::a_lock_that_cannot_be_taken_stops_every_change_and_no_read
-    pins::a_writer_between_anothers_read_and_write_waits_and_both_keep_their_pins
+    pins::a_writer_between_anothers_read_and_write_waits_and_loses_no_pin
 
 # ------------------------------------------------------------ one pin for each kind and name
 
 [break] pins-pin-added-beside-the-old
 rule: Pinning a definition again replaces the pin of the same kind and name; it never adds a second.
 file: crates/cineris-policy/src/trust/pins.rs
-in: PinStore::pin
-find: Some(index) => file.pins[index] = pin
-replace: Some(_) => file.pins.push(pin)
+in: PinStore::propose
+find: Some(index) => pins[index] = pin
+replace: Some(_) => pins.push(pin)
 caught-by:
     pins::pinning_again_replaces_the_pin_of_the_same_kind_and_name
 
@@ -6354,8 +6353,8 @@ caught-by:
 [break] a-yes-pins-no-hook
 rule: A yes to the trust question pins the hooks it listed, as they were shown.
 file: crates/cineris-core/src/assemble.rs
-in: kept_answer
-find: pin.extend(question.hooks.iter().cloned());
+in: TrustQuestion::approved
+find: pin.extend(self.hooks.iter().cloned());
 replace:
 caught-by:
     cineris-core::it hook_wiring::a_projects_hooks_reach_a_session_only_through_trust
@@ -6664,6 +6663,7 @@ file: crates/cineris-core/src/ext/hooks.rs
 in: in_session
 find: refused.push(Refused {
 replace: let _ = (Refused {
+occurrence: 2
 caught-by:
     ext::hooks::tests::a_projects_hook_runs_only_trusted_and_approved_as_it_is
 
@@ -8606,8 +8606,8 @@ caught-by:
 rule: While the store of its approval cannot be read, an extension the session loaded and that is gone keeps the gates it registered: nothing else can say it was approved (the re-check of the full review, M1').
 file: crates/cineris-core/src/ext/found/pipeline.rs
 in: Held::settle
-find: for (source, file) in &unread {
-replace: for (source, file) in unread.iter().take(0) {
+find: for (source, file, checked) in &unread {
+replace: for (source, file, checked) in unread.iter().take(0) {
 caught-by:
     cineris-core::it extensions_hooks::a_store_that_cannot_be_read_holds_the_gates_known_of_an_extension
 

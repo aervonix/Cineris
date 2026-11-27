@@ -336,6 +336,7 @@ There is no function that returns credentials, reads the session, changes config
 | The user's | with its hash | loaded |
 | The user's | with another hash, or none | not loaded; the session says so, with `cineris ext add <folder>`, the folder under `~`; its gating hooks stay on their events, failing, while its pin stands ("As built in step 28: script hooks"), and `cineris ext remove <name>` takes the pin away |
 | The user's, `pins.toml` unreadable | any | not loaded; the session says the store is why; one the session loaded keeps the gates it registered, one it never loaded holds those of the cache's entries of its name beside a gate on each gating event its manifest lists ("As built in step 28: script hooks") |
+| The user's, `pins.toml` not counting with the session's key (no key open, of version 1 or reset, or not signed by the key) | any | as when `pins.toml` cannot be read; the session says why ("The user's own pins, signed", below) |
 | The user's, `[extensions.<name>] enabled = false` (`cineris ext disable <name>` writes it) | any | not loaded, and nothing is said or asked |
 | A project's | with its hash | loaded |
 | A project's | with another hash, or none | not loaded; the session says so, with the trust question (`cineris permissions trust` under `--trust-project`); its gating hooks stay on their events, failing, while its pin stands ("As built in step 28: script hooks") |
@@ -343,6 +344,15 @@ There is no function that returns credentials, reads the session, changes config
 | A project's, of a name a folder of the user's has | any | not used; the session says why |
 
 - **`cineris ext add` pins a user's own extension** (since the step's third pull request, "As built in step 28: managing extensions" below): it is the one command that writes a pin into `pins.toml`, and `cineris ext remove` the one that takes one away.
+- **The user's own pins, signed** (the signed approvals step; [06-permissions-and-sandbox.md](06-permissions-and-sandbox.md), "Project trust", "As built in the signed approvals step").
+  `pins.toml` (version 2) is signed whole, a revision and every pin, by the key the person's password makes, and a session checks it with the key the person opened their approvals with in its core.
+  Pins that do not count with it are taken as a pin store that cannot be read: the approvals are not open (a headless run, a server nobody opened, Esc at the password), the file is of version 1 or was reset, or it is not signed by that key (another key's set, a pin added or taken out by hand).
+  Each of the user's extensions found is then not loaded, and holds the gates of the cache's entries of its name beside a gate on each gating event its manifest lists; the session says why, once ("your approvals are not open in this session"; "written by an older version of Cineris, or before your password was reset: asked again"; "not signed by your key: changed by something other than Cineris"). So a pin taken out by hand lifts no gate.
+  A project's entry in `trust.toml` that does not count holds the gates of the extensions it pins, from the cache's entry at the hash pinned or both gates, though nothing of the project is looked at; a project with no entry holds nothing.
+  `cineris ext add` and `cineris ext remove` of a pinned extension are the person's signed changes of the whole set: proposed against the pins as they stand with the person's key, signed at the yes, and committed only over the file as it was proposed against (`Core::add_extension` and `remove_extension` take the key). A removal is signed because a pin can hold a gate.
+- **A gate is the person's own check, not a bound on the model.**
+  Turning an extension off is a write of the user's configuration (`cineris ext disable`), which a program of the model's can make where nothing confines it, and which no signature covers until the user's configuration is pinned (the signed approvals step's third pull request). An extension's gate holds against what a session's model asks through the harness; it does not hold against what the model's unconfined programs write.
+  A gate meant to bind the model belongs in a deny rule of the pinned configuration or the managed file.
 - **A name is the user's** whenever the user's folder of extensions holds a folder of that name, compared with ASCII's case folded, whether that folder could be used or was left out (a link in it, a manifest refused): a user's extension left out does not free its name for a project's, to which the user's rules about it would apply.
   A user's folder that is there and could not be opened or listed whole (a file, a link to nothing, a folder closed to the user) takes every name.
 - **Everything is decided before anything runs.**

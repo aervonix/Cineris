@@ -516,6 +516,8 @@ fn every_field_of_the_trust_question_escapes_what_acts_unseen() {
     let request = TrustRequest {
         session_id: SessionId::from("s_1"),
         trusted: false,
+        proposal: None,
+        summary: Vec::new(),
         workspace: format!("workspace{UNSEEN}"),
         resources: vec![
             TrustResource {
@@ -555,6 +557,8 @@ fn each_line_of_a_trust_resources_detail_begins_a_row() {
     let request = TrustRequest {
         session_id: SessionId::from("s_1"),
         trusted: false,
+        proposal: None,
+        summary: Vec::new(),
         workspace: "app".to_owned(),
         resources: vec![TrustResource {
             kind: TrustResourceKind::Extension,

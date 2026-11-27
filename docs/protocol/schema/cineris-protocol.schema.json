@@ -172,6 +172,84 @@
       "description": "One stored approval.",
       "type": "string"
     },
+    "ApprovalProposal": {
+      "description": "A unit of a store of approvals as a yes would write it, which the\nperson signs whole (since the signed approvals step;\n`docs/architecture/06-permissions-and-sandbox.md`, \"Signed approvals\").\nHashes are lowercase hexadecimal. The bytes signed are made from it by\n`cineris_policy::signed`, in one way only, so that a front end and the\nstore agree on them.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "One project's trust and everything pinned with it.",
+          "properties": {
+            "git_trusted": {
+              "description": "Whether git may read the repository's own configuration.",
+              "type": "boolean"
+            },
+            "key": {
+              "$ref": "#/$defs/ProjectKey",
+              "description": "The project's key."
+            },
+            "pins": {
+              "description": "Every pin of the entry after the change.",
+              "items": {
+                "$ref": "#/$defs/ProposedPin"
+              },
+              "type": "array"
+            },
+            "revision": {
+              "description": "The entry's revision after the change.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "root": {
+              "description": "The root, as it is shown to a person.",
+              "type": "string"
+            },
+            "unit": {
+              "const": "project",
+              "type": "string"
+            }
+          },
+          "required": [
+            "unit",
+            "key",
+            "revision",
+            "root",
+            "git_trusted",
+            "pins"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The user's own pins, all of them.",
+          "properties": {
+            "pins": {
+              "description": "Every pin after the change.",
+              "items": {
+                "$ref": "#/$defs/ProposedPin"
+              },
+              "type": "array"
+            },
+            "revision": {
+              "description": "The revision after the change.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "unit": {
+              "const": "user_pins",
+              "type": "string"
+            }
+          },
+          "required": [
+            "unit",
+            "revision",
+            "pins"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "ApprovalRequest": {
       "description": "`approval/request`: may this tool call run?",
       "properties": {
@@ -5506,6 +5584,37 @@
       ],
       "type": "object"
     },
+    "ProposedPin": {
+      "additionalProperties": false,
+      "description": "One pin of an [`ApprovalProposal`].",
+      "properties": {
+        "hash": {
+          "description": "The hash of what is approved.",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/TrustResourceKind",
+          "description": "What kind of thing it is."
+        },
+        "name": {
+          "description": "Its name.",
+          "type": "string"
+        },
+        "registration": {
+          "description": "The hash of what it registered, for an extension evaluated before\nthe question.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "hash"
+      ],
+      "type": "object"
+    },
     "ProviderBlockPart": {
       "description": "Something the provider produced that the neutral model does not name:\nserver-side tool use and its results, compaction blocks, fallback markers.",
       "properties": {
@@ -8085,6 +8194,17 @@
     "TrustRequest": {
       "description": "`trust/request`: may this project's executable resources be used?",
       "properties": {
+        "proposal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ApprovalProposal"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "What a yes would write, which the person signs (since the signed\napprovals step): the project's whole entry as it would then be. A\nfront end that answers yes rebuilds the bytes signed from it, checks\nthat it holds what it shows, asks the person for their password,\nand answers with the signature. Absent when nothing a yes would\nwrite can be kept (no state directory): a yes then holds for the\nsession alone."
+        },
         "resources": {
           "description": "What it asks to be trusted with.",
           "items": {
@@ -8095,6 +8215,13 @@
         "session_id": {
           "$ref": "#/$defs/SessionId",
           "description": "The session."
+        },
+        "summary": {
+          "description": "What a yes changes, one line each, for the person to read before\nthey sign.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "trusted": {
           "description": "The project is trusted already, and the question is about what is\nnew in it: its rules changed (each resource marked `changed`), git,\nnow that it is a repository, or (since step 28) an extension new in\nit or changed since it was approved (`changed`). `never` is not an\nanswer to it; `keep` is (since the follow-ups of step 23), which of\nan extension is kept by the core for its run alone.",
@@ -8188,6 +8315,13 @@
         "never": {
           "description": "With `trusted` false: remember the refusal, so that the project is\nnot asked about at later starts either (since step 23). It is kept\nbeside the trusted projects, and `cineris permissions trust` lifts it.\nAn answer with both `trusted` and `never` is refused\n(`invalid_answer`), and the question stays open.",
           "type": "boolean"
+        },
+        "signature": {
+          "description": "With `trusted`, to a request with a `proposal`: the person's\nsignature over it, 128 lowercase hexadecimal digits (since the\nsigned approvals step). A yes without one, or with one that is not\nthe person's key's over the proposal, trusts nothing, not even for\nthe session, and the question stays open.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "trusted": {
           "default": false,

@@ -22,11 +22,15 @@
 //! - where neither is known (it changed, cannot be read, or is gone), both
 //!   gates, on every call and every prompt.
 //!
-//! While the pin store cannot be read, each of the user's extensions found
-//! holds the gating hooks of the cache's entries of its name, and a gate on
-//! each gating event its manifest lists; a project's, while the trust store
-//! cannot be read, holds nothing: no repository gates a session by itself,
-//! as with the engine. One approved for this session by a yes the store
+//! While the pin store cannot be read, or its pins do not count with the
+//! session's key (no key, unsigned, or not the person's: the signed
+//! approvals step), each of the user's extensions found holds the gating
+//! hooks of the cache's entries of its name, and a gate on each gating event
+//! its manifest lists; a project's, while the trust store cannot be read,
+//! holds nothing: no repository gates a session by itself, as with the
+//! engine. A project whose entry is there and does not count is not
+//! trusted, and each extension its entry pins holds its gates, from the
+//! cache's entry at the hash pinned, or both where it has none. One approved for this session by a yes the store
 //! could not keep stands approved all the same, as the session's finding
 //! judges it with the engine, which loads it: it holds its gates.
 //!
@@ -113,6 +117,11 @@ pub(crate) struct SessionView {
     pub(crate) config_dir: Option<std::path::PathBuf>,
     pub(crate) state: Option<cineris_config::StateDir>,
     pub(crate) project: Option<cineris_protocol::ProjectKey>,
+    /// The key the stores' signatures are checked with, when the person
+    /// opened their approvals before the session opened.
+    pub(crate) verifier: Option<cineris_policy::signed::Verifier>,
+    /// The project's entry, when it is there and does not count.
+    pub(crate) uncounted: Option<super::found::Uncounted>,
     pub(crate) for_the_run: Vec<cineris_policy::Definition>,
     pub(crate) disabled: Vec<String>,
 }
@@ -135,12 +144,13 @@ pub(crate) fn in_session(
     clock: &cineris_base::SharedClock,
     home: Option<&std::path::Path>,
 ) -> Holding {
-    super::manage::judge(
+    let mut holding = super::manage::judge(
         &super::manage::JudgedFrom {
             resolver: &view.resolver,
             config: view.config_dir.as_deref(),
             state: view.state.as_ref(),
             project: view.project.as_ref(),
+            verifier: view.verifier.as_ref(),
             for_the_run: &view.for_the_run,
             disabled: &view.disabled,
             clock,
@@ -148,7 +158,59 @@ pub(crate) fn in_session(
         },
         holding,
     )
-    .0
+    .0;
+    if let Some(uncounted) = &view.uncounted {
+        let cache = view.state.as_ref().map(|state| {
+            cineris_ext::cache::RegistrationCache::new(state.registration_cache_file())
+                .with_clock(std::sync::Arc::clone(clock))
+                .load()
+        });
+        holding.held.extend(uncounted_gates(
+            uncounted,
+            cache.as_ref().map(|loaded| &loaded.cache),
+        ));
+    }
+    holding
+}
+
+/// The gates of the extensions a project's entry pins where the entry does
+/// not count (the signed approvals step): what each registered at the hash
+/// pinned, as `cache` keeps it, or both gates where it keeps nothing. The
+/// session is told of the entry once, as it opens.
+pub(crate) fn uncounted_gates(
+    uncounted: &super::found::Uncounted,
+    cache: Option<&cineris_ext::cache::Cache>,
+) -> Vec<Held> {
+    let mut held = Vec::new();
+    for (name, hash) in &uncounted.extensions {
+        let code = in_code(name);
+        let why = format!(
+            "the extension `{code}` is not loaded: this project's trust does not count in this \
+             session ({}), so its gate refuses it: {}",
+            crate::person::uncounted(uncounted.checked),
+            way_out(Source::Project, name)
+        );
+        let cached = cache
+            .and_then(|cache| cache.get(hash))
+            .filter(|entry| entry.name == *name);
+        let gates = match cached {
+            Some(entry) => registered(name, &entry.registration.hooks),
+            None => on_every_call(name, &[Event::PromptSubmit, Event::ToolBefore]),
+        };
+        for (hook, event, filter) in gates {
+            let Some(event) = loop_event(event) else {
+                continue;
+            };
+            held.push(Held {
+                extension: name.clone(),
+                hook,
+                event,
+                filter,
+                why: why.clone(),
+            });
+        }
+    }
+    held
 }
 
 /// What a session without the script engine holds of the extensions

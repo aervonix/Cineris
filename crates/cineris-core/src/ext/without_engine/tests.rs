@@ -127,30 +127,38 @@ fn an_approved_extensions_gates_hold_without_the_script_engine() {
     let new = found(Source::User, "new", &["tool.before"]);
     let pins = PinStore::new(scratch.join("pins.toml"), Arc::clone(&clock));
     for one in [&cached, &listed, &quiet, &off] {
-        pins.pin(&definition(one)).unwrap();
+        cineris_policy::test_support::Person::new().pin(&pins, &definition(one));
     }
     let elsewhere = |name: &str| Definition {
         kind: TrustResourceKind::Extension,
         name: name.to_owned(),
         hash: ContentHash::of(name.as_bytes()),
     };
-    pins.pin(&elsewhere("changed")).unwrap();
-    pins.pin(&elsewhere("gone")).unwrap();
-    pins.pin(&elsewhere("vanished")).unwrap();
-    let user_pins = pins.pins().unwrap();
+    cineris_policy::test_support::Person::new().pin(&pins, &elsewhere("changed"));
+    cineris_policy::test_support::Person::new().pin(&pins, &elsewhere("gone"));
+    cineris_policy::test_support::Person::new().pin(&pins, &elsewhere("vanished"));
+    let user_pins = pins
+        .pins(Some(
+            &cineris_policy::test_support::Person::new().verifier(),
+        ))
+        .unwrap();
     let theirs = found(Source::Project, "theirs", &["prompt.submit"]);
     let taken = found(Source::Project, "Cached", &["tool.before"]);
     let key = ProjectKey::new("p_1");
     let trust_store = TrustStore::new(scratch.join("trust.toml"), Arc::clone(&clock));
-    trust_store
-        .trust(
+    cineris_policy::test_support::Person::new().trust(
+        &trust_store,
+        &key,
+        "~/work",
+        &[definition(&theirs), definition(&taken)],
+        false,
+    );
+    let trust = trust_store
+        .project(
             &key,
-            "~/work",
-            &[definition(&theirs), definition(&taken)],
-            false,
+            Some(&cineris_policy::test_support::Person::new().verifier()),
         )
         .unwrap();
-    let trust = trust_store.project(&key).unwrap();
     let file = RegistrationCache::new(scratch.join("registered.json"));
     file.put(
         &cached.snapshot.hash(),
@@ -402,9 +410,10 @@ fn a_session_without_the_engine_holds_what_its_view_finds_and_tells_the_user_onc
     let ([mine], [theirs]) = (&mine.found[..], &theirs.found[..]) else {
         panic!("{:?} {:?}", mine.found, theirs.found);
     };
-    PinStore::new(state.pins_file(), Arc::clone(&clock))
-        .pin(&definition(mine))
-        .unwrap();
+    cineris_policy::test_support::Person::new().pin(
+        &PinStore::new(state.pins_file(), Arc::clone(&clock)),
+        &definition(mine),
+    );
     RegistrationCache::new(state.registration_cache_file())
         .put(
             &mine.snapshot.hash(),
@@ -422,6 +431,8 @@ fn a_session_without_the_engine_holds_what_its_view_finds_and_tells_the_user_onc
         config_dir: Some(config),
         state: Some(state),
         project: Some(ProjectKey::new("p_1")),
+        verifier: Some(cineris_policy::test_support::Person::new().verifier()),
+        uncounted: None,
         for_the_run: vec![definition(theirs)],
         disabled: Vec::new(),
     };

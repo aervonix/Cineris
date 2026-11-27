@@ -238,13 +238,14 @@ fn with_the_examples_approved_no_engine_starts_until_one_is_used() {
             let file = file.unwrap().path();
             std::fs::copy(&file, folder.join(file.file_name().unwrap())).unwrap();
         }
-        PinStore::new(state(&world).pins_file(), clock(&world))
-            .pin(&Definition {
+        crate::person().pin(
+            &PinStore::new(state(&world).pins_file(), clock(&world)),
+            &Definition {
                 kind: TrustResourceKind::Extension,
                 name,
                 hash: Snapshot::read(&folder).unwrap().hash(),
-            })
-            .unwrap();
+            },
+        );
         // One throwaway runtime each, as approving makes.
         cache(&world, &folder);
     }
