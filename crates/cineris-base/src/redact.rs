@@ -332,6 +332,16 @@ impl SecretFilter {
         self.next(text.as_bytes(), 0).is_some()
     }
 
+    /// Where the first credential at or after byte `from` of `text` is: the
+    /// span [`redact`](Self::redact) would replace, which begins and ends
+    /// between characters. For a caller that judges a span before masking
+    /// it (`cineris-config`'s trust question, since the review of the step
+    /// 25 fixes); what this filter masks is unchanged.
+    #[must_use]
+    pub fn find_from(&self, text: &str, from: usize) -> Option<Range<usize>> {
+        self.next(text.as_bytes(), from)
+    }
+
     /// The first credential at or after `from`.
     fn next(&self, bytes: &[u8], from: usize) -> Option<Range<usize>> {
         let mut at = from;

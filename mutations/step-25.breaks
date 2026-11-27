@@ -2397,7 +2397,6 @@ find: let shown = filter.redact(part);
 replace: let shown = std::borrow::Cow::Borrowed(part);
 caught-by:
     cineris-config import::tests::a_credential_in_a_command_or_an_address_is_masked_and_refused
-    cineris-config import::tests::values_are_dropped_and_names_kept
 
 [break] an-mcp-address-keeps-its-user-part
 rule: The user part of a server's address is masked before it leaves the reader.
