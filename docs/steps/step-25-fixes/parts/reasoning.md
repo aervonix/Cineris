@@ -65,7 +65,7 @@ In [mutations/step-25-fixes-reasoning.breaks](../../../../mutations/step-25-fixe
 | `a-delta-with-no-words-begins-a-reasoning-block` | a part with no words neither begins nor ends a run, in the mapper as in `reasoning_runs` | `a_part_with_no_words_neither_begins_nor_ends_a_reasoning_run` |
 | `a-search-is-silent-about-cut-reasonings` | a search says how many reasonings it looked in only as far as kept | `a_search_says_how_many_reasonings_it_looked_in_only_as_far_as_kept` |
 
-`cargo xtask mutate --check --tests` passes with every break applying and every `caught-by` naming a test that exists. **Verdicts** (`cargo xtask mutate step-25-fixes-reasoning --jobs 2 --minutes 20`, on the fix's commit; one job, the disk being busy): the first seven did what the list expects, 0 flagged. Each was caught by the tests it names, and some by more: `reasoning-copied-into-its-summary` by both memory tests and the mapper's test; `reasoning-kept-without-a-bound` by the four tests that hold the bound, `a_summary_is_read_from_the_session_its_block_is_of` among them; `a-cut-reasoning-shows-what-was-kept` by the viewer's, the session's and the kept block's tests. The search's break, run alone on the next commit: did what the list expects. VERDICT9
+`cargo xtask mutate --check --tests` passes with every break applying and every `caught-by` naming a test that exists. **Verdicts** (`cargo xtask mutate step-25-fixes-reasoning --jobs 2 --minutes 20`, on the fix's commit; one job, the disk being busy): the first seven did what the list expects, 0 flagged. Each was caught by the tests it names, and some by more: `reasoning-copied-into-its-summary` by both memory tests and the mapper's test; `reasoning-kept-without-a-bound` by the four tests that hold the bound, `a_summary_is_read_from_the_session_its_block_is_of` among them; `a-cut-reasoning-shows-what-was-kept` by the viewer's, the session's and the kept block's tests. The search's break, run alone on the next commit, and the two of the shared rule (`a-delta-with-no-words-begins-a-reasoning-block`, and `reasoning-runs-not-ended-by-a-call` as it now breaks `edge`), run on theirs: each did what the list expects, 0 flagged.
 
 Three breaks of earlier lists no longer found their code, and now name it as it is, their rules unchanged: `step-23-fixes/an-item-in-progress-at-the-read-is-skipped` (the mapper's new argument), `step-25/a-compactions-summary-is-not-read` and `step-25/a-reasoning-shows-its-first-line-only` (the viewer's new `Summary` variants).
 
@@ -73,16 +73,18 @@ Three breaks of earlier lists no longer found their code, and now name it as it 
 
 `perf_two_hundred_turns_in_each_presenter` (`crates/cineris-cli/tests/system/tui.rs`) plays the design's mix now: each turn's first response streams 16 KiB of reasoning before its calls, about 4,000 tokens, as a model that sends its reasoning whole gives at a high effort (`CINERIS_PERF_REASONING` sets the bytes), and the test checks that the first turn's reasoning was drawn. The full screen's scroll to the top takes a page more a turn for each KiB of reasoning, since four a turn no longer reached it. The test's change is a commit of its own, before the fix, so that it can be measured before the fix and after it.
 
-**Not measured yet.** The measurement is to be taken on an otherwise idle machine, on the shipped build, at three trees: `main` with its test as it is, the test's commit, and the fix's. The reference machine was not idle while this part was built, so the numbers, and the paragraph of [performance-budgets.md](../../../performance-budgets.md) that is to hold them beside step 25's, are left to the maintainers. The command, at each tree:
+**Measured** on an otherwise idle machine, the shipped build (`--profile dist --target x86_64-unknown-linux-musl`), 200 turns in a workspace of 20,000 files, resident after the turns and the peak, in MB. `main`, the test's commit and the fix's were measured by the maintainers; the fix's tree with no reasoning, and the times, in this part:
 
-```text
-cargo xtask corpus fetch
-cargo test --profile dist --target x86_64-unknown-linux-musl -p cineris-cli --test system perf_two_hundred_turns -- --ignored --nocapture
-```
+| Tree | Inline (budget 40) | Full screen (budget 80) |
+|---|---|---|
+| `main`, its test as it is (no reasoning) | 32.6, peak 42.4 | 32.8, 35.6 after scrolling, resizing and searching, peak 43.0 |
+| The test's commit, 16 KiB of reasoning a turn, no fix | 55.5, peak 71.7 | 55.7, 59.4 after, peak 83.0 |
+| The fix | 48.4, peak 64.5 | 48.8, 53.5 after, peak 66.9 |
+| The fix, `CINERIS_PERF_REASONING=0` | 32.3, peak 41.1 | 32.6, 35.0 after, peak 41.8 |
 
-What to expect, from the counting allocator and arithmetic, not a run: 16 KiB of reasoning a turn held as on `main` (2.33 times its size, the copy and the stream's capacity) is about 7.6 MB over 200 turns, on top of step 25's 30.4 MB inline, against 40 MB; with the fix it is the bound, 1.6 MB, in each presenter, and as much again in the full screen once a search has run. The run with the test alone also says what the core holds of the reasoning in the session's context, which is in the same process and not this part's to bound.
+The fix took 7 MB off. **The inline presenter is still over its budget with reasoning: 48.4 MB.** The interface holds at most 1.6 MB of the 3.2 MB of reasoning (its counting-allocator tests say 8 KiB a turn); the other 14.5 MB resident and the 22.9 MB of peak over the tree with no reasoning are the session's and the requests'. Where it goes, by reading, with the recommendation, is a new open item, [two-hundred-turns-of-reasoning-pass-the-inline-budget](../../../outstanding/two-hundred-turns-of-reasoning-pass-the-inline-budget.md), for step 33: the session holds each reasoning twice (the part's text, and the thinking text again in the part's raw block, as the Anthropic decoder writes it), and each request replays every earlier reasoning, over 3 MB of JSON at turn 200, made twice a turn. The budget is not changed. [performance-budgets.md](../../../performance-budgets.md) has the table.
 
-Budgets are not changed. A short run of the test's commit (3 turns, 200 files, not a measurement) passed in both presenters.
+**Two faults of the test, found by the measurement and fixed.** The full screen's 4,000 PageUps, sent at once, piled up in the terminal, whose reads cut their sequences apart; their pieces were typed into the input box and the program never ended. The pages now go eight at a time, each group's output read before the next, until the top shows and then until the end does: 1.2 s with reasoning (456 groups), 0.3 s without. And inline, 200 turns with reasoning took 130 s against 12.6 s without, which looked like the presenter: it was the test, which looked for each turn's answer in the virtual terminal's whole history (`shows_ever`, which makes every row of the history a string again) at every piece of output, a cost that grew with the session's square, and reasoning made the history ten times longer. It now looks on the screen. With reasoning the 200 turns take 10.9 s inline, 11.4 s of them the binary's own CPU, and 11.2 s in the full screen; without, 9.6 s and 9.8 s. The inline presenter's streaming is not quadratic, so no item is opened for it. The test now reports the binary's CPU time, and `CINERIS_PERF_PRESENTERS` chooses the presenters.
 
 ## Changes of interface
 
@@ -92,13 +94,13 @@ Budgets are not changed. A short run of the test's commit (3 turns, 200 files, n
 ## Docs changed
 
 - [09-tui.md](../../../architecture/09-tui.md): "What it keeps" (the bound, the row, the read), "Search" (what a reasoning gives it), the viewer (the read of a cut reasoning, and from which session both reads are made), and the table of what each event becomes (the words moved, not copied; `origin` and `cut`).
-- [performance-budgets.md](../../../performance-budgets.md), "Measured in step 25": the command printed 200 lines, not about 40, and no reasoning was played. The measurement with reasoning is not there yet (above).
+- [performance-budgets.md](../../../performance-budgets.md), "Measured in step 25": the command printed 200 lines, not about 40, and no reasoning was played; and the measurement again with reasoning, below it.
 - [the-search-worker-keeps-a-copy-of-the-transcript](../../../outstanding/the-search-worker-keeps-a-copy-of-the-transcript.md): what it holds of a reasoning is bounded; the rest of the item stands.
 - [testing-and-ci.md](../../../testing-and-ci.md), "A reviewer's kit": a counting global allocator, for how much of the heap a structure holds.
 
 ## Left open
 
-- **The measurement** (above): the 200-turn test at `main`, at the test's commit and at the fix's, on an otherwise idle machine, by the maintainers. The tests that start no process need no Windows run of their own beyond CI's; nothing here is Windows-only.
+- **The inline presenter over its budget with reasoning** (above, "The measurement"): [two-hundred-turns-of-reasoning-pass-the-inline-budget](../../../outstanding/two-hundred-turns-of-reasoning-pass-the-inline-budget.md), a new open item for step 33. Nothing here is Windows-only; the tests that start no process need no Windows run beyond CI's.
 
 - **Settled: the full screen draws a long reasoning cut,** where before it drew it whole, as the inline presenter does: the bound changes what the full screen and the viewer's transcript show of a reasoning past 8 KiB (the row says so, and `Enter` in the viewer shows it whole). Reading the rest when the window reaches such a block, so that the full screen draws every reasoning whole again, is not built; it would change a block's rows while it is in view. The maintainers kept the bound and the row (above), so this is settled, not open.
 - **A cut reasoning, or a compaction, of a session left** cannot be read: `session/read` serves only a session open on the connection. The viewer says it could not be read and shows nothing, where for a cut reasoning it could show the start it kept, as it does for one whose response was tried again: a small change, left for step 33 with the rest of finding 12's memory work.
