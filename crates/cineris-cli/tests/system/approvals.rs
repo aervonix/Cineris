@@ -438,6 +438,7 @@ fn sys_a_yes_typed_before_the_question_does_not_answer_it() {
 }
 
 /// A project's extension, `probe`, which `permissions trust` asks about.
+#[cfg(unix)]
 fn probe_extension(machine: &Machine) {
     let folder = machine.workspace.join(".cineris/extensions/probe");
     std::fs::create_dir_all(&folder).unwrap();
