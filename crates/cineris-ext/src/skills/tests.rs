@@ -156,6 +156,26 @@ fn blocks_keep_or_fold_their_lines() {
     assert_eq!(read("---\nd: >x\n---").get("d"), Some(">x"));
 }
 
+/// What a command's strict reader refuses (the full review of step 28, its
+/// finding 12) is told in `unread`, and a skill, which does not refuse it,
+/// reads as before: a description that wraps onto a line holding `: ` is
+/// one description, and an indented field belongs to no key.
+#[test]
+fn what_a_strict_reader_refuses_is_told_and_a_skill_reads_as_before() {
+    let front = read(
+        "---\n  title: x\nname: pdf\ndescription: Fill in forms.\n  Note: works offline\n  \
+         # a comment: here\nlicense: \"MIT\n  or: Apache\"\n---",
+    );
+    assert_eq!(front.get("title"), None);
+    assert_eq!(front.get("name"), Some("pdf"));
+    assert_eq!(
+        front.get("description"),
+        Some("Fill in forms. Note: works offline")
+    );
+    assert_eq!(front.get("license"), Some("MIT or: Apache"));
+    assert_eq!(front.unread(), ["  title: x", "  Note: works offline"]);
+}
+
 #[test]
 fn what_is_and_is_not_front_matter() {
     for none in [

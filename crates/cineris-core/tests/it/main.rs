@@ -42,6 +42,8 @@ mod ext_exec;
 mod ext_state;
 mod extensions;
 #[cfg(feature = "scripts")]
+mod extensions_approvals;
+#[cfg(feature = "scripts")]
 mod extensions_found;
 #[cfg(feature = "scripts")]
 mod extensions_hooks;

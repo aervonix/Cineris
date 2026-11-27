@@ -993,8 +993,7 @@ pub struct FrontMatter {
     fields: Vec<(String, String)>,
     /// The keys given more than once, each once, in the order met.
     repeated: Vec<String>,
-    /// The lines at the block's first column that are neither a field, a
-    /// comment nor blank: what a strict reader refuses.
+    /// The lines a strict reader refuses: see [`FrontMatter::unread`].
     unread: Vec<String>,
 }
 
@@ -1049,9 +1048,23 @@ impl FrontMatter {
         &self.repeated
     }
 
-    /// The lines at the block's first column that are not a field, a
-    /// comment or blank, as written: passed over here, refused by a strict
-    /// reader.
+    /// The lines that are not read as the fields they may look like, as
+    /// written: passed over here (a skill's reader takes the fields as they
+    /// are), refused by a strict reader (a custom command's). They are:
+    ///
+    /// - a line at the block's first column that is not a field, a comment
+    ///   or blank;
+    /// - an indented line that belongs to no field: before the first, or
+    ///   after a line that is none (`  profile: careful`, which YAML reads
+    ///   as a field of an indented mapping);
+    /// - a line of a plain value after its first that holds a `key: ` of
+    ///   its own (`description: Ship it` then `\tprofile: careful`, read
+    ///   here as the one description "Ship it profile: careful", which YAML
+    ///   refuses).
+    ///
+    /// Until the fixes of the full review of step 28 only the first were,
+    /// and a key written indented was passed over: a command whose author
+    /// named a profile in one was sent at the session's own settings.
     #[must_use]
     pub fn unread(&self) -> &[String] {
         &self.unread
@@ -1068,7 +1081,15 @@ fn fields_of(body: &[&str]) -> (Vec<(String, String)>, Vec<String>, Vec<String>)
     while at < body.len() {
         let line = body[at];
         at += 1;
-        if line.trim().is_empty() || indented(line) || line.starts_with('#') {
+        if line.trim().is_empty() || line.starts_with('#') {
+            continue;
+        }
+        // An indented line here belongs to no field: before the first, or
+        // after a line that is none.
+        if indented(line) {
+            if !line.trim_start().starts_with('#') {
+                unread.push(line.to_owned());
+            }
             continue;
         }
         let Some((key, rest)) = split_key(line) else {
@@ -1079,6 +1100,7 @@ fn fields_of(body: &[&str]) -> (Vec<(String, String)>, Vec<String>, Vec<String>)
         while at < body.len() && (body[at].trim().is_empty() || indented(body[at])) {
             at += 1;
         }
+        unread.extend(keys_within(rest, &body[start..at]).map(str::to_owned));
         if out.iter().any(|(earlier, _)| *earlier == key) {
             if !repeated.contains(&key) {
                 repeated.push(key);
@@ -1093,6 +1115,18 @@ fn fields_of(body: &[&str]) -> (Vec<(String, String)>, Vec<String>, Vec<String>)
 
 fn indented(line: &str) -> bool {
     line.starts_with([' ', '\t'])
+}
+
+/// The lines after its first of a plain value (`first`, then `more`) that
+/// hold a `key: ` of their own: a value in quotes or a block holds such
+/// text as text, and a comment is none.
+fn keys_within<'a>(first: &str, more: &[&'a str]) -> impl Iterator<Item = &'a str> {
+    let plain = !matches!(first.chars().next(), Some('"' | '\''))
+        && !(first.starts_with(['|', '>']) && block_header(first));
+    more.iter().copied().filter(move |line| {
+        let text = line.trim_start();
+        plain && !text.starts_with('#') && split_key(text).is_some()
+    })
 }
 
 /// A field's key, and the rest of its line after the `:`.

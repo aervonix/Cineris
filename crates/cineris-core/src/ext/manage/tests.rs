@@ -266,15 +266,20 @@ fn a_name_must_be_one_a_session_finds_on_every_system() {
 }
 
 /// A removal deletes only a name directly in the user's folder of
-/// extensions, judged where both lead: a path whose text is in it and that
-/// leads out of it is refused.
+/// extensions, as the folder holds it: a name that is not one name (`..`,
+/// a path through it) is refused before anything is looked at, through
+/// the core as `cineris ext remove` calls it, so nothing outside the
+/// folder is deleted. The name rules are the guard (the full review of
+/// step 28, its finding 18: a check of the folder above the target,
+/// resolved, compared the folder with itself, since the target is always
+/// built from such a name, and was taken out).
 #[test]
 fn a_path_that_leads_out_of_the_folder_of_extensions_is_not_deleted() {
     let scratch = cineris_testkit::Scratch::outside("cineris-core-unit", "manage_within");
     let root = scratch.join("config/extensions");
     std::fs::create_dir_all(root.join("tracker")).unwrap();
     std::fs::create_dir_all(scratch.join("elsewhere/x")).unwrap();
-    assert!(within(&root, &root.join("tracker")));
+    std::fs::create_dir_all(root.join("inner/x")).unwrap();
     // The root and the target as a removal builds them, from the
     // configuration directory of a core.
     let env = cineris_config::Env::empty(cineris_config::Platform::CURRENT).with(
@@ -296,20 +301,29 @@ fn a_path_that_leads_out_of_the_folder_of_extensions_is_not_deleted() {
     let project = core.project(&scratch.join("work")).unwrap();
     let removal = core.extension_removal(&project, "Tracker").unwrap();
     assert_eq!(removal.name, "tracker");
-    assert!(within(&removal.root, &removal.target), "{removal:?}");
-    assert!(!within(
-        &root,
-        &root.join("..").join("..").join("elsewhere").join("x")
-    ));
-    assert!(!within(&root, &root.join("tracker").join("inner")));
-    assert!(!within(&root, &root.join("..")));
-    assert!(!within(&root, &scratch.join("elsewhere").join("x")));
-    #[cfg(unix)]
-    {
-        // A folder on the way that is a link out: the parent leads elsewhere.
-        std::os::unix::fs::symlink(scratch.join("elsewhere"), root.join("way")).unwrap();
-        assert!(!within(&root, &root.join("way").join("x")));
+    assert_eq!(removal.target, root.join("tracker"), "{removal:?}");
+    let out = scratch.join("elsewhere").join("x");
+    let mut names = vec![
+        "..".to_owned(),
+        "../../elsewhere/x".to_owned(),
+        out.to_string_lossy().into_owned(),
+        "inner/x".to_owned(),
+    ];
+    if cfg!(windows) {
+        names.push("..\\..\\elsewhere\\x".to_owned());
     }
+    for name in &names {
+        let refused = core.extension_removal(&project, name).unwrap_err();
+        assert!(
+            refused.message.contains("cannot be removed"),
+            "{name}: {refused:?}"
+        );
+    }
+    assert!(out.is_dir() && root.join("inner/x").is_dir());
+    // What is removed, with its yes, is the folder at the name alone.
+    let removed = core.remove_extension(&removal, true).unwrap();
+    assert!(removed.deleted);
+    assert!(!root.join("tracker").exists() && root.join("inner/x").is_dir());
 }
 
 /// What is deleted is never walked through a link: a link at the name is

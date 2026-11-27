@@ -9863,11 +9863,11 @@ caught-by:
     cineris-cli::bin/cineris ext::tests::what_cannot_be_added_or_removed_is_refused_first
 
 [break] remove-deletes-outside-the-folder
-rule: `cineris ext remove` deletes only a name directly in the user's folder of extensions, judged where both lead after resolving.
+rule: `cineris ext remove` deletes only a name directly in the user's folder of extensions: a name that is not one name (`..`, a path) is refused before anything is looked at (the name rules are the guard since the fixes of the full review of step 28, its finding 18).
 file: crates/cineris-core/src/ext/manage.rs
-in: within
-find: (Ok(parent), Ok(root)) => same_location(&parent, &root),
-replace: (Ok(_), Ok(_)) => true,
+in: Core::extension_removal
+find: if let Some(why) = folder_name_refused(name) {
+replace: if let Some(why) = None::<&str> {
 caught-by:
     cineris-core ext::manage::tests::a_path_that_leads_out_of_the_folder_of_extensions_is_not_deleted
 

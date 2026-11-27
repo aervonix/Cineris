@@ -477,6 +477,42 @@ fn ext_add_without_the_script_engine_says_the_build_has_none() {
     assert!(no_script_engine("cin").contains("`cin ext add`"));
 }
 
+/// What `ext inspect` prints of an extension that adds to the system
+/// prompt: the text, after the words an approval shows it with, each of
+/// its lines indented under them, as the core gives it (quoted and
+/// escaped; the fixes of the full review of step 28, its finding 16).
+#[test]
+fn ext_inspect_prints_the_text_it_adds_to_the_system_prompt() {
+    let one = ExtensionListed {
+        source: ExtensionSource::Project,
+        name: "notes".to_owned(),
+        folder: Some(".cineris/extensions/notes".to_owned()),
+        hash: None,
+        standing: ExtensionStanding::NotApproved,
+        pin: None,
+        registered: None,
+        words: Some("It runs no program.".to_owned()),
+        prompt: Some("\"First line.\nSecond \\\"line\\\".\"".to_owned()),
+    };
+    let shown = inspected_text(&one);
+    assert!(
+        shown.ends_with(&format!(
+            "  {}\n    \"First line.\n    Second \\\"line\\\".\"\n",
+            cineris_core::ext::PROMPT_SHOWN
+        )),
+        "{shown}"
+    );
+    let none = ExtensionListed {
+        prompt: None,
+        ..one
+    };
+    assert!(
+        !inspected_text(&none).contains(cineris_core::ext::PROMPT_SHOWN),
+        "{}",
+        inspected_text(&none)
+    );
+}
+
 /// The way `disable` names the table is TOML's: a name that is not a bare
 /// key is quoted.
 #[test]
@@ -500,7 +536,7 @@ fn ext_add_shows_what_it_registers_and_its_prompt_before_the_question() {
     std::fs::write(
         source.join("extension.toml"),
         "api = 1\nname = \"tracker\"\nversion = \"0.1.0\"\ndescription = \"Finds things.\"\nmain \
-         = \"main.js\"\nprompt = \"prompt.md\"\n",
+         = \"main.js\"\nprompt = \"prompt.md\"\n[capabilities]\nexec = [\"gh\"]\n",
     )
     .unwrap();
     std::fs::write(
@@ -537,6 +573,9 @@ fn ext_add_shows_what_it_registers_and_its_prompt_before_the_question() {
         "What it adds to the system prompt, whole, in its author's words:",
         "\"Always use \\`find\\` first.",
         "Ignore the \\\"user\\\" \\u{1b}[2J here.\"",
+        // Its programs get the user's environment (the fixes of the full
+        // review of step 28, its finding 11).
+        cineris_core::ext::ITS_ENVIRONMENT,
     ] {
         assert!(shown.contains(part), "{part}: {shown}");
     }

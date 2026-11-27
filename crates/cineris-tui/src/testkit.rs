@@ -378,6 +378,9 @@ pub struct FakeSetup {
     /// made meanwhile, and left as it is (since the review of that review's
     /// fixes).
     pub file_appears: bool,
+    /// What [`in_force_otherwise`](crate::app::Setup::in_force_otherwise)
+    /// answers (since the fixes of the full review of step 28).
+    pub in_force_otherwise: Vec<String>,
     /// What it was asked.
     pub log: Arc<Mutex<SetupLog>>,
 }
@@ -434,6 +437,10 @@ impl crate::app::Setup for FakeSetup {
         }
         self.log().written.push(chosen.clone());
         Ok(path)
+    }
+
+    fn in_force_otherwise(&self, _chosen: &crate::app::setup::Chosen) -> Vec<String> {
+        self.in_force_otherwise.clone()
     }
 }
 

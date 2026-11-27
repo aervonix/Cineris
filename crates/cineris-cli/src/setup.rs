@@ -90,7 +90,13 @@ pub(crate) fn command(command: crate::args::SetupCommand, name: &'static str) ->
         }
     };
     match set_skill_folders(&file, value, &env) {
-        Ok(said) => {
+        Ok(mut said) => {
+            // What sessions here will do, loaded after the write: a managed
+            // file or the profile selected may hold it otherwise.
+            if let Some(otherwise) = otherwise_in_force(value, skill_folders_here(env)) {
+                said.push_str(&otherwise);
+                said.push('\n');
+            }
             crate::print_out(&crate::visible(&said));
             crate::exit::COMPLETED
         }
@@ -138,6 +144,53 @@ fn set_skill_folders(file: &Path, value: bool, env: &Env) -> Result<String, Stri
         ));
     }
     Ok(said)
+}
+
+/// Whether the configuration in force in the working directory's project
+/// reads the user's own skill folders without asking, and where that comes
+/// from ([`Core::skill_folders_in_force`]); a sentence when it cannot be
+/// loaded.
+fn skill_folders_here(env: Env) -> Result<(bool, String), String> {
+    let core = Core::start(cineris_core::CoreOptions::new(
+        env,
+        std::sync::Arc::new(cineris_core::TokioTimer),
+    ))
+    .map_err(|failure| failure.message)?;
+    let here = crate::workspace::Here::now().map_err(|failure| failure.to_string())?;
+    let project = core
+        .project(&here.root)
+        .map_err(|failure| failure.message)?;
+    core.skill_folders_in_force(&project)
+        .map_err(|failure| failure.message)
+}
+
+/// What is said after `permissions.read_skill_folders = written` was written
+/// to the user's file when the configuration in force (`in_force`: its value
+/// and where it comes from) says otherwise, or could not be loaded: `None`
+/// when it says the same (the fixes of step 28's full review, finding 15: reads
+/// turned off were said to be off where a managed file's lock, or the
+/// profile selected, kept them on).
+fn otherwise_in_force(
+    written: bool,
+    in_force: Result<(bool, String), String>,
+) -> Option<String> {
+    match in_force {
+        Ok((value, _)) if value == written => None,
+        Ok((true, from)) => Some(format!(
+            "But the configuration in force here still reads your own skill folders without \
+             asking, and what is read, secrets included, goes to the model's provider: \
+             `permissions.read_skill_folders = true` comes from {from}, whose word stands over \
+             your file's."
+        )),
+        Ok((false, from)) => Some(format!(
+            "But the configuration in force here still asks about a read of your own skill \
+             folders: `permissions.read_skill_folders = false` comes from {from}, whose word \
+             stands over your file's."
+        )),
+        Err(why) => Some(format!(
+            "Whether the configuration in force here does the same could not be checked: {why}"
+        )),
+    }
 }
 
 /// The first run's program.
@@ -252,6 +305,17 @@ impl Setup for ProgramSetup {
         cineris_config::write::write_user_config(&self.user_config, &choices)
             .map_err(|error| not_written(error, &shown))?;
         Ok(shown)
+    }
+
+    fn in_force_otherwise(&self, chosen: &Chosen) -> Vec<String> {
+        let in_force = self
+            .core
+            .project(&self.workspace)
+            .and_then(|project| self.core.skill_folders_in_force(&project))
+            .map_err(|failure| failure.message);
+        otherwise_in_force(chosen.read_skill_folders, in_force)
+            .into_iter()
+            .collect()
     }
 }
 
@@ -464,6 +528,86 @@ mod tests {
         for no in ["", "\n", "n\n", "ok\n"] {
             assert!(!skill_folders_answer(no));
         }
+    }
+
+    /// What is said once the switch is written, when the configuration in
+    /// force says otherwise (the full review of step 28, its finding 15): a
+    /// managed file that holds reads on, or the profile selected; nothing
+    /// when it says the same; and that it could not be checked.
+    #[test]
+    fn what_the_configuration_in_force_says_otherwise_is_said() {
+        let managed = "managed: /etc/cineris/config.toml:3".to_owned();
+        assert_eq!(
+            otherwise_in_force(false, Ok((false, managed.clone()))),
+            None
+        );
+        assert_eq!(otherwise_in_force(true, Ok((true, managed.clone()))), None);
+        let on = otherwise_in_force(false, Ok((true, managed.clone()))).unwrap();
+        assert!(
+            on.contains("still reads your own skill folders without asking")
+                && on.contains("secrets included")
+                && on.contains(&format!(
+                    "`permissions.read_skill_folders = true` comes from {managed}"
+                )),
+            "{on}"
+        );
+        let off = otherwise_in_force(
+            true,
+            Ok((false, "profile careful (user: ~/x:9)".to_owned())),
+        )
+        .unwrap();
+        assert!(
+            off.contains("still asks about a read") && off.contains("profile careful"),
+            "{off}"
+        );
+        let unknown = otherwise_in_force(false, Err("it is broken".to_owned())).unwrap();
+        assert!(
+            unknown.contains("could not be checked: it is broken"),
+            "{unknown}"
+        );
+    }
+
+    /// The first run's program loads the configuration in force after its
+    /// write, as `ext disable` does: a managed file that sets reads on and
+    /// locks them is said, where the first run wrote them off; and nothing
+    /// is said where it agrees (the full review of step 28, its finding 15).
+    #[test]
+    fn the_first_run_says_when_a_managed_lock_keeps_skill_folders_read() {
+        let scratch =
+            cineris_testkit::Scratch::outside("cineris-cli-unit", "first_run_skills_in_force");
+        let home = scratch.dir("home");
+        let env = env_at(&home);
+        let mut dirs = cineris_config::Dirs::from_env(&env);
+        let managed = scratch.join("managed/config.toml");
+        dirs.managed_config = Some(managed.clone());
+        let mut options = cineris_core::CoreOptions::new(
+            env.clone(),
+            std::sync::Arc::new(cineris_core::TokioTimer),
+        );
+        options.dirs = Some(dirs.clone());
+        let core = Core::start(options).expect("the core starts");
+        let user = dirs.user_config.clone().unwrap();
+        let setup = ProgramSetup::new(core, env, scratch.dir("work"), user);
+        let chosen = Chosen::default();
+        assert!(!chosen.read_skill_folders, "no is the default");
+        setup.write_config(&chosen).expect("written");
+        assert_eq!(setup.in_force_otherwise(&chosen), Vec::<String>::new());
+        std::fs::create_dir_all(managed.parent().unwrap()).unwrap();
+        std::fs::write(
+            &managed,
+            "[permissions]\nread_skill_folders = true\n\n[managed]\nlocked = \
+             [\"permissions.read_skill_folders\"]\n",
+        )
+        .unwrap();
+        let said = setup.in_force_otherwise(&chosen);
+        let [said] = said.as_slice() else {
+            panic!("one sentence: {said:?}");
+        };
+        assert!(
+            said.contains("still reads your own skill folders without asking")
+                && said.contains("comes from managed"),
+            "{said}"
+        );
     }
 
     #[test]
