@@ -1701,6 +1701,11 @@ pub(crate) struct Judged {
     pub(crate) repository: bool,
     pub(crate) problem: Option<String>,
     pub(crate) standing: TrustStanding,
+    /// The trust store could not be read: the project is judged not
+    /// trusted, but nobody said so, so a running session's hooks of the
+    /// project are only held back until it can be read again, never
+    /// withdrawn (the review of step 28's fixes).
+    pub(crate) store_unread: bool,
 }
 
 /// The sentence of a trusted project whose changed rules the person kept
@@ -1781,6 +1786,7 @@ fn judge_pins(
             repository: true,
             problem: None,
             standing: TrustStanding::ForTheRun,
+            store_unread: false,
         };
     }
     if let Some(given) = for_the_run {
@@ -1794,6 +1800,7 @@ fn judge_pins(
                 repository,
                 problem: None,
                 standing: TrustStanding::ForTheRun,
+                store_unread: false,
             },
             Ok(_) => Judged {
                 rules: Some(false),
@@ -1804,30 +1811,33 @@ fn judge_pins(
                         .to_owned(),
                 ),
                 standing: TrustStanding::RulesChanged,
+                store_unread: false,
             },
             Err(_) => Judged {
                 rules: None,
                 repository,
                 problem: None,
                 standing: TrustStanding::ForTheRun,
+                store_unread: false,
             },
         };
     }
-    let (stored, problem) = match state {
+    let (stored, problem, store_unread) = match state {
         Some(state) => {
             let store = TrustStore::new(state.trust_file(), Arc::clone(&inner.options.clock));
             match store.project(&root.project_key()) {
-                Ok(trust) => (trust, None),
+                Ok(trust) => (trust, None, false),
                 Err(error) => (
                     cineris_policy::ProjectTrust::untrusted(),
                     Some(format!(
                         "The trust store could not be read, so this project is treated as not \
                          trusted: {error}"
                     )),
+                    true,
                 ),
             }
         }
-        None => (cineris_policy::ProjectTrust::untrusted(), None),
+        None => (cineris_policy::ProjectTrust::untrusted(), None, false),
     };
     if !stored.is_trusted() {
         let standing = if stored.is_refused() {
@@ -1840,6 +1850,7 @@ fn judge_pins(
             repository: false,
             problem,
             standing,
+            store_unread,
         };
     }
     // Git reads the repository's configuration only as it was shown and
@@ -1851,6 +1862,7 @@ fn judge_pins(
             repository,
             problem,
             standing: TrustStanding::Trusted,
+            store_unread: false,
         },
         Ok(pins) => Judged {
             rules: Some(false),
@@ -1863,12 +1875,14 @@ fn judge_pins(
                     .to_owned()
             }),
             standing: TrustStanding::RulesChanged,
+            store_unread: false,
         },
         Err(_) => Judged {
             rules: None,
             repository,
             problem,
             standing: TrustStanding::Trusted,
+            store_unread: false,
         },
     }
 }

@@ -1188,7 +1188,10 @@ pub(crate) fn context_notice(hook: &str, context: &str) -> String {
 /// arguments and the user was asked about them: which hook, and what it
 /// put in their place.
 pub(crate) fn replaced_note(replaced: &ReplacedArguments) -> String {
-    let mut shown = cineris_base::visible(&replaced.arguments.to_string()).into_owned();
+    // The model reads it: no selector is kept, each written as an escape,
+    // so that none carries a byte unseen (the review of step 28's fixes).
+    let mut shown =
+        cineris_base::visible_to_the_model(&replaced.arguments.to_string()).into_owned();
     if shown.len() > SHOWN_ARGUMENTS {
         let all = shown.len();
         let mut end = SHOWN_ARGUMENTS;
@@ -1610,6 +1613,28 @@ mod tests {
             }
         }
         assert_eq!(seen, 4, "the transcript's four lines of a hook");
+    }
+
+    /// The note a call's result begins with when a hook replaced its
+    /// arguments is the model's to read: no variation selector of the
+    /// replacement reaches it, not even one after a character, which would
+    /// carry a byte a character unseen; each is written as an escape (the
+    /// review of step 28's fixes, the twin of its finding 6).
+    #[test]
+    fn a_replacements_note_carries_no_selector_to_the_model() {
+        let note = replaced_note(&ReplacedArguments {
+            hook: "swap".to_owned(),
+            arguments: json!({"path": "a\u{fe0f}b\u{e0101}c"}),
+            original: None,
+            reason: None,
+        });
+        assert!(
+            !note
+                .chars()
+                .any(|c| matches!(c, '\u{fe00}'..='\u{fe0f}' | '\u{e0100}'..='\u{e01ef}')),
+            "{note:?}"
+        );
+        assert!(note.contains("a\\u{fe0f}b\\u{e0101}c"), "{note}");
     }
 
     /// An observing hook that counts its runs, none of which ends.

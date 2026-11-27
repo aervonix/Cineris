@@ -565,6 +565,8 @@ struct Judging {
 struct Looked {
     trusted: Trusted,
     standing: TrustStanding,
+    /// The trust store could not be read ([`assemble::Judged::store_unread`]).
+    store_unread: bool,
     problem: Option<String>,
     /// The configuration loaded, when one was.
     latest: Option<Arc<Loaded>>,
@@ -595,7 +597,7 @@ async fn reload_session(
     // A project's hook commands leave with its trust, at once and whatever
     // else of the reload is applied (the review of step 28, finding 5): as
     // the store judged it, and as the load judged it again below.
-    withdraw_untrusted(live, &judging.judged.standing);
+    withdraw_untrusted(live, &judging.judged.standing, judging.judged.store_unread);
     // A test holds the reload here, to change the trust store between the
     // judgement and the load: the load uses the trust just judged.
     cineris_base::hook::await_point!(TRUST_JUDGED);
@@ -604,7 +606,7 @@ async fn reload_session(
     let Some(looked) = looked else {
         return Ok((ConfigChanged::default(), false));
     };
-    withdraw_untrusted(live, &looked.standing);
+    withdraw_untrusted(live, &looked.standing, looked.store_unread);
     let (waited, trusted) = {
         let config = lock(&live.config);
         let waited: BTreeSet<String> = config.waiting.keys().map(ToString::to_string).collect();
@@ -636,15 +638,28 @@ async fn reload_session(
 
 /// Takes the project's hook commands off the session's events when
 /// `standing` is one under which a session runs none of them (not trusted,
-/// or marked never): for the rest of the session, since the session's hooks
-/// are settled as it opens and trust given again is the next session's.
-/// The user is told once.
-fn withdraw_untrusted(live: &Live, standing: &TrustStanding) {
+/// or marked never), as the trust store says it: for the rest of the
+/// session, since the session's hooks are settled as it opens and trust
+/// given again is the next session's. A store that cannot be read
+/// (`store_unread`) says nothing of the project, and may be read again
+/// (a newer build's file, its permissions, a file being replaced): its
+/// hooks are only held back, their gates failing, until a look reads it
+/// (the review of step 28's fixes). The user is told once at each change.
+fn withdraw_untrusted(live: &Live, standing: &TrustStanding, store_unread: bool) {
+    let hooks = &live.command_hooks;
+    if store_unread {
+        if let Some(note) = hooks.project_store_unread(true) {
+            live.hooks.tell(note);
+        }
+        return;
+    }
     let runs_projects = matches!(
         standing,
         TrustStanding::Trusted | TrustStanding::RulesChanged | TrustStanding::ForTheRun
     );
     if !runs_projects && let Some(note) = live.command_hooks.withdraw_project() {
+        live.hooks.tell(note);
+    } else if runs_projects && let Some(note) = hooks.project_store_unread(false) {
         live.hooks.tell(note);
     }
 }
@@ -748,6 +763,7 @@ fn load(inner: &Inner, live: &Live, asked: &Asked, judging: Judging) -> Option<L
                 // The store no longer trusts the project, or its rules
                 // changed: said as the judgement says it.
                 judged.standing = again.standing;
+                judged.store_unread = again.store_unread;
                 judged.problem = again.problem;
             } else {
                 // Cannot be told: set aside, as a change would be.
@@ -788,6 +804,7 @@ fn load(inner: &Inner, live: &Live, asked: &Asked, judging: Judging) -> Option<L
     Some(Looked {
         trusted,
         standing: judged.standing,
+        store_unread: judged.store_unread,
         problem: judged.problem,
         profile: latest.is_some().then(|| asked.profile.clone()).flatten(),
         latest,
@@ -1159,6 +1176,7 @@ async fn apply(core: &Core, live: &Arc<Live>, looked: Looked) -> Result<ConfigCh
         latest,
         mut errors,
         profile,
+        store_unread: _,
     } = looked;
     let (in_force, was, kept_choices, generation) = {
         let config = lock(&live.config);

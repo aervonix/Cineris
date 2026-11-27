@@ -166,6 +166,8 @@ fn a_lock_keeps_a_projects_hook_of_its_name_out() {
         .map(|hook| hook.name.as_str())
         .collect();
     assert_eq!(names, ["lint"]);
+    // Named, so that one approved is known as the managed file's word.
+    assert_eq!(loaded.project_hooks_locked, ["audit"]);
     let said = machine.said(&loaded);
     assert_eq!(said.len(), 1, "{said:?}");
     assert!(said[0].contains("hooks.audit"), "{said:?}");
