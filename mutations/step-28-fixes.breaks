@@ -961,3 +961,18 @@ replace: cineris_base::visible(&relative(root, path))
 packages: cineris-agent
 caught-by:
     cineris-agent::it context::a_nested_instruction_files_name_carries_no_selector_to_the_model
+
+# From mutations/step-28-fixes-engine.breaks (part `engine`).
+# The engine part's fix from a Windows stress run of the step 28 fixes'
+# third pull request: a thread told to stop that comes back within its
+# grace counts no more, before it has ended.
+
+[break] a-thread-that-came-back-still-counts
+rule: A thread told to stop whose call's end comes back within its grace is released from the cap at once, so that nothing waits for its real end on the session's clock.
+file: crates/cineris-ext/src/engine/mod.rs
+in: ScriptRuntime::stopped
+find: self.watched.came_back();
+replace: let _ = &self.watched;
+packages: cineris-ext
+caught-by:
+    cineris-ext::it left_running::a_thread_that_came_back_counts_no_more_while_it_ends
