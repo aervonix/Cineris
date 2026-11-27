@@ -307,6 +307,11 @@ pub(crate) fn read_one(
         }
         text.truncate(at);
     }
+    // What the model reads hides nothing: a repository's file needs no
+    // trust, so what acts unseen, and every variation selector, is taken
+    // out as from an extension's text (the fixes to step 28). The hash is
+    // of what the model reads, so a file that held any has a new one once.
+    let text = super::prompt::plain(&text);
     Ok(Some(Found {
         place: place.clone(),
         text,

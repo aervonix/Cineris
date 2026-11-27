@@ -222,6 +222,7 @@ fn an_extensions_command_runs_and_prompt_submit_sees_the_expanded_text() {
         "cineris.command({ name: 'deploy', description: 'Deploy a preview', arguments: ['env'],\n\
            run(input) {\n\
              if (input.arguments.env === 'none') return null;\n\
+             if (input.arguments.env === 'hidden') return 'x\\ufe0f\\u{e0100}y\\u202ez';\n\
              return 'deploy to ' + input.arguments.env + ' [' + input.args + ']';\n\
            } });\n\
          cineris.on('prompt.submit', {}, (e) => {\n\
@@ -308,6 +309,16 @@ fn an_extensions_command_runs_and_prompt_submit_sees_the_expanded_text() {
                 .command
                 .map(|command| (command.name, command.source)),
             Some(("ship".to_owned(), CommandSource::Project))
+        );
+
+        // What it gives hides nothing: a selector after a character, a run
+        // of them and a direction override are written as escapes.
+        send(&front, "probe:deploy", "hidden").await.unwrap();
+        front.turns(before + 3).await;
+        let (hidden, _) = last_prompt(&front);
+        assert!(
+            hidden.ends_with("x\\u{fe0f}\\u{e0100}y\\u{202e}z"),
+            "{hidden:?}"
         );
         front.close().await;
     });

@@ -804,6 +804,17 @@ mod tests {
         }
     }
 
+    /// An entry is taken only as a live runtime could have registered it:
+    /// a tool's description with a variation selector, which a live
+    /// registration refuses since the fixes to step 28, is refused here
+    /// too, so that one cached before them is evaluated again.
+    #[test]
+    fn an_entry_a_live_runtime_could_not_have_registered_is_refused() {
+        assert!(entry("Find issues.").check().is_ok());
+        let error = entry("Find\u{fe0f} issues.").check().unwrap_err();
+        assert!(error.contains("variation selector"), "{error}");
+    }
+
     /// One entry within every cap is far below 16 MiB, so the write's cap
     /// is held here, at a smaller one.
     #[test]

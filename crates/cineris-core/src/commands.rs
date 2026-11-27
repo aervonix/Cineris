@@ -418,6 +418,11 @@ async fn run_script(
             files::MAX_EXPANDED_BYTES / 1024
         )));
     }
+    // Sent as the user's prompt: what acts unseen, and every variation
+    // selector, written as an escape, as a hook's words are (the fixes to
+    // step 28), so that the author's text hides nothing there.
+    let text = cineris_base::visible_keeping(&text, &['\n', '\t']);
+    let text = cineris_base::selectors_escaped(&text);
     Ok(format!(
         "The command `{}` of the extension `{}`, written by its author, gave this prompt:\n\n{text}",
         cineris_base::in_code(&shown),

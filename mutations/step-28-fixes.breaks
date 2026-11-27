@@ -700,3 +700,32 @@ replace: if false && !again.is_empty() {
 packages: cineris-agent
 caught-by:
     cineris-agent hooks::tests::after_the_answer_only_a_pass_lets_the_call_run
+
+[break] a-script-commands-text-keeps-what-it-hides
+rule: The text an extension's command gives is sent as the user's prompt with what acts unseen, and every variation selector, written as an escape.
+file: crates/cineris-core/src/commands.rs
+find: let text = cineris_base::selectors_escaped(&text);
+replace: let text = text;
+packages: cineris-core
+caught-by:
+    cineris-core::it commands::an_extensions_command_runs_and_prompt_submit_sees_the_expanded_text
+
+[break] a-cached-description-keeps-its-selectors
+rule: The registration cache takes an entry only as a live runtime could have registered it: a tool's description with a variation selector sets the entry aside.
+file: crates/cineris-ext/src/registration.rs
+in: ToolDef::check
+find: check_registered_description(&self.description)?;
+replace: check_description(&self.description)?;
+packages: cineris-ext
+caught-by:
+    cineris-ext cache::tests::an_entry_a_live_runtime_could_not_have_registered_is_refused
+
+[break] an-instruction-file-hides-text
+rule: A repository's instruction file reaches the model, in section 4 and in the notice of a change, with what acts unseen and every variation selector taken out.
+file: crates/cineris-agent/src/context/instructions.rs
+in: read_one
+find: let text = super::prompt::plain(&text);
+replace: let text = text;
+packages: cineris-agent
+caught-by:
+    cineris-agent::it context::an_instruction_file_hides_nothing_from_the_model
