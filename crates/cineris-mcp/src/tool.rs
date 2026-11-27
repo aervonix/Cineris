@@ -5,7 +5,8 @@
 //! - **What is admitted** ([`admit_all`], [`admit`]): a tool named with 1
 //!   to 128 of ASCII letters, digits, `_`, `-` and `.`, whose input schema
 //!   is the schema of an object, at most 32 KiB written compactly and 64
-//!   levels deep, with no key that holds a character that acts unseen; at
+//!   levels deep, with no key that holds a character that acts unseen, and
+//!   one the client can call (not a tool that runs only as a task); at
 //!   most 512 a server, after the entry's `tools` and `deny_tools`. What is
 //!   left out is said, with why ([`LeftOut`]), for `cineris mcp inspect` and
 //!   a notice.
@@ -13,7 +14,7 @@
 //!   given, as the first line, then the description, each made one line by
 //!   [`cineris_base::one_line`] (what acts unseen taken out, white space
 //!   folded); and the input schema, in every string of which what acts
-//!   unseen is written as an escape ([`cineris_base::visible`]), so that a
+//!   unseen is written as an escape ([`cineris_base::visible_to_the_model`]), so that a
 //!   value can be given back as it is shown. The registry cuts each at
 //!   2 KiB where a search shows it, and shows a held tool by its name
 //!   alone ([`Hold`]). The annotations are not read: the tool asks
@@ -30,7 +31,9 @@ use std::collections::BTreeSet;
 use std::sync::{Arc, LazyLock};
 
 use cineris_base::text::truncate_bytes;
-use cineris_base::{CancelToken, in_code, one_line, visible, visible_keeping};
+use cineris_base::{
+    CancelToken, in_code, one_line, visible, visible_keeping, visible_to_the_model,
+};
 use cineris_protocol::lease::RuleAction;
 use cineris_tools::registry::{MAX_DESCRIPTION_BYTES, shown_schema};
 use cineris_tools::{
@@ -40,6 +43,7 @@ use cineris_tools::{
 
 use crate::client::{CallOutput, Client, ClientError, Content, ToolDefinition};
 use crate::definition::ServerDefinition;
+use crate::session::MAX_TOOLS;
 
 /// The longest name a tool may have, in characters (all ASCII).
 pub const MAX_NAME_LEN: usize = 128;
@@ -49,9 +53,6 @@ pub const MAX_SCHEMA_BYTES: usize = 32 * 1024;
 
 /// The deepest an input schema may be nested: the schema itself is level 1.
 pub const MAX_SCHEMA_DEPTH: usize = 64;
-
-/// The most tools one server has in the registry.
-pub const MAX_TOOLS: usize = 512;
 
 /// The most of a server's text a result's own lines show (a link, a
 /// resource's name, an error): what a search shows of a description.
@@ -105,6 +106,9 @@ pub enum WhyLeftOut {
     /// character that acts unseen: shown as [`in_code`] shows it. A key is
     /// not cleaned, since that would change what the schema asks for.
     UnseenKey(String),
+    /// The client cannot call it (`ToolDefinition::unusable`, in its
+    /// words): a tool that runs only as a task.
+    Unusable(&'static str),
     /// Another tool of the server has its name: the first is kept.
     Duplicate,
     /// The server offers more than [`MAX_TOOLS`]: the first are kept.
@@ -136,6 +140,7 @@ impl std::fmt::Display for WhyLeftOut {
                 f,
                 "a key of its input schema, `{key}`, holds a character that acts unseen"
             ),
+            Self::Unusable(why) => f.write_str(why),
             Self::Duplicate => {
                 f.write_str("another tool of the server has its name, and the first is kept")
             }
@@ -218,7 +223,8 @@ pub fn admit_all(
 }
 
 /// One tool of the server `server`, if its definition may be registered:
-/// its name and its input schema checked as the module says.
+/// its name and its input schema checked as the module says, and a tool
+/// the client cannot call (`ToolDefinition::unusable`) left out.
 pub fn admit(
     server: &str,
     definition: &ToolDefinition,
@@ -228,6 +234,9 @@ pub fn admit(
         return Err(WhyLeftOut::Name);
     }
     check_schema(&definition.input_schema)?;
+    if let Some(why) = definition.unusable() {
+        return Err(WhyLeftOut::Unusable(why));
+    }
     Ok(McpTool::new(server, definition, caller))
 }
 
@@ -338,14 +347,11 @@ impl McpTool {
 
     /// The first line of every result: the server's output, named as its.
     fn label(&self) -> String {
-        // after 0ce319cc: the names through `cineris_base::visible_to_the_model`
-        // inside `in_code`'s escaping of a backtick (an admitted tool's name
-        // is ASCII, and the server's is the registry's, so neither changes).
         format!(
             "Output of the tool `{}` of the MCP server `{}`, written by the server, not by the \
              harness:",
-            in_code(&self.spec.name),
-            in_code(&self.server)
+            code(&self.spec.name),
+            code(&self.server)
         )
     }
 
@@ -411,8 +417,8 @@ impl McpTool {
     fn failed(&self, error: &ClientError) -> ToolResult {
         let what = format!(
             "The call of the tool `{}` of the MCP server `{}`",
-            in_code(&self.spec.name),
-            in_code(&self.server)
+            code(&self.spec.name),
+            code(&self.server)
         );
         match error {
             ClientError::Cancelled => ToolResult::interrupted(format!("{what} was cancelled.")),
@@ -420,7 +426,7 @@ impl McpTool {
             // escaped and cut. A server's standard error is never in them.
             other => ToolResult::error(format!(
                 "{what} failed: {}",
-                cut(&visible(&other.to_string()), MAX_SHOWN)
+                cut(&visible_to_the_model(&other.to_string()), MAX_SHOWN)
             )),
         }
     }
@@ -435,8 +441,8 @@ impl Tool for McpTool {
         let compact = args.to_string();
         let summary = format!(
             "Call the tool `{}` of the MCP server `{}` with {}",
-            in_code(&self.spec.name),
-            in_code(&self.server),
+            code(&self.spec.name),
+            code(&self.server),
             cut(&visible(&compact), SUMMARY_ARGUMENTS)
         );
         // No effect of its own: `tool_call` adds the call of the tool by
@@ -460,12 +466,16 @@ impl Tool for McpTool {
             if let Err(mismatch) = cineris_tools::schema::validate(&self.schema, &arguments) {
                 return ToolResult::error(format!(
                     "The arguments for `{}/{}` do not fit its schema:\n{}\nIts schema is:\n{}",
-                    in_code(&self.server),
-                    in_code(&self.spec.name),
-                    // after 0ce319cc: each line through
-                    // `cineris_base::visible_to_the_model`: it quotes the
-                    // server's schema.
-                    visible_keeping(&mismatch.to_string(), &['\n']),
+                    code(&self.server),
+                    code(&self.spec.name),
+                    // Each line as the model is shown a schema's strings:
+                    // it quotes the server's schema.
+                    mismatch
+                        .problems()
+                        .iter()
+                        .map(|problem| visible_to_the_model(problem))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
                     shown_schema(&self.spec.parameters)
                 ));
             }
@@ -514,9 +524,7 @@ fn description_of(definition: &ToolDefinition) -> String {
 /// unseen written as an escape, a line break and a tab among them, so that
 /// a value the model must give back can be written as it is shown.
 fn clean(text: &str) -> String {
-    // after 0ce319cc: `cineris_base::visible_to_the_model`, which also
-    // writes a variation selector after a character as its escape.
-    visible(text).into_owned()
+    visible_to_the_model(text).into_owned()
 }
 
 /// `schema` with every string in it [`clean`]ed. Its keys are not changed:
@@ -553,8 +561,7 @@ fn as_received(text: &str) -> Cow<'_, str> {
 
 /// A server's text on a line of a result's own: escaped, and cut.
 fn line(text: &str) -> Cow<'_, str> {
-    // after 0ce319cc: `cineris_base::visible_to_the_model`.
-    let shown = visible(text);
+    let shown = visible_to_the_model(text);
     if shown.len() <= MAX_SHOWN {
         shown
     } else {
@@ -574,9 +581,15 @@ fn cut(text: &str, max: usize) -> String {
 
 /// A tool's name as a message about it shows it.
 fn shown_name(name: &str) -> String {
-    // after 0ce319cc: through `cineris_base::visible_to_the_model` inside
-    // `in_code`'s escaping of a backtick: a name left out holds anything.
-    cut(&in_code(name), 200)
+    // A name left out holds anything.
+    cut(&code(name), 200)
+}
+
+/// A name shown as code, as the model is to use it again: a backtick and a
+/// backslash in it escaped (`in_code`), then every variation selector too
+/// ([`visible_to_the_model`]).
+fn code(text: &str) -> String {
+    visible_to_the_model(&in_code(text)).into_owned()
 }
 
 /// A size in bytes, in words.
@@ -614,9 +627,7 @@ fn check_schema(schema: &Json) -> Result<(), WhyLeftOut> {
         return Err(WhyLeftOut::SchemaTooLarge);
     }
     if let Some(key) = unseen_key(schema) {
-        // after 0ce319cc: through `cineris_base::visible_to_the_model` inside
-        // `in_code`'s escaping of a backtick, as a name left out is.
-        return Err(WhyLeftOut::UnseenKey(cut(&in_code(key), 200)));
+        return Err(WhyLeftOut::UnseenKey(cut(&code(key), 200)));
     }
     Ok(())
 }
@@ -661,7 +672,7 @@ fn larger_than(value: &Json, limit: usize) -> bool {
 }
 
 /// The first key in `value`, at any depth, that holds a character
-/// [`visible`] would write as an escape.
+/// [`visible_to_the_model`] would write as an escape.
 fn unseen_key(value: &Json) -> Option<&str> {
     let mut stack: Vec<&Json> = vec![value];
     while let Some(value) = stack.pop() {
@@ -669,7 +680,7 @@ fn unseen_key(value: &Json) -> Option<&str> {
             Json::Array(items) => stack.extend(items),
             Json::Object(map) => {
                 for (key, item) in map {
-                    if matches!(visible(key), Cow::Owned(_)) {
+                    if matches!(visible_to_the_model(key), Cow::Owned(_)) {
                         return Some(key);
                     }
                     stack.push(item);

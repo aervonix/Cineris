@@ -28,7 +28,7 @@ use crate::{Front, World, says};
 const DESCRIPTION: &str = "Search the product documentation";
 
 /// The user's entry of the server `docs`.
-fn docs() -> ServerDefinition {
+pub(crate) fn docs() -> ServerDefinition {
     ServerDefinition {
         name: "docs".to_owned(),
         origin: Origin::User,

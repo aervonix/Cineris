@@ -724,10 +724,11 @@ impl Held {
         self.scripts.set_not_loaded(not_loaded);
         // Section 7: the text of each extension loaded, as the cache holds
         // it, and only of one the registry took, as the turn will find it:
-        // one whose capabilities did not compile is not loaded.
+        // one whose capabilities did not compile is not loaded, nor one
+        // refused a name an MCP server holds (its kind's sources alone).
         let sources: HashSet<String> = self
             .registry
-            .sources()
+            .sources_of(cineris_tools::SourceKind::Extension)
             .into_iter()
             .map(|source| source.name)
             .collect();

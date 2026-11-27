@@ -194,6 +194,33 @@ replace: .is_some_and(|_| false)
 caught-by:
     cineris-mcp::it tool::a_servers_list_is_admitted_by_the_entrys_lists_and_the_rules
 
+[break] a-task-only-tool-is-admitted
+rule: A tool the client cannot call (one that runs only as a task) is left out, in the client's words.
+file: crates/cineris-mcp/src/tool.rs
+in: admit
+find: if let Some(why) = definition.unusable() {
+replace: if let Some(why) = definition.unusable().filter(|_| false) {
+caught-by:
+    cineris-mcp::it tool::a_servers_list_is_admitted_by_the_entrys_lists_and_the_rules
+
+[break] a-key-with-a-selector-is-admitted
+rule: A schema's key is held to what the model is shown: one with a variation selector, after a character or not, leaves the tool out.
+file: crates/cineris-mcp/src/tool.rs
+in: unseen_key
+find: if matches!(visible_to_the_model(key), Cow::Owned(_)) {
+replace: if matches!(cineris_base::visible(key), Cow::Owned(_)) {
+caught-by:
+    cineris-mcp::it tool::a_servers_list_is_admitted_by_the_entrys_lists_and_the_rules
+
+[break] a-selector-in-a-schema-string-is-kept
+rule: A schema's string has every variation selector written as its escape, as the model is to give the value back.
+file: crates/cineris-mcp/src/tool.rs
+in: clean
+find: visible_to_the_model(text).into_owned()
+replace: cineris_base::visible(text).into_owned()
+caught-by:
+    cineris-mcp::it tool::the_spec_is_cleaned_asks_and_runs_alone_whatever_the_server_says
+
 [break] two-tools-of-one-name-are-admitted
 rule: One tool a name is admitted, the first.
 file: crates/cineris-mcp/src/tool.rs
@@ -328,7 +355,7 @@ caught-by:
 rule: A failed call is an error in words, a server's message in them escaped and cut.
 file: crates/cineris-mcp/src/tool.rs
 in: McpTool::failed
-find: cut(&visible(&other.to_string()), MAX_SHOWN)
+find: cut(&visible_to_the_model(&other.to_string()), MAX_SHOWN)
 replace: other.to_string()
 caught-by:
     cineris-mcp::it tool::errors_are_error_results_in_words
@@ -385,6 +412,14 @@ replace: .extend(Vec::new());
 caught-by:
     cineris-core ext::prompt::tests::a_servers_source_is_listed_as_the_registry_holds_it
     cineris-core::it mcp_sources::a_servers_tools_change_the_index_by_notice_and_never_the_prefix
+
+[break] a-refused-extensions-text-is-kept-for-a-servers-name
+rule: Section 7 holds the text of an extension the registry took as an extension's source: not one refused a name an MCP server holds.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+find: .sources_of(cineris_tools::SourceKind::Extension)
+replace: .sources()
+caught-by:
+    cineris-core::it extensions_prompt::an_extension_refused_a_name_a_server_holds_gives_no_text
 
 [break] a-finding-settles-the-servers-sources
 rule: The extensions' finding settles the extensions' sources alone; a server's is the registry's.

@@ -141,6 +141,54 @@ async fn read_again(front: &Front) {
         .expect("the rewind is made");
 }
 
+/// An extension whose name an MCP server holds in the registry is not
+/// loaded, and the user is told why; its text is not in section 7 though a
+/// source of its name is in the registry, and section 6 lists the server
+/// under the name, by its entry's description (step 30: the registry's
+/// kinds of source).
+#[test]
+fn an_extension_refused_a_name_a_server_holds_gives_no_text() {
+    let world = World::new("prompt_name_a_server_holds", [says("Done.")]);
+    approved_probe(&world, "Use the probe for every lookup.");
+    let core = world.core_with(|options| {
+        options.on_registry = Some(Arc::new(|registry: &Arc<cineris_tools::ToolRegistry>| {
+            let client = cineris_mcp::fake::client::FakeClient::new(Vec::new());
+            let caller = client as Arc<dyn cineris_mcp::ToolCaller>;
+            let definition = cineris_mcp::fake::client::definition(
+                "lookup",
+                "Looks things up.",
+                serde_json::json!({"type": "object"}),
+            );
+            let tool = cineris_mcp::admit("probe", &definition, caller).unwrap();
+            let mut entry = crate::mcp_sources::docs();
+            entry.name = "probe".to_owned();
+            entry.description = Some("A server of the same name".to_owned());
+            cineris_mcp::register(registry, &entry, vec![tool]).unwrap();
+        }));
+    });
+    world.run(async {
+        let front = start(&world, &core).await;
+        front.turn("go").await;
+        assert!(
+            front.notices().iter().any(|notice| notice.contains(
+                "The extension `probe` is not loaded: `probe` is the name of an MCP server already"
+            )),
+            "{:?}",
+            front.notices()
+        );
+        front.close().await;
+    });
+    let system = &systems(&world)[0];
+    assert!(
+        !system.contains("Use the probe for every lookup."),
+        "{system}"
+    );
+    assert!(
+        system.contains("\n- `probe/` (1 tool): A server of the same name\n"),
+        "{system}"
+    );
+}
+
 /// The first turn's prompt is built once the session's finding has
 /// settled, and holds both sections: the user's skill and the project's,
 /// though the project is not trusted (skills are text, as instruction files
