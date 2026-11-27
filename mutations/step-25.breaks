@@ -92,10 +92,15 @@ caught-by:
 [break] the-emergency-restore-leaves-the-mouse-on
 rule: Every emergency restore with the alternate screen on turns mouse reporting off.
 file: crates/cineris-term/src/sys/mod.rs
-find: b"\x1b[?2026l\x1b[0m\x1b[?1006l\x1b[?1000l\x1b[?1049l\r\x1b[J\x1b[?1004l\x1b[?2004l\x1b[?7h\x1b[?25h"
-replace: b"\x1b[?2026l\x1b[0m\x1b[?1049l\r\x1b[J\x1b[?1004l\x1b[?2004l\x1b[?7h\x1b[?25h"
+# The restore is put together from parts since the second round of the
+# fixes of step 25's review: one mouse-off for every state with the
+# alternate screen, the keyboard protocol's and the win32 input mode's too.
+in: restore
+find: push(buffer, &mut length, RESTORE_MOUSE_OFF);
+replace:
 caught-by:
     cineris-term terminal::tests::the_mouse_is_on_only_with_the_alternate_screen_and_off_on_every_way_out
+    cineris-term sys::tests::the_restore_leaves_no_keyboard_flags_and_no_mouse_on_either_screen
 
 [break] a-resume-forgets-the-mouse
 rule: Continued after a stop, the alternate screen comes back with the mouse, if it was asked for.

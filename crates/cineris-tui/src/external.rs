@@ -244,14 +244,19 @@ impl Handoff for TerminalHandoff<'_> {
 /// Turns off what a full-screen editor turns on: the alternate screen
 /// (without moving the cursor, as 1049 would), mouse reporting, application
 /// cursor keys and keypad, up to 99 levels of the enhanced keyboard
-/// protocol's flags on each screen, and a hidden cursor. Each screen has a
-/// stack of flags of its own, and kitty and ghostty keep the alternate
-/// screen's from one use to the next, so they are popped before the
-/// alternate screen is left as well as after (since the fixes of step 25's
-/// review: popped only after, an editor's flags stayed on the alternate
-/// screen).
+/// protocol's flags on the alternate screen, and a hidden cursor.
+///
+/// Each screen has a stack of flags of its own, and kitty and ghostty keep
+/// the alternate screen's from one use to the next: a full-screen editor
+/// pushes its flags there, so they are popped there, the alternate screen
+/// taken first (`?1047h`, nothing if the editor left it on) and left after.
+/// The main screen's stack is left alone: it holds the entry of the shell
+/// or of the program the interface runs under, and nothing tells it from an
+/// entry an editor pushed there (since the second round of the fixes of
+/// step 25's review: the pops came after the alternate screen was left, on
+/// the main screen, and took the shell's).
 const LEFT_ON: &[u8] =
-    b"\x1b[<99u\x1b[?1047l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1l\x1b>\x1b[<99u\x1b[?25h";
+    b"\x1b[?1047h\x1b[<99u\x1b[?1047l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1l\x1b>\x1b[?25h";
 
 /// The editor to run, from `env`.
 ///
@@ -773,17 +778,22 @@ mod tests {
 
     /// What a full-screen editor that was killed left on is turned off on
     /// a terminal that keeps a stack of keyboard flags per screen (kitty,
-    /// ghostty, the test kit's `VTerm`): its flags on the alternate screen
-    /// and on the main one, the alternate screen, the mouse (the fixes of
-    /// step 25's review).
+    /// ghostty, the test kit's `VTerm`): its flags on the alternate screen,
+    /// the alternate screen, the mouse; and the entry of the shell the
+    /// interface runs under, on the main screen, is still there, after an
+    /// editor that was killed and after one that ended as it should (the
+    /// fixes of step 25's review, and their second round).
     #[test]
     fn what_a_killed_editor_left_on_is_turned_off_on_both_screens() {
         for left in [
-            &b"\x1b[>1u\x1b[?1049h\x1b[?1000h\x1b[?1006h\x1b[>1u\x1b[>5u"[..],
+            &b"\x1b[?1049h\x1b[?1000h\x1b[?1006h\x1b[>1u\x1b[>5u"[..],
             b"\x1b[?1047h\x1b[>3u",
-            b"\x1b[>1u\x1b[>1u",
+            b"\x1b[?1049h\x1b[>1u\x1b[<u\x1b[?1049l",
+            b"",
         ] {
             let mut term = cineris_testkit::vterm::VTerm::new(80, 24);
+            // The shell's own entry.
+            term.feed(b"\x1b[>1u");
             term.feed(left);
             term.feed(LEFT_ON);
             let case = String::from_utf8_lossy(left);
@@ -791,8 +801,9 @@ mod tests {
             assert!(!term.modes().mouse && !term.modes().mouse_sgr, "{case:?}");
             assert!(term.modes().cursor_visible, "{case:?}");
             assert!(
-                term.main_keyboard().is_empty() && term.alternate_keyboard().is_empty(),
-                "{case:?}: the main screen's flags {:?}, the alternate screen's {:?}",
+                term.main_keyboard() == [1] && term.alternate_keyboard().is_empty(),
+                "{case:?}: the main screen's flags {:?} (the shell's is [1]), the alternate \
+                 screen's {:?}",
                 term.main_keyboard(),
                 term.alternate_keyboard()
             );

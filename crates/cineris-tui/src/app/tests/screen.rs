@@ -2474,10 +2474,13 @@ fn the_full_screen_and_the_viewer_leave_no_keyboard_flags_on_either_screen() {
         assert!(holds(&all, b"\x1b[>3u"), "{way}: the flags were pushed");
         assert!(holds(&all, b"\x1b[?1049h"), "{way}: the alternate screen");
         let mut term = cineris_testkit::VTerm::new(100, 30);
+        // The shell's own entry, pushed before the program: it is still
+        // there (the second round of the fixes of step 25's review).
+        term.feed(b"\x1b[>1u");
         term.feed(&all);
         assert!(
-            term.main_keyboard().is_empty() && term.alternate_keyboard().is_empty(),
-            "{way}: the main screen's flags {:?}, the alternate screen's {:?}",
+            term.main_keyboard() == [1] && term.alternate_keyboard().is_empty(),
+            "{way}: the main screen's flags {:?} (the shell's is [1]), the alternate screen's {:?}",
             term.main_keyboard(),
             term.alternate_keyboard()
         );
