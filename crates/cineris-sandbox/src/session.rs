@@ -510,7 +510,9 @@ fn walk(start: u32, seen: impl Fn(u32) -> Seen, first_must_show: bool) -> Under 
                 return Under::Unknown(format!(
                     "process {at} of its line is one of this user's that `/proc` does not show \
                      (it is mounted with `hidepid`), as it does not show a harness to its \
-                     commands"
+                     commands. Run it from a terminal of your own on this machine, not over \
+                     SSH, whose login process `hidepid` hides as it hides a harness; or mount \
+                     `/proc` without `hidepid`"
                 ));
             }
             Seen::Failed => {
