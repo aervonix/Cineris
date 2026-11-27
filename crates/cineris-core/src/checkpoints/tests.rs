@@ -644,8 +644,8 @@ fn git_modes_are_read_for_regular_files_alone() {
     assert_eq!(
         modes,
         [
-            ("run.sh".to_owned(), FileMode::from_bits(0o777)),
-            ("src/a b.rs".to_owned(), FileMode::from_bits(0o666)),
+            ("run.sh".to_owned(), FileMode::from_bits(0o700)),
+            ("src/a b.rs".to_owned(), FileMode::from_bits(0o600)),
         ]
         .into_iter()
         .collect()

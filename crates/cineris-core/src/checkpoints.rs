@@ -263,12 +263,14 @@ impl Rounds {
         by_hand
     }
 
-    /// The modes git keeps for `paths` at `commit`, by path: a file a
-    /// rewind makes again from git is made as a checkout makes it, an
-    /// executable executable (since the step 25 fixes). One `ls-tree` for
-    /// a few hundred paths. A path git does not name as a regular file, or
-    /// an answer that cannot be read, has none: the file is made with the
-    /// default mode, as before.
+    /// What git's modes for `paths` at `commit` say, by path: a file a
+    /// rewind makes again from git is made for its owner, an executable
+    /// executable (since the step 25 fixes; `FileMode::from_git`), and
+    /// nothing for the group or others, which git does not keep. One
+    /// `ls-tree` for a few hundred paths; a repository that keeps no
+    /// execute bit gives none. A path git does not name as a regular file,
+    /// or an answer that cannot be read, has none: the file is made with
+    /// the default mode, as before. On Windows none at all.
     fn git_modes(
         &self,
         commit: &str,
@@ -278,7 +280,9 @@ impl Rounds {
         /// on a command line.
         const AT_ONCE: usize = 256;
         let mut modes = std::collections::HashMap::new();
-        if paths.is_empty() || !is_a_commit(commit) {
+        // On Windows a mode from git says nothing of who may open the file:
+        // the file is made again with its folder's rules, as before.
+        if cfg!(windows) || paths.is_empty() || !is_a_commit(commit) {
             return modes;
         }
         for some in paths.chunks(AT_ONCE) {
@@ -306,7 +310,25 @@ impl Rounds {
             };
             modes.extend(parse_ls_tree(whole));
         }
+        // A repository that keeps no execute bit (`core.fileMode=false`)
+        // can name a file `100755` that was never executable here.
+        if !modes.is_empty() && !self.keeps_the_execute_bit() {
+            for mode in modes.values_mut() {
+                *mode = mode.without_execute();
+            }
+        }
         modes
+    }
+
+    /// Whether the repository keeps files' execute bit: `core.fileMode`,
+    /// on unless it says `false`, as git reads it.
+    fn keeps_the_execute_bit(&self) -> bool {
+        let asked = self.git.run(
+            &self.root.to_fs_path(),
+            &["config", "--bool", "--get", "core.fileMode"],
+            64,
+        );
+        !matches!(asked, Ok(output) if output.success && output.stdout.trim_ascii() == b"false")
     }
 
     /// The content of `path` at `commit`, stored. `None` when git cannot

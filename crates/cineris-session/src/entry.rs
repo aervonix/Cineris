@@ -753,7 +753,11 @@ pub struct FileVersion {
     ///
     /// Kept for a `before`: from the handle the file was read through (an
     /// editing tool's, [`DiskStore::put_file`](crate::DiskStore::put_file)),
-    /// or from git's entry mode for a command's change read from git.
+    /// or, for a command's change read from git on Linux, `700` or `600`
+    /// from git's entry mode: the execute bit, for the owner alone, since
+    /// git keeps nothing else (none on Windows, nor where the repository
+    /// keeps no execute bit, `core.fileMode=false`, and its `100755` may be
+    /// any file's).
     /// `None` where it is not known: a log written before the field, a
     /// file's `after`, a protected path a command changed. Such a file is
     /// made again as before, with the default mode. A value this build

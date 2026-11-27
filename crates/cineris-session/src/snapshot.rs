@@ -39,7 +39,7 @@ use std::fs;
 use std::io::{self, Read};
 use std::path::PathBuf;
 
-use cineris_base::{AbsPath, ContentHash, ContentHasher, OpenError, PathStyle};
+use cineris_base::{AbsPath, ContentHash, ContentHasher, FileMode, OpenError, PathStyle};
 use cineris_protocol::ids::{SessionId, TurnId};
 
 use crate::entry::{Before, Body, Checkpoint, EntryId, FileChange, FileVersion, RewindReason};
@@ -538,7 +538,8 @@ pub(crate) fn file_status(
     (path, restore, left): Change,
     unreadable: bool,
 ) -> Result<FileRestore> {
-    let now = hash_file(&locate(root, &path)?.to_fs_path())?;
+    let target = locate(root, &path)?.to_fs_path();
+    let now = hash_file(&target)?;
     let same = |a: Option<FileVersion>, b: Option<FileVersion>| match (a, b) {
         (None, None) => true,
         (Some(a), Some(b)) => a.hash == b.hash,
@@ -551,7 +552,13 @@ pub(crate) fn file_status(
         _ if linked => cannot(CannotRestore::ThroughALink),
         // Nothing to go back to: never removed, never overwritten.
         Before::Unknown => cannot(CannotRestore::NotRecorded),
-        _ if restore.is(now.as_ref()) => (FileStatus::AlreadyRestored, None),
+        // The same content with a mode wider than the one kept is not put
+        // back yet: putting it back narrows the mode (the full review of the
+        // step 25 fixes). The plan shows it as one to put back, or as one
+        // edited since when it is not as the harness left it.
+        _ if restore.is(now.as_ref()) && !wider_than_kept(&target, &restore) => {
+            (FileStatus::AlreadyRestored, None)
+        }
         Before::Version(version) if !version.kept => cannot(CannotRestore::TooLarge),
         Before::Version(version) if !store.has_blob(&version.hash) => {
             cannot(CannotRestore::Missing)
@@ -567,6 +574,42 @@ pub(crate) fn file_status(
         status,
         cannot,
     })
+}
+
+/// Whether the file at `path` lets anyone do more than the mode `restore`
+/// kept: on Linux a permission bit the kept mode lacks, on Windows a file
+/// kept private that is no longer. `false` where no mode was kept, or the
+/// file's cannot be read.
+fn wider_than_kept(path: &std::path::Path, restore: &Before) -> bool {
+    let Some(kept) = restore.version().and_then(|version| version.mode) else {
+        return false;
+    };
+    let Ok((file, _)) = cineris_base::open_regular(path) else {
+        return false;
+    };
+    match FileMode::of(&file) {
+        Ok(Some(now)) => now.bits() & !kept.bits() != 0,
+        // Windows' answer for a file that is not private.
+        Ok(None) => kept.is_private(),
+        Err(_) => false,
+    }
+}
+
+/// On Windows, whether a file still at `target` is kept from everyone but
+/// its user: one the person made private since stays private when it is
+/// written over, whatever the checkpoint kept (the full review of the step
+/// 25 fixes). Elsewhere a file written over keeps its own mode anyway.
+#[cfg(windows)]
+fn private_now(target: &std::path::Path) -> Option<FileMode> {
+    cineris_base::private::access_list(target)
+        .ok()
+        .filter(cineris_base::private::AccessList::is_kept_from_others)
+        .map(|_| FileMode::PRIVATE)
+}
+
+#[cfg(not(windows))]
+fn private_now(_: &std::path::Path) -> Option<FileMode> {
+    None
 }
 
 /// Puts one file back as `restore` says.
@@ -623,7 +666,7 @@ pub(crate) fn put_back(
                 &content,
                 &cineris_base::AtomicWriteOptions {
                     follow_links: false,
-                    mode: version.mode,
+                    mode: version.mode.or_else(|| private_now(&target)),
                     ..cineris_base::AtomicWriteOptions::default()
                 },
                 clock,

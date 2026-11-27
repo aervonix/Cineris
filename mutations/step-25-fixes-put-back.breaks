@@ -138,3 +138,44 @@ replace: serialize_with = "mode_text::write"
 caught-by:
     cineris-session entry::tests::a_versions_mode_is_written_only_when_known_and_never_loses_the_version
     cineris-session::it put_back::unix::a_version_from_a_log_written_before_modes_is_made_again_as_before
+
+# ------------------------------------------------- the full review of the fixes
+
+[break] git-mode-gives-the-group-and-others
+rule: A mode from git gives the group and others nothing, since git does not keep what they may do: a tracked file the person made private comes back private.
+file: crates/cineris-base/src/mode.rs
+in: FileMode::from_git
+find: "100644" => Some(Self(0o600))
+replace: "100644" => Some(Self(0o666))
+packages: cineris-base,cineris-core
+caught-by:
+    cineris-base mode::tests::git_keeps_the_execute_bit_alone
+    cineris-core::it put_back::sys_an_undo_never_makes_a_tracked_file_wider_than_git_can_vouch_for
+
+[break] git-execute-bit-trusted-where-the-repository-keeps-none
+rule: Where the repository keeps no execute bit (`core.fileMode=false`), git's `100755` gives no execute bit.
+file: crates/cineris-core/src/checkpoints.rs
+in: Rounds::git_modes
+find: !modes.is_empty() && !self.keeps_the_execute_bit()
+replace: false
+caught-by:
+    cineris-core::it put_back::sys_an_undo_never_makes_a_tracked_file_wider_than_git_can_vouch_for
+
+[break] the-same-content-with-a-wider-mode-is-already-put-back
+rule: A file with the content it will be put back to and a mode wider than the one kept is still put back, which narrows its mode.
+file: crates/cineris-session/src/snapshot.rs
+in: file_status
+find: restore.is(now.as_ref()) && !wider_than_kept(&target, &restore)
+replace: restore.is(now.as_ref())
+caught-by:
+    cineris-session::it put_back::unix::the_same_content_with_a_wider_mode_is_still_put_back
+
+[break] a-file-made-private-since-is-opened-up-on-windows
+rule: On Windows a file the person made private since stays private when a rewind writes over it, whatever the checkpoint kept.
+file: crates/cineris-session/src/snapshot.rs
+in: put_back
+find: version.mode.or_else(|| private_now(&target))
+replace: version.mode
+os: windows
+caught-by:
+    cineris-session::it put_back::a_file_made_private_since_stays_private_when_it_is_put_back_on_windows

@@ -10,7 +10,7 @@
 //!
 //! | | What is kept | Where it comes from |
 //! |---|---|---|
-//! | Linux | The nine permission bits (`rwx` for the owner, the group and others), never the set-user-id, set-group-id or sticky bit | The open file's own metadata ([`FileMode::of`]), or git's entry mode for a file read from a commit ([`FileMode::from_git`]) |
+//! | Linux | The nine permission bits (`rwx` for the owner, the group and others), never the set-user-id, set-group-id or sticky bit | The open file's own metadata ([`FileMode::of`]), or, for a file read from a commit, git's execute bit and nothing for the group or others ([`FileMode::from_git`]) |
 //! | Windows | Whether the file is private: [`FileMode::PRIVATE`] for one whose own access list keeps it from everyone but the current user (`private::AccessList::is_kept_from_others`, Windows only), nothing for any other | The open file's access list, read through its handle |
 //!
 //! These functions block. Async code calls them on the blocking pool.
@@ -81,20 +81,29 @@ impl FileMode {
         u32::from_str_radix(text, 8).ok().map(Self::from_bits)
     }
 
-    /// The mode git gives a regular file of a tree when it checks it out:
-    /// `777` for `100755`, an executable, and `666` for `100644`, each less
-    /// the umask when the file is made. Git keeps the execute bit and no
-    /// other, so this is no narrower than what a checkout makes: a file
-    /// made again from it is made as git would make it, never as private
-    /// as the person may have made it since. `None` for any other entry (a
-    /// link, a submodule, a tree).
+    /// What git's entry mode for a regular file says of the file: `700`
+    /// for `100755`, an executable, and `600` for `100644`. Git keeps the
+    /// execute bit and nothing else, so what the group and others may do
+    /// is not known, and is not given: a file the person had made private
+    /// (`chmod 600`, which git does not see) must not come back readable by
+    /// others (the full review of the step 25 fixes, which found `777` and
+    /// `666`, a checkout's modes, making such a file `0644` again). `None`
+    /// for any other entry (a link, a submodule, a tree).
     #[must_use]
     pub fn from_git(mode: &str) -> Option<Self> {
         match mode {
-            "100755" => Some(Self(0o777)),
-            "100644" => Some(Self(0o666)),
+            "100755" => Some(Self(0o700)),
+            "100644" => Some(Self(0o600)),
             _ => None,
         }
+    }
+
+    /// The same mode with no execute bit: for git's entry mode where the
+    /// repository says it does not keep the execute bit
+    /// (`core.fileMode=false`), and its `100755` may be any file's.
+    #[must_use]
+    pub const fn without_execute(self) -> Self {
+        Self(self.0 & !0o111)
     }
 
     /// The mode of an open file, asked of its handle and never of its name.
@@ -163,11 +172,15 @@ mod tests {
     fn git_keeps_the_execute_bit_alone() {
         assert_eq!(
             FileMode::from_git("100755"),
-            Some(FileMode::from_bits(0o777))
+            Some(FileMode::from_bits(0o700))
         );
         assert_eq!(
             FileMode::from_git("100644"),
-            Some(FileMode::from_bits(0o666))
+            Some(FileMode::from_bits(0o600))
+        );
+        assert_eq!(
+            FileMode::from_bits(0o755).without_execute(),
+            FileMode::from_bits(0o644)
         );
         for other in ["120000", "160000", "040000", "100664", ""] {
             assert_eq!(FileMode::from_git(other), None, "{other:?}");
