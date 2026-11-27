@@ -7160,8 +7160,8 @@ caught-by:
 rule: A hook's allow never lifts the policy's question.
 file: crates/cineris-agent/src/round.rs
 in: Planning::hooked
-find: Before::Pass => Report::Planned { token: self.token, plan, decision,
-replace: Before::Pass => Report::Planned { token: self.token, plan, decision: Decision::Allow,
+find: Before::Pass => Report::Planned { token: self.token, plan, decision
+replace: Before::Pass => Report::Planned { token: self.token, plan, decision: Decision::Allow
 caught-by:
     cineris-agent::it hooks::tool_before_hooks_deny_or_ask_on_top_of_the_policy_and_run_together
 
