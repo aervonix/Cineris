@@ -1,6 +1,6 @@
 # Step 28 fixes: hooks and their trust
 
-The part of the fixes to step 28 that takes the review's findings 4, 5 and 14 (the review of step 28 at `5eda6204`, its hooks and pins areas), and its lower-confidence notes on hooks. Branch `worktree-step-28-fixes-hooks`; breaks `mutations/step-28-fixes-hooks.breaks`.
+The part of the fixes to step 28 that takes the review's findings 4, 5 and 14 (the review of step 28 at `5eda6204`, its hooks and pins areas), and its lower-confidence notes on hooks. Branch `worktree-step-28-fixes-hooks`; breaks `mutations/step-28-fixes.breaks` (merged from its part list).
 
 ## 4. An approved project gate lapsed when its entry changed, went, or was turned off
 
@@ -52,7 +52,7 @@ The part of the fixes to step 28 that takes the review's findings 4, 5 and 14 (t
 
 ## Breaks
 
-`mutations/step-28-fixes-hooks.breaks`, fifteen breaks, one or more for each part of each fix, run with `cargo xtask mutate step-28-fixes-hooks --jobs 2` on a Linux runner (`try` run 45949646735): "15 break(s): 15 did what the list expects, 0 flagged". The breaks that put `main`'s behaviour back are each caught by the new tests:
+`mutations/step-28-fixes.breaks` (merged from its part list), fifteen breaks, one or more for each part of each fix, run with `cargo xtask mutate step-28-fixes-hooks --jobs 2` on a Linux runner (`try` run 45949646735): "15 break(s): 15 did what the list expects, 0 flagged". The breaks that put `main`'s behaviour back are each caught by the new tests:
 - `changed-hook-holds-nothing` and `removed-hook-holds-nothing` (finding 4) by `an_approved_projects_hook_holds_both_gates_once_not_as_approved` and `hook_trust::an_approved_projects_gate_holds_whatever_its_file_does_to_it`;
 - `trust-lowered-keeps-project-hooks` (finding 5) by `hook_trust::sys_a_projects_hook_command_stops_with_its_trust` and `hook_trust::a_projects_held_gates_leave_with_its_trust`;
 - `secret-path-handed-before-the-yes` (finding 14) by `hook_trust::sys_a_users_hook_is_handed_a_secret_file_only_after_the_yes`.
