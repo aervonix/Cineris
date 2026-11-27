@@ -316,7 +316,9 @@ Not blocking (the `main` and `nightly` workflows run these)
   partial-landlock  The sandbox's tests on a kernel whose Landlock is older
                     than 6, failing unless the run showed that partial case.
                     `try` runs it, and advisories and unused, as named jobs.
-  advisories        Check the lockfile against the advisory database.
+  advisories        Check the lockfiles of the code the repository builds
+                    (the workspace's, `fuzz/`'s) against the advisory
+                    database.
   git-tests-on-windows
                     The git-heavy tests of tools run locally or on Linux CI,
                     which the blocking job runs on Linux alone, by name:
