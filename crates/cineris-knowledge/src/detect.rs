@@ -39,7 +39,8 @@
 //! escaped) and named: `pretest "lint", then "jest", then posttest
 //! "report"`. Each is held to the same rules as the script, and one that
 //! cannot be read whole, or is not text, keeps the script from being
-//! offered. The other files' commands show no script: what `make`, `cargo`,
+//! offered; so does a row naming them all that is longer than
+//! [`MAX_RUNS`] characters (since the review of the step 25 fixes). The other files' commands show no script: what `make`, `cargo`,
 //! `go` and the Python tools run besides is their own (a target's
 //! prerequisites, a build script), as it is for a command typed by hand.
 
@@ -189,8 +190,9 @@ fn npm(text: &str, found: &mut Found) {
 /// What `npm run <name>` runs, for its row: the script's text as it is,
 /// or, when the file has `pre<name>` or `post<name>`, every one npm runs
 /// in turn, each named and in double quotes. `None` when any of them is
-/// not text or cannot be read whole ([`readable`]): the row would not say
-/// all that the command runs.
+/// not text or cannot be read whole ([`readable`]), or when the row that
+/// names them all is longer than [`MAX_RUNS`] characters: the row would not
+/// say all that the command runs, or not in a length read whole.
 fn npm_runs(scripts: &serde_json::Map<String, Value>, name: &str, runs: &Value) -> Option<String> {
     let text = |value: &Value| match value {
         Value::String(text) if readable(text) => Some(text.clone()),
@@ -210,7 +212,10 @@ fn npm_runs(scripts: &serde_json::Map<String, Value>, name: &str, runs: &Value) 
     if let Some(after) = after {
         shown.push(format!("post{name} {}", quoted(&after?)));
     }
-    Some(shown.join(", then "))
+    // The row is held to the cap a script's own text is held to: what it
+    // says is read whole, all of it.
+    let shown = shown.join(", then ");
+    (shown.chars().count() <= MAX_RUNS).then_some(shown)
 }
 
 /// `text` in double quotes, its `"` and `\` escaped: its bounds show
@@ -364,6 +369,13 @@ mod tests {
                  posttest \"node ./scripts/upload \\\"home\\\"\""
             )
         );
+        // Each within the cap, but the row naming them all past it: not
+        // offered either.
+        let half = "y".repeat(MAX_RUNS / 2);
+        let text = format!(
+            "{{\"scripts\": {{\"test\": \"{half}\", \"pretest\": \"{half}\"}}}}"
+        );
+        assert!(found(&[("package.json", &text)]).is_empty());
         // A `pre` past the cap keeps its script from being offered.
         let long = "x".repeat(MAX_RUNS + 1);
         let text = format!("{{\"scripts\": {{\"test\": \"jest\", \"pretest\": \"{long}\"}}}}");
