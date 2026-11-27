@@ -5,8 +5,9 @@
 # check of every break's `caught-by` against the tests that exist,
 # coverage-guided fuzzing of the stream decoders, the outline extractors
 # and the RPC server's decoder, the sandbox's tests on
-# a kernel with the partial Landlock (ABI 4), and a turn run by the
-# TypeScript client of the RPC protocol. Later
+# a kernel with the partial Landlock (ABI 4), a turn run by the
+# TypeScript client of the RPC protocol, and the core's tests in a build
+# without the script engine. Later
 # steps add the long-session memory test and the live smoke tests (tiers 5
 # and 6).
 #
@@ -257,6 +258,31 @@ jobs:
       - name: The sandbox's tests, with Landlock ABI 4
         run: cargo run --locked --quiet --package xtask -- partial-landlock
 
+  # The core's tests in a build without the script engine
+  # (`--no-default-features`, with the core's other default features on):
+  # the integration binary's modules that need the engine left out and the
+  # ones that test the build without it in, and the core linted as built so
+  # (docs/testing-and-ci.md, "Not blocking"). Not blocking: the fixes to
+  # step 28's review found the binary did not build without the engine, and
+  # a run of its own keeps the blocking jobs' build as it is.
+  no-engine:
+    if: ${{ !inputs.force_failure }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: cargo-nextest@0.9.151
+      - name: The core's tests without the script engine
+        run: cargo run --locked --quiet --package xtask -- test -p cineris-core --no-default-features --features cineris-core/mcp,cineris-core/sandbox
+      - name: The core's lints without the script engine
+        if: ${{ !cancelled() }}
+        run: cargo clippy -p cineris-core --no-default-features --features mcp,sandbox --tests --locked -- -D warnings
+
   # The TypeScript client of the RPC protocol, as the `ts-client` job of
   # ci.yml runs it on a pull request that reaches the protocol: its types
   # checked against the generated declarations, and then a turn run with it
@@ -293,7 +319,7 @@ jobs:
   # session's own nightly run on its branch must not add to the main
   # branch's issue.
   report:
-    needs: [dependencies, release, properties, break-names, fuzz, partial-landlock, ts-client]
+    needs: [dependencies, release, properties, break-names, fuzz, partial-landlock, ts-client, no-engine]
     if: ${{ failure() && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5

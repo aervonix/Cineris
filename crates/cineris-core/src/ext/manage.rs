@@ -601,7 +601,7 @@ fn delete_unfollowed(target: &Path) -> std::io::Result<bool> {
 /// A name beside `target` in its folder, free, for a folder written or set
 /// aside: it begins with `.`, so that no session looks in it.
 #[cfg_attr(
-    not(feature = "scripts"),
+    not(any(feature = "scripts", test)),
     expect(
         dead_code,
         reason = "without the script engine no extension's folder is written"
@@ -627,7 +627,7 @@ fn beside(target: &Path, what: &str) -> PathBuf {
 /// folder made by another between the look and the make is not written
 /// into).
 #[cfg_attr(
-    not(feature = "scripts"),
+    not(any(feature = "scripts", test)),
     expect(
         dead_code,
         reason = "without the script engine no extension's folder is written"
@@ -651,7 +651,7 @@ fn create_dir_new(path: &Path) -> std::io::Result<()> {
 /// names, never through a link. Another process's write of the same name
 /// at the same moment then fails, whole, and says so.
 #[cfg_attr(
-    not(feature = "scripts"),
+    not(any(feature = "scripts", test)),
     expect(
         dead_code,
         reason = "without the script engine no extension's folder is written"
@@ -691,7 +691,7 @@ fn clear_leftovers(target: &Path) {
 /// in place it is written, whatever happens after: what was set aside and
 /// could not be removed is given back, with why, and is not an error.
 #[cfg_attr(
-    not(feature = "scripts"),
+    not(any(feature = "scripts", test)),
     expect(
         dead_code,
         reason = "without the script engine no extension's folder is written"
