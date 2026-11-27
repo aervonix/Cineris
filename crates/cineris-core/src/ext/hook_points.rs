@@ -373,9 +373,12 @@ impl Hook for CommandRun {
                 in_code(&self.hook.name)
             ))));
         }
-        // A project's run is stopped when its trust is taken away.
+        // A project's run is stopped when its trust is taken away, at once,
+        // as a run the loop lets go is: no grace on the session's clock for
+        // a program to end itself in (a Windows program may not answer the
+        // polite stop, and the session's clock need not move again).
         let cancel = self.commands.run_cancel(self.hook.source);
-        let kill = CancelToken::new();
+        let kill = self.commands.run_cancel(self.hook.source);
         // Made before the run is: a future let go before it is first
         // polled stops the run too (the review of the second pull request,
         // M3: the loop's observers can be let go so).
