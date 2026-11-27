@@ -177,7 +177,12 @@ fn npm(text: &str, found: &mut Found) {
             continue;
         };
         // `npm test` is `npm run test`: one line for each.
-        found.offer(name, &format!("npm run {name}"), Some(&runs), "package.json");
+        found.offer(
+            name,
+            &format!("npm run {name}"),
+            Some(&runs),
+            "package.json",
+        );
     }
 }
 
@@ -186,11 +191,7 @@ fn npm(text: &str, found: &mut Found) {
 /// in turn, each named and in double quotes. `None` when any of them is
 /// not text or cannot be read whole ([`readable`]): the row would not say
 /// all that the command runs.
-fn npm_runs(
-    scripts: &serde_json::Map<String, Value>,
-    name: &str,
-    runs: &Value,
-) -> Option<String> {
+fn npm_runs(scripts: &serde_json::Map<String, Value>, name: &str, runs: &Value) -> Option<String> {
     let text = |value: &Value| match value {
         Value::String(text) if readable(text) => Some(text.clone()),
         _ => None,
