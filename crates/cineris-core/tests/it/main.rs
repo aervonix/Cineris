@@ -40,6 +40,7 @@ mod events;
 mod ext_exec;
 #[cfg(feature = "scripts")]
 mod ext_state;
+#[cfg(feature = "scripts")]
 mod extensions;
 #[cfg(feature = "scripts")]
 mod extensions_approvals;
@@ -57,11 +58,15 @@ mod extensions_review;
 mod extensions_trust;
 mod gates;
 mod harness_git;
+#[cfg(feature = "scripts")]
 mod hook_commands;
+#[cfg(feature = "scripts")]
 mod hook_wiring;
 mod index;
 mod knowledge;
 mod lifecycle;
+#[cfg(not(feature = "scripts"))]
+mod no_engine;
 mod plan;
 mod provider;
 mod put_back;
