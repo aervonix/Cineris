@@ -1,0 +1,71 @@
+# The Windows tier 2 fix (docs/steps/windows-tier2/answered.md): a job A/B
+# that runs one side from an archive of its tests, as the Windows test jobs
+# do, and the tests' scratch folder those jobs make.
+
+# ------------------------------------------------- a job A/B's archive side
+
+[break] archive-side-named-for-the-other
+rule: `--from-archive base` runs the base from an archive, and `head` the head.
+file: xtask/src/job_ab.rs
+in: parse
+find: "base" => Which::Base,
+replace: "base" => Which::Head,
+caught-by:
+    xtask::bin/xtask job_ab::tests::an_archive_side_is_asked_for_by_its_name_and_alone
+
+[break] archive-side-takes-a-package
+rule: An archive side takes no `-p` and no nextest arguments: the archive holds the workspace's tests, and its runs are the test jobs' own.
+file: xtask/src/job_ab.rs
+in: parse
+find: && (!request.packages.is_empty() || !request.rest.is_empty())
+replace: && (!request.packages.is_empty() && !request.rest.is_empty())
+caught-by:
+    xtask::bin/xtask job_ab::tests::an_archive_side_is_asked_for_by_its_name_and_alone
+    xtask::bin/xtask try_run::tests::a_job_ab_is_test_job_with_against_and_its_options_go_to_ab_job
+
+[break] archive-plan-on-both-sides
+rule: Only the side `--from-archive` names runs from an archive; the other builds and runs in one place.
+file: xtask/src/job_ab.rs
+in: side_plan
+find: from_archive: request.from_archive == Some(which),
+replace: from_archive: request.from_archive.is_some(),
+caught-by:
+    xtask::bin/xtask job_ab::tests::an_archive_side_is_asked_for_by_its_name_and_alone
+
+[break] archive-runs-tiers-1-and-2-with-the-system-tests
+rule: An archive side's first run is tiers 1 and 2 alone, as `test-windows-tiers` runs them.
+file: xtask/src/job_ab.rs
+in: archive_runs
+find: from_archive_run(tree, &format!("not {SYSTEM_TESTS}")),
+replace: from_archive_run(tree, "all()"),
+caught-by:
+    xtask::bin/xtask job_ab::tests::an_archive_side_runs_the_windows_test_jobs_runs_from_its_archive
+
+[break] archive-side-build-left-aside-by-a-clean
+rule: A clean takes an archive side's set-aside build too, so that a cold round builds from nothing.
+file: xtask/src/job_ab.rs
+in: clean
+find: for folder in ["ci", BUILT_ASIDE, "tmp"] {
+replace: for folder in ["ci", "tmp"] {
+caught-by:
+    xtask::bin/xtask job_ab::tests::an_archive_sides_build_is_set_aside_and_put_back
+
+[break] try-drops-the-archive-side
+rule: `try`'s `test --job --from-archive SIDE` passes the side on to `ab --job`.
+file: xtask/src/try_run.rs
+in: job_ab
+find: command.extend(["--from-archive".to_owned(), side]);
+replace: let _ = side;
+caught-by:
+    xtask::bin/xtask try_run::tests::a_job_ab_is_test_job_with_against_and_its_options_go_to_ab_job
+
+# ------------------------------------------- the test jobs' scratch folder
+
+[break] tests-scratch-folder-under-the-profile
+rule: A test job that runs from the archive makes the folder cargo gives the tests as `CARGO_TARGET_TMPDIR`, `target/tmp`, not a profile's.
+file: xtask/src/checks.rs
+in: tests_tmp_dir
+find: root.join("target").join("tmp")
+replace: root.join("target").join("ci").join("tmp")
+caught-by:
+    xtask::bin/xtask checks::tests::the_tests_scratch_folder_is_the_target_directorys_own
