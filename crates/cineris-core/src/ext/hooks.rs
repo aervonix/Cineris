@@ -95,9 +95,10 @@ pub(crate) struct Configured {
     /// ([`in_session`]).
     pub(crate) project_off: Vec<String>,
     /// The names of a project's entries left out because one of the user's
-    /// own hooks has the name: the user's word, so one that was approved
-    /// holds nothing, as a project's extension whose name a folder of the
-    /// user's takes does not.
+    /// own hooks has the name, or the managed file locks it: the user's, or
+    /// the administrator's, word, so one that was approved holds nothing,
+    /// as a project's extension whose name a folder of the user's takes
+    /// does not.
     pub(crate) project_yielded: Vec<String>,
 }
 
@@ -148,17 +149,27 @@ impl Configured {
                 Err(refused) => configured.refused.push(refused),
             }
         }
+        // A name the managed file locks is the administrator's word: an
+        // approved hook of it holds nothing (the review of step 28's fixes).
+        configured
+            .project_yielded
+            .extend(loaded.project_hooks_locked.iter().cloned());
         for hook in &loaded.project_hooks {
-            if !hook.settings.enabled {
-                configured.project_off.push(hook.name.clone());
-                continue;
-            }
-            // The name is the user's, whether their hook is on or off.
+            // The name is the user's, whether their hook is on or off, and
+            // whether the project's is: judged first, so that an approved
+            // one turned off as well holds nothing either.
             let taken = loaded
                 .settings
                 .hooks
                 .keys()
                 .any(|mine| mine.eq_ignore_ascii_case(&hook.name));
+            if taken {
+                configured.project_yielded.push(hook.name.clone());
+            }
+            if !hook.settings.enabled {
+                configured.project_off.push(hook.name.clone());
+                continue;
+            }
             if taken {
                 configured.refused.push(Refused {
                     name: hook.name.clone(),
@@ -174,7 +185,6 @@ impl Configured {
                         .to_owned(),
                     held: false,
                 });
-                configured.project_yielded.push(hook.name.clone());
                 continue;
             }
             match compiled(&hook.name, Source::Project, &hook.settings) {
@@ -943,6 +953,27 @@ mod tests {
             vec![gate(|_| {})],
         ));
         assert!(gates_held(&session(yielded, true)).is_empty());
+        // And turned off by the project's file besides: still the user's
+        // word, judged before `enabled`.
+        let yielded_and_off = Configured::of(&loaded(
+            &[("gate", settings(HookEventName::TurnEnd, &["log"]))],
+            vec![gate(|it| it.enabled = false)],
+        ));
+        assert!(gates_held(&session(yielded_and_off, true)).is_empty());
+        // Its name locked by the managed file, so that the configuration
+        // leaves it out: the administrator's word, not a removal (the
+        // review of step 28's fixes). The pin is not listed as removed.
+        let mut locked_out = loaded(&[], Vec::new());
+        locked_out.project_hooks_locked = vec!["gate".to_owned()];
+        let locked = Configured::of(&locked_out);
+        let held = session(locked.clone(), true);
+        assert!(gates_held(&held).is_empty(), "{:?}", held.refused);
+        assert!(
+            held.told.iter().all(|told| !told.contains("`gate`")),
+            "{:?}",
+            held.told
+        );
+        assert!(asked(&locked, &stored, true).removed.is_empty());
     }
 
     /// The trust question lists each approved hook with no entry that runs

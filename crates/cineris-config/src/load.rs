@@ -339,6 +339,11 @@ pub struct Loaded {
     /// does not change them: trust and each entry's approval decide whether
     /// one runs. One whose name the managed file locks is left out.
     pub project_hooks: Vec<ProjectHook>,
+    /// The names of the project's hooks left out because the managed file
+    /// locks them (`hooks`, or `hooks.<name>`): the administrator's word,
+    /// so that an approved one left out so is not taken for one the
+    /// project's file took out (since the review of step 28's fixes).
+    pub project_hooks_locked: Vec<String>,
     values: toml::Table,
     origins: BTreeMap<KeyPath, Origin>,
     entry_origins: BTreeMap<KeyPath, Vec<Origin>>,
@@ -359,6 +364,7 @@ impl fmt::Debug for Loaded {
             .field("dirs", &self.dirs)
             .field("files", &self.files)
             .field("project_hooks", &self.project_hooks)
+            .field("project_hooks_locked", &self.project_hooks_locked)
             .field(
                 "values",
                 &schema::redact(&KeyPath::root(), &Value::Table(self.values.clone())),
@@ -497,7 +503,7 @@ pub(crate) fn merge_layers(
     for given in &options.overrides {
         apply_override(given, &mut merger, &mut diagnostics);
     }
-    let project_hooks = project_hooks(layers, &merger, &mut diagnostics);
+    let (project_hooks, project_hooks_locked) = project_hooks(layers, &merger, &mut diagnostics);
 
     diagnostics.append(&mut merger.diagnostics);
     if failed(&diagnostics) {
@@ -531,6 +537,7 @@ pub(crate) fn merge_layers(
         dirs: options.dirs.clone(),
         files,
         project_hooks,
+        project_hooks_locked,
         values: merger.values,
         origins: merger.origins,
         entry_origins: merger.entry_origins,
@@ -546,13 +553,15 @@ pub(crate) fn merge_layers(
 /// is an error, as a merged configuration that does not read is. A hook
 /// whose name the managed file locks, or every hook where it locks
 /// `hooks`, is left out, with a note: a lock holds against a project's
-/// hook as against any value of a layer above the managed file.
+/// hook as against any value of a layer above the managed file. Also the
+/// names left out so, once each.
 fn project_hooks(
     layers: &[FileLayer],
     merger: &Merger,
     diagnostics: &mut Vec<Diagnostic>,
-) -> Vec<ProjectHook> {
+) -> (Vec<ProjectHook>, Vec<String>) {
     let mut entries: BTreeMap<String, (toml::Table, Origin)> = BTreeMap::new();
+    let mut locked: Vec<String> = Vec::new();
     for layer in layers.iter().filter(|layer| layer.kind.is_project()) {
         let Some(Value::Table(hooks)) = layer.document.table.get("hooks") else {
             continue;
@@ -579,6 +588,9 @@ fn project_hooks(
                     message: "locked by the managed configuration; this hook is not used"
                         .to_owned(),
                 });
+                if !locked.contains(name) {
+                    locked.push(name.clone());
+                }
                 continue;
             }
             let (merged, _) = entries
@@ -607,7 +619,7 @@ fn project_hooks(
             }),
         }
     }
-    hooks
+    (hooks, locked)
 }
 
 /// Reads, parses and checks one file, named `file` and read from
@@ -1263,6 +1275,7 @@ impl Loaded {
             // A hook is read when a session opens: a reload leaves the
             // session's as they were.
             project_hooks: self.project_hooks.clone(),
+            project_hooks_locked: self.project_hooks_locked.clone(),
             values,
             origins,
             entry_origins,

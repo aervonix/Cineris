@@ -37,6 +37,18 @@ fn gate(tools: &str, extra: &str) -> String {
     )
 }
 
+/// A `config/reload` of what changed, as the interface's look makes it.
+async fn reload(
+    front: &Front,
+) -> Result<cineris_protocol::methods::OpResult, cineris_core::OpError> {
+    front
+        .op(Op::ConfigReload(ConfigReloadParams {
+            changed_only: true,
+            ..ConfigReloadParams::default()
+        }))
+        .await
+}
+
 /// Why the last prompt given back to `front`'s client was refused.
 fn returned(front: &Front) -> String {
     front.drain();
@@ -442,7 +454,19 @@ fn sys_a_users_hook_is_handed_a_secret_file_only_after_the_yes() {
         "[[permissions.rules]]\neffect = \"exec\"\nmatch = '{} *'\naction = \"allow\"\n",
         program.display()
     );
-    world.user_config(&format!("{allow}{}", hook("report")));
+    // An observer that takes `{path}` too: it decides nothing, so it does
+    // not run for a call whose file waits for the yes (the review of step
+    // 28's fixes: no test held it back).
+    let watched = world.dir.join("watched.json");
+    let watcher =
+        crate::hook_commands::script(&world.dir.join("hooks"), "watcher", Some(&watched), "{}");
+    let watcher = entry(
+        "watcher",
+        "tool.before",
+        &[watcher.display().to_string(), "{path}".to_owned()],
+        "tools = [\"read\"]\nobserve = true",
+    );
+    world.user_config(&format!("{allow}{}{watcher}", hook("report")));
     let core = world.core();
     let seen_at_the_question = std::rc::Rc::new(std::cell::Cell::new(None));
     world.run(async {
@@ -472,8 +496,15 @@ fn sys_a_users_hook_is_handed_a_secret_file_only_after_the_yes() {
         assert!(!report.exists(), "a no runs it no more");
         let (_, outcome, _) = front.results().last().cloned().expect("the read");
         assert_eq!(outcome, "denied");
+        // The close waits for every run the session started: an observer
+        // started for either read would have written by now.
         front.close().await;
     });
+    assert!(
+        !watched.exists(),
+        "an observer was handed the secret file: {:?}",
+        std::fs::read_to_string(&watched)
+    );
 
     // A yes, and the hook refuses after it: the call reads nothing.
     world.user_config(&format!("{allow}{}", hook("fail")));
@@ -489,8 +520,9 @@ fn sys_a_users_hook_is_handed_a_secret_file_only_after_the_yes() {
         front.close().await;
     });
 
-    // A file asked about for nothing: handed to it at once, unasked.
-    world.user_config(&format!("{allow}{}", hook("report")));
+    // A file asked about for nothing: handed to it at once, unasked, and
+    // to the observer.
+    world.user_config(&format!("{allow}{}{watcher}", hook("report")));
     let core = world.core();
     world.run(async {
         let front = crate::extensions_found::start(&world, &core).await;
@@ -498,5 +530,184 @@ fn sys_a_users_hook_is_handed_a_secret_file_only_after_the_yes() {
         let reported = std::fs::read_to_string(&report).expect("it ran");
         assert!(reported.contains("a.txt"), "{reported}");
         front.close().await;
+    });
+    let observed = std::fs::read_to_string(&watched).expect("the observer ran");
+    assert!(observed.contains("a.txt"), "{observed}");
+}
+
+/// A trust store that cannot be read says nothing of the project, and may
+/// be read again (a newer build's file, its permissions, a read while
+/// another process replaces it): a reload that cannot read it holds the
+/// project's hooks back, its approved gate failing on what it gates, and
+/// one that reads it again puts them back as they were; only a store read
+/// that no longer trusts the project takes them away for the session (the
+/// review of step 28's fixes: an unreadable store withdrew them, every
+/// gate with them, for the rest of the session).
+#[test]
+fn sys_an_unreadable_trust_store_holds_a_projects_gates_until_it_is_read() {
+    let read = || calls(&[("c1", "read", json!({"path": "a.txt"}))]);
+    let world = World::new(
+        "hook_trust_unread",
+        [
+            read(),
+            says("Done."),
+            read(),
+            says("Done."),
+            read(),
+            says("Done."),
+            read(),
+            says("Done."),
+        ],
+    );
+    world.put("a.txt", "the file\n");
+    // A gate that lets the read go: it runs, writes its report and answers
+    // no opinion. A project's hook never asks, so a rule allows its start.
+    let report = world.dir.join("gate.json");
+    let gate = crate::hook_commands::script(&world.dir.join("hooks"), "gate", Some(&report), "{}");
+    world.user_config(&format!(
+        "[[permissions.rules]]\neffect = \"exec\"\nmatch = '{}'\naction = \"allow\"\n",
+        gate.display()
+    ));
+    world.project_config(&entry(
+        "gate",
+        "tool.before",
+        &[gate.display().to_string()],
+        "tools = [\"read\"]",
+    ));
+    let trust_file = state(&world).trust_file();
+    let core = world.core();
+    let key = core.project(&world.workspace).unwrap();
+    let hooks = core.project_hook_commands(&key).unwrap();
+    core.trust_project_with(&key, &[], &hooks).unwrap();
+    let told = |front: &Front, words: &str| {
+        front.drain();
+        front
+            .notices()
+            .iter()
+            .filter(|notice| notice.contains(words))
+            .count()
+    };
+    world.run(async {
+        let (front, asked) = open_answering(&world, &core, yes()).await;
+        assert!(asked.is_empty(), "{asked:?}");
+        front.turn("read it").await;
+        let (_, outcome, text) = front.results().last().cloned().expect("the read");
+        assert_eq!(outcome, "success", "{text}");
+        assert!(report.exists(), "the gate ran");
+
+        // Unreadable: held back, the gate failing.
+        let kept = std::fs::read_to_string(&trust_file).unwrap();
+        std::fs::write(&trust_file, "version = 99\n").unwrap();
+        assert!(reload(&front).await.is_ok(), "the reload answers");
+        front.turn("read it").await;
+        let (_, outcome, text) = front.results().last().cloned().expect("the read");
+        assert_eq!(outcome, "denied", "{text}");
+        assert!(text.contains("the trust store cannot be read"), "{text}");
+        assert_eq!(told(&front, "The trust store cannot be read"), 1);
+
+        // Read again, trusting it: as it was.
+        std::fs::write(&trust_file, kept).unwrap();
+        assert!(reload(&front).await.is_ok(), "the reload answers");
+        std::fs::remove_file(&report).unwrap();
+        front.turn("read it").await;
+        let (_, outcome, text) = front.results().last().cloned().expect("the read");
+        assert_eq!(outcome, "success", "{text}");
+        assert!(report.exists(), "the gate ran again");
+        assert_eq!(told(&front, "The trust store can be read again"), 1);
+
+        // Read, and no longer trusting it: withdrawn.
+        assert!(trust_store(&world).revoke(&project_key(&world)).unwrap());
+        assert!(reload(&front).await.is_ok(), "the reload answers");
+        std::fs::remove_file(&report).unwrap();
+        front.turn("read it").await;
+        let (_, outcome, text) = front.results().last().cloned().expect("the read");
+        assert_eq!(outcome, "success", "{text}");
+        assert!(!report.exists(), "withdrawn, the gate ran no more");
+        front.close().await;
+    });
+}
+
+/// A project's hook whose program is running when the project's trust is
+/// taken away is stopped by the reload that sees it, its process with it,
+/// though its own time is far off; the call it gated is refused, and the
+/// turn goes on (the review of step 28's fixes: nothing tested that runs
+/// already going stop). Its time is on the session's clock, which does not
+/// move: only the withdrawal ends it.
+#[test]
+fn sys_a_projects_hook_run_going_on_stops_when_its_trust_is_taken_away() {
+    const STUCK: std::time::Duration = std::time::Duration::from_secs(50);
+    let world = World::new(
+        "hook_trust_run_stops",
+        [
+            calls(&[("c1", "read", json!({"path": "a.txt"}))]),
+            says("Done."),
+        ],
+    );
+    world.put("a.txt", "the file\n");
+    let stuck = crate::hook_commands::Lingering::new(&world.dir.join("hooks"), "stuck");
+    let program = std::env::current_exe().expect("the test binary has a path");
+    world.user_config(&format!(
+        "[[permissions.rules]]\neffect = \"exec\"\nmatch = '{} *'\naction = \"allow\"\n\
+         [[permissions.rules]]\neffect = \"exec\"\nmatch = '{}'\naction = \"allow\"\n",
+        program.display(),
+        stuck.command[0]
+    ));
+    world.project_config(&entry(
+        "stuck",
+        "tool.before",
+        &stuck.command,
+        "tools = [\"read\"]\ntimeout = \"50s\"",
+    ));
+    let _ = state(&world);
+    let core = world.core();
+    let key = core.project(&world.workspace).unwrap();
+    let hooks = core.project_hook_commands(&key).unwrap();
+    core.trust_project_with(&key, &[], &hooks).unwrap();
+    world.run(async {
+        let (front, asked) = open_answering(&world, &core, yes()).await;
+        assert!(asked.is_empty(), "{asked:?}");
+        let started = std::cell::Cell::new(None);
+        let mut turn = std::pin::pin!(front.turn("read it"));
+        let mut untrust = std::pin::pin!(async {
+            // The loop's wait for it, and its run's own time: its program
+            // has started.
+            while world
+                .timer
+                .running()
+                .iter()
+                .filter(|wait| **wait == STUCK)
+                .count()
+                < 2
+            {
+                tokio::task::yield_now().await;
+            }
+            started.set(stuck.started());
+            assert!(trust_store(&world).revoke(&project_key(&world)).unwrap());
+            let reloaded = front
+                .op(Op::ConfigReload(ConfigReloadParams {
+                    changed_only: true,
+                    ..ConfigReloadParams::default()
+                }))
+                .await;
+            assert!(reloaded.is_ok(), "{reloaded:?}");
+        });
+        let mut untrusted = false;
+        let ended = std::future::poll_fn(|context| {
+            if !untrusted {
+                untrusted = untrust.as_mut().poll(context).is_ready();
+            }
+            turn.as_mut().poll(context)
+        })
+        .await;
+        assert!(untrusted, "the trust was taken away while it ran");
+        assert_eq!(ended.outcome, TurnOutcome::Completed, "{ended:?}");
+        let (_, outcome, text) = front.results().last().cloned().expect("the read");
+        assert_eq!(outcome, "denied", "{text}");
+        assert!(text.contains("`stuck`"), "{text}");
+        front.close().await;
+        crate::hook_commands::Lingering::assert_gone(
+            started.get(),
+            "the project's hook ran on after its trust was taken away",
+        );
     });
 }

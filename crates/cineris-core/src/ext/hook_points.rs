@@ -46,7 +46,7 @@ use cineris_ext::hook::{CommandHook, Filter};
 use cineris_tools::{BoxFuture, Effect};
 
 use super::hook_command::{
-    HookCommands, HookCx, HookOutcome, Owned, SessionHooks, TURN_END_AT_ONCE,
+    HookCommands, HookCx, HookOutcome, Owned, ProjectHooks, SessionHooks, TURN_END_AT_ONCE,
 };
 use super::hooks::Refused;
 
@@ -74,6 +74,10 @@ struct OnEvent {
     /// The tools it is on: `None` for every tool.
     filter: Option<Filter>,
     run: Arc<dyn Hook>,
+    /// What is on its event in its place while the trust store cannot be
+    /// read (`ProjectHooks::Unread`): a project's gate, failing; nothing
+    /// for a project's hook that does not gate.
+    while_unread: Option<Arc<dyn Hook>>,
 }
 
 /// A session's hooks as the loop reaches them.
@@ -102,9 +106,24 @@ impl PointHooks {
         let mut on = Vec::new();
         for hook in &hooks.hooks {
             if let Some(event) = loop_event(hook.event) {
+                let project = hook.source == cineris_ext::source::Source::Project;
+                // A project's gate fails while its trust cannot be
+                // confirmed (the review of step 28's fixes).
+                let while_unread = (project && hook.event.gates() && !hook.observe).then(|| {
+                    Arc::new(Failing {
+                        name: hook.name.clone(),
+                        observes: false,
+                        why: format!(
+                            "This project's hook `{}` cannot run: the trust store cannot be read, \
+                             so the project's trust cannot be confirmed, and its gate refuses \
+                             until it can be read again",
+                            in_code(&hook.name)
+                        ),
+                    }) as Arc<dyn Hook>
+                });
                 on.push(OnEvent {
                     event,
-                    project: hook.source == cineris_ext::source::Source::Project,
+                    project,
                     filter: Some(hook.filter.clone()),
                     run: Arc::new(CommandRun {
                         hook: hook.clone(),
@@ -112,6 +131,7 @@ impl PointHooks {
                         paths: Arc::clone(&hooks.paths),
                         running: Arc::default(),
                     }),
+                    while_unread,
                 });
             }
         }
@@ -127,12 +147,6 @@ impl PointHooks {
 }
 
 impl PointHooks {
-    /// Whether a project's hooks are the session's still: not once its
-    /// trust is taken away.
-    fn project_in_force(&self) -> bool {
-        self.commands.in_force(cineris_ext::source::Source::Project)
-    }
-
     /// Whether a hook of a loaded extension is on `event` for `target`.
     #[cfg(feature = "scripts")]
     fn scripts_want(&self, event: LoopEvent, target: Option<ToolTarget<'_>>) -> bool {
@@ -154,11 +168,14 @@ fn failing(refused: &[Refused], held: &[super::without_engine::Held]) -> Vec<OnE
     let mut on = Vec::new();
     for refused in refused {
         if let Some(event) = refused.event.and_then(loop_event) {
+            let run: Arc<dyn Hook> = Arc::new(Failing::of(refused));
             on.push(OnEvent {
                 event,
                 project: refused.source == cineris_ext::source::Source::Project,
                 filter: refused.filter.clone(),
-                run: Arc::new(Failing::of(refused)),
+                // A held gate holds whether or not the store can be read.
+                while_unread: Some(Arc::clone(&run)),
+                run,
             });
         }
     }
@@ -174,23 +191,33 @@ fn failing(refused: &[Refused], held: &[super::without_engine::Held]) -> Vec<OnE
                 observes: false,
                 why: held.why.clone(),
             }),
+            while_unread: None,
         });
     }
     on
 }
 
 /// The hooks of `on` that are on `event` for `target`: what `wants` and
-/// `matching` read of them.
-/// `project`: whether a project's are the session's still; once its trust
-/// is taken away they are off their events (`HookCommands::in_force`).
+/// `matching` read of them. `state`: how a project's stand with its trust:
+/// in force, each as it is; while the trust store cannot be read, only its
+/// gates, failing; once its trust is taken away, none
+/// (`HookCommands::project`).
 fn on_now<'a>(
     on: &'a [OnEvent],
-    project: bool,
+    state: ProjectHooks,
     event: LoopEvent,
     target: Option<ToolTarget<'a>>,
-) -> impl Iterator<Item = &'a OnEvent> {
-    on.iter().filter(move |hook| {
-        hook.event == event && (project || !hook.project) && on_target(hook.filter.as_ref(), target)
+) -> impl Iterator<Item = &'a Arc<dyn Hook>> {
+    let project = state == ProjectHooks::InForce;
+    on.iter().filter_map(move |hook| {
+        let on = hook.event == event && on_target(hook.filter.as_ref(), target);
+        if on && (project || !hook.project) {
+            Some(&hook.run)
+        } else if on && state == ProjectHooks::Unread {
+            hook.while_unread.as_ref()
+        } else {
+            None
+        }
     })
 }
 
@@ -209,7 +236,7 @@ fn on_target(filter: Option<&Filter>, target: Option<ToolTarget<'_>>) -> bool {
 impl Hooks for PointHooks {
     fn wants(&self, event: LoopEvent, target: Option<ToolTarget<'_>>) -> bool {
         (event == LoopEvent::PromptSubmit && self.commands.stop_pending())
-            || on_now(&self.on, self.project_in_force(), event, target)
+            || on_now(&self.on, self.commands.project(), event, target)
                 .next()
                 .is_some()
             || self.scripts_want(event, target)
@@ -217,8 +244,8 @@ impl Hooks for PointHooks {
 
     fn matching(&self, event: LoopEvent, target: Option<ToolTarget<'_>>) -> Vec<Arc<dyn Hook>> {
         let mut matched: Vec<Arc<dyn Hook>> =
-            on_now(&self.on, self.project_in_force(), event, target)
-                .map(|hook| Arc::clone(&hook.run))
+            on_now(&self.on, self.commands.project(), event, target)
+                .map(Arc::clone)
                 .collect();
         #[cfg(feature = "scripts")]
         matched.extend(self.scripts.matching(event, target));
@@ -643,8 +670,8 @@ mod tests {
         let on = failing(&[], &gates);
         let names = |event: LoopEvent, tool: Option<&str>| -> Vec<String> {
             let target = tool.map(|tool| ToolTarget { tool, names: None });
-            on_now(&on, true, event, target)
-                .map(|hook| hook.run.name().to_owned())
+            on_now(&on, ProjectHooks::InForce, event, target)
+                .map(|hook| hook.name().to_owned())
                 .collect()
         };
         assert_eq!(

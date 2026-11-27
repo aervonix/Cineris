@@ -310,16 +310,44 @@ impl SessionHooks {
     /// rest of the session. What the user is told, once, when anything of
     /// the project's was on an event.
     pub(crate) fn withdraw_project(&self) -> Option<String> {
-        let had = self
-            .hooks
+        (self.commands.withdraw_project() && self.has_projects()).then(|| {
+            "This project is no longer trusted, so its hooks no longer run in this session, and \
+             the gates its changed or removed hooks held are lifted."
+                .to_owned()
+        })
+    }
+
+    /// Whether the trust store could be read (`unread` false) or not, as
+    /// the last look found it (the review of step 28's fixes): while it
+    /// cannot, the project's trust cannot be confirmed, so none of its
+    /// hooks runs, and each of its gates fails, refusing what it gates, as
+    /// a loaded extension's do; once it can be read again and trusts the
+    /// project, they are as they were. A store that cannot be read is no
+    /// person's word, so it takes nothing away for the session. What the
+    /// user is told, once at each change, when anything of the project's
+    /// was on an event.
+    pub(crate) fn project_store_unread(&self, unread: bool) -> Option<String> {
+        if !(self.commands.set_project_unread(unread) && self.has_projects()) {
+            return None;
+        }
+        Some(if unread {
+            "The trust store cannot be read, so this project's trust cannot be confirmed: its \
+             hooks do not run, and the gates its hooks hold refuse what they gate, until it can \
+             be read again."
+                .to_owned()
+        } else {
+            "The trust store can be read again, and this project's hooks are as they were."
+                .to_owned()
+        })
+    }
+
+    /// Whether anything of the project's is on an event.
+    fn has_projects(&self) -> bool {
+        self.hooks
             .iter()
             .map(|hook| hook.source)
             .chain(self.refused.iter().map(|refused| refused.source))
-            .any(|source| source == Source::Project);
-        (self.commands.withdraw_project() && had).then(|| {
-            "This project is no longer trusted, so its hooks no longer run in this session, and              the gates its changed hooks held are lifted."
-                .to_owned()
-        })
+            .any(|source| source == Source::Project)
     }
 
     /// Why a prompt would be refused by a gate that cannot run, if one is
@@ -329,14 +357,26 @@ impl SessionHooks {
     /// commands), since its text would be refused.
     #[cfg(feature = "scripts")]
     pub(crate) fn prompt_gate_held(&self) -> Option<String> {
+        let held = |source: Source| {
+            source == Source::User || self.commands.project() != ProjectHooks::Withdrawn
+        };
         if let Some(refused) = self.refused.iter().find(|refused| {
-            refused.event == Some(Event::PromptSubmit)
-                && !refused.observe
-                && self.commands.in_force(refused.source)
+            refused.event == Some(Event::PromptSubmit) && !refused.observe && held(refused.source)
         }) {
             return Some(format!(
                 "the hook `{}` on `prompt.submit` cannot run",
                 in_code(&refused.name)
+            ));
+        }
+        // While the trust store cannot be read, a project's gate fails.
+        if self.commands.project() == ProjectHooks::Unread
+            && let Some(hook) = self.hooks.iter().find(|hook| {
+                hook.source == Source::Project && hook.event == Event::PromptSubmit && !hook.observe
+            })
+        {
+            return Some(format!(
+                "the hook `{}` on `prompt.submit` cannot run while the trust store cannot be read",
+                in_code(&hook.name)
             ));
         }
         self.scripts.held_on(cineris_agent::HookEvent::PromptSubmit)
@@ -687,6 +727,24 @@ pub(crate) struct HookCommands {
     /// removed ones hold, are off their events from then on, and each run
     /// of a project's hook still going is under it, and stopped.
     project: CancelToken,
+    /// Whether the last look could not read the trust store: the project's
+    /// trust cannot be confirmed, so its hooks do not run and its gates
+    /// fail, until a look reads it again ([`ProjectHooks::Unread`]).
+    project_unread: std::sync::atomic::AtomicBool,
+}
+
+/// How a session's project's hooks stand with its trust.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProjectHooks {
+    /// Its trust is as the session opened with: its hooks run.
+    InForce,
+    /// The trust store cannot be read: none of its hooks runs, and each of
+    /// its gates fails, until it can be read again (the review of step
+    /// 28's fixes: an unreadable store took every gate away).
+    Unread,
+    /// Its trust was taken away: nothing of it is on an event for the rest
+    /// of the session.
+    Withdrawn,
 }
 
 impl std::fmt::Debug for HookCommands {
@@ -715,7 +773,34 @@ impl HookCommands {
             observing_at_once: Arc::new(tokio::sync::Semaphore::new(RUNS_AT_ONCE)),
             running,
             project: CancelToken::new(),
+            project_unread: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+
+    /// How the project's hooks stand with its trust now.
+    pub(crate) fn project(&self) -> ProjectHooks {
+        if self.project.is_cancelled() {
+            ProjectHooks::Withdrawn
+        } else if self
+            .project_unread
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            ProjectHooks::Unread
+        } else {
+            ProjectHooks::InForce
+        }
+    }
+
+    /// The last look could (`unread` false) or could not read the trust
+    /// store. Says whether that changed how the project's hooks stand; once
+    /// they are withdrawn it changes nothing.
+    pub(crate) fn set_project_unread(&self, unread: bool) -> bool {
+        if self.project.is_cancelled() {
+            return false;
+        }
+        self.project_unread
+            .swap(unread, std::sync::atomic::Ordering::AcqRel)
+            != unread
     }
 
     /// The project's trust was taken away (`reload::apply` judged it so):
@@ -730,10 +815,11 @@ impl HookCommands {
         was
     }
 
-    /// Whether a hook or held gate of `source`'s is the session's now: the
-    /// user's always, a project's until its trust is taken away.
+    /// Whether a hook of `source`'s runs now: the user's always, a
+    /// project's while its trust is as the session opened with (not taken
+    /// away, and the trust store readable).
     pub(crate) fn in_force(&self, source: Source) -> bool {
-        source == Source::User || !self.project.is_cancelled()
+        source == Source::User || self.project() == ProjectHooks::InForce
     }
 
     /// The token a run of a hook of `source`'s is under, beside its own:
@@ -947,6 +1033,16 @@ impl HookCommands {
     ) -> HookOutcome {
         let name = in_code(&hook.name).into_owned();
         let failed = |why: String| HookOutcome::Failed(format!("The hook `{name}` failed: {why}."));
+        // Matched while it was in force, run after: a project's hook starts
+        // nothing once its trust cannot be confirmed, and fails, as its
+        // gate does then.
+        if !self.in_force(hook.source) {
+            return failed(
+                "it was not started: this project's trust cannot be confirmed now (it was taken \
+                 away, or the trust store cannot be read)"
+                    .to_owned(),
+            );
+        }
         // Its time began when it was asked: what it waits for here, its
         // turn among the runs at once and the baseline of the look, is
         // within it.

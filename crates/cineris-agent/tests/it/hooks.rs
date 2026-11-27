@@ -795,13 +795,6 @@ fn tool_before_hooks_deny_or_ask_on_top_of_the_policy_and_run_together() {
     assert!(wrote < read, "{lines:?}");
 }
 
-/// A call decided again (the re-decide step) is shown to its hooks again,
-/// with its new plan and the model's own arguments, and what they said
-/// before is dropped: here a replacement, which then never runs. An
-/// observer runs at the call's first decision only: it decides nothing.
-/// What the hooks said is dropped at once: interrupted while its hooks are
-/// asked the second time, the call's result says nothing of the
-/// replacement its hooks made the first time.
 /// A `tool.before` hook that may be given what it needs only after the
 /// person's yes to the call's question (`HookOutcome::AfterAnswer`: a
 /// command's `{path}` that would take a file that looks like it holds
@@ -948,6 +941,13 @@ fn a_hook_that_waits_for_the_answer_runs_after_the_yes_and_before_the_call() {
     );
 }
 
+/// A call decided again (the re-decide step) is shown to its hooks again,
+/// with its new plan and the model's own arguments, and what they said
+/// before is dropped: here a replacement, which then never runs. An
+/// observer runs at the call's first decision only: it decides nothing.
+/// What the hooks said is dropped at once: interrupted while its hooks are
+/// asked the second time, the call's result says nothing of the
+/// replacement its hooks made the first time.
 #[test]
 fn a_call_decided_again_is_shown_to_its_hooks_again_with_the_models_arguments() {
     let h = hooked(
