@@ -179,12 +179,7 @@ fn a_servers_tools_change_the_index_by_notice_and_never_the_prefix() {
         told_after.push(told(&front).len());
         assert_eq!(
             told(&front),
-            [
-                changed(2),
-                changed(3),
-                INDEX_EMPTY.to_owned(),
-                changed(2)
-            ],
+            [changed(2), changed(3), INDEX_EMPTY.to_owned(), changed(2)],
             "one notice a change, the section whole, and none where nothing changed"
         );
         front.close().await;

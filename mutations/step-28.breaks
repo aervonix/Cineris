@@ -3882,7 +3882,7 @@ caught-by:
 rule: An extension that no longer stands approved as it was loaded is withdrawn: its tools leave the registry.
 file: crates/cineris-core/src/ext/found/pipeline.rs
 in: Held::settle
-find: self.registry.remove_source(&gone.1);
+find: self.registry.remove_source(&gone.1, cineris_tools::SourceKind::Extension);
 replace: let _ = &gone.1;
 caught-by:
     extensions_reload::an_extension_approved_and_changed_in_a_session_is_loaded_and_withdrawn_at_the_next_turns

@@ -84,8 +84,8 @@ caught-by:
 rule: A shown schema's string is cut at 2 KiB, not later.
 file: crates/cineris-tools/src/registry.rs
 in: has_long_string
-find: Json::String(text) => text.len() > MAX_DESCRIPTION_BYTES,
-replace: Json::String(text) => text.len() > 2 * MAX_DESCRIPTION_BYTES,
+find: Json::String(text) => text.len() > MAX_DESCRIPTION_BYTES
+replace: Json::String(text) => text.len() > 2 * MAX_DESCRIPTION_BYTES
 caught-by:
     cineris-tools::it registry::every_string_of_a_shown_schema_is_cut_at_two_kib
 
@@ -254,8 +254,8 @@ caught-by:
 rule: What acts unseen in every string of a server's schema is written as an escape.
 file: crates/cineris-mcp/src/tool.rs
 in: cleaned
-find: Json::String(text) => Json::String(clean(text)),
-replace: Json::String(text) => Json::String(text.clone()),
+find: Json::String(text) => Json::String(clean(text))
+replace: Json::String(text) => Json::String(text.clone())
 caught-by:
     cineris-mcp::it tool::the_spec_is_cleaned_asks_and_runs_alone_whatever_the_server_says
 
@@ -263,8 +263,8 @@ caught-by:
 rule: A tool's title, when given, is the first line of its description, made one line.
 file: crates/cineris-mcp/src/tool.rs
 in: description_of
-find: (Some(title), Some(description)) => format!("{title}\n{description}"),
-replace: (Some(_), Some(description)) => description,
+find: (Some(title), Some(description)) => format!("{title}\n{description}")
+replace: (Some(_), Some(description)) => description
 caught-by:
     cineris-mcp::it tool::the_spec_is_cleaned_asks_and_runs_alone_whatever_the_server_says
 
@@ -319,8 +319,8 @@ caught-by:
 rule: A result the server marks as an error is an error result.
 file: crates/cineris-mcp/src/tool.rs
 in: McpTool::run
-find: Ok(output) if output.is_error => ToolResult::error(self.rendered(&output)),
-replace: Ok(output) if output.is_error => ToolResult::success(self.rendered(&output)),
+find: Ok(output) if output.is_error => ToolResult::error(self.rendered(&output))
+replace: Ok(output) if output.is_error => ToolResult::success(self.rendered(&output))
 caught-by:
     cineris-mcp::it tool::errors_are_error_results_in_words
 
@@ -337,8 +337,8 @@ caught-by:
 rule: A cancelled call is interrupted, not failed.
 file: crates/cineris-mcp/src/tool.rs
 in: McpTool::failed
-find: ClientError::Cancelled => ToolResult::interrupted(format!("{what} was cancelled.")),
-replace: ClientError::Cancelled => ToolResult::error(format!("{what} was cancelled.")),
+find: ClientError::Cancelled => ToolResult::interrupted(format!("{what} was cancelled."))
+replace: ClientError::Cancelled => ToolResult::error(format!("{what} was cancelled."))
 caught-by:
     cineris-mcp::it tool::errors_are_error_results_in_words
     cineris-mcp::it tool::a_call_is_cancelled_with_its_token
@@ -358,8 +358,8 @@ caught-by:
 rule: A server's source is described by its entry's own description.
 file: crates/cineris-mcp/src/tool.rs
 in: register
-find: server.description.as_deref().unwrap_or_default(),
-replace: "",
+find: server.description.as_deref().unwrap_or_default()
+replace: ""
 packages: cineris-mcp, cineris-core
 caught-by:
     cineris-mcp::it tool::a_server_registers_under_its_entry_with_its_holds
@@ -412,8 +412,8 @@ caught-by:
 rule: `cargo xtask check` holds a build of the binary without the MCP client.
 file: xtask/src/checks.rs
 in: CHECK_STEPS
-find: "no-mcp",
-replace: "no-scripts",
+find: "no-mcp"
+replace: "no-scripts"
 caught-by:
     checks::tests::check_holds_a_build_of_the_binary_without_the_mcp_client
 
@@ -421,7 +421,7 @@ caught-by:
 rule: The check of a build without the MCP client turns the binary's `mcp` feature off and keeps the others.
 file: xtask/src/checks.rs
 in: NO_MCP
-find: feature: "mcp",
-replace: feature: "scripts",
+find: feature: "mcp"
+replace: feature: "scripts"
 caught-by:
     checks::tests::check_holds_a_build_of_the_binary_without_the_mcp_client
