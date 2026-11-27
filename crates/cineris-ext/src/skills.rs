@@ -1060,7 +1060,13 @@ impl FrontMatter {
     /// - a line of a plain value after its first that holds a `key: ` of
     ///   its own (`description: Ship it` then `\tprofile: careful`, read
     ///   here as the one description "Ship it profile: careful", which YAML
-    ///   refuses).
+    ///   refuses), a `: ` inside quotes or inside a flow collection
+    ///   (`[…]`, `{…}`) aside;
+    /// - a line after the one where a quoted value closes, the field's own
+    ///   line for a quote or a flow collection never closed, and a line
+    ///   of a `|` or `>` block indented less than the block (since the
+    ///   pre-push review of the fixes: each was read as the value, or
+    ///   passed over).
     ///
     /// Until the fixes of the full review of step 28 only the first were,
     /// and a key written indented was passed over: a command whose author
@@ -1100,7 +1106,7 @@ fn fields_of(body: &[&str]) -> (Vec<(String, String)>, Vec<String>, Vec<String>)
         while at < body.len() && (body[at].trim().is_empty() || indented(body[at])) {
             at += 1;
         }
-        unread.extend(keys_within(rest, &body[start..at]).map(str::to_owned));
+        unread.extend(not_the_values(line, rest, &body[start..at]));
         if out.iter().any(|(earlier, _)| *earlier == key) {
             if !repeated.contains(&key) {
                 repeated.push(key);
@@ -1117,16 +1123,208 @@ fn indented(line: &str) -> bool {
     line.starts_with([' ', '\t'])
 }
 
-/// The lines after its first of a plain value (`first`, then `more`) that
-/// hold a `key: ` of their own: a value in quotes or a block holds such
-/// text as text, and a comment is none.
-fn keys_within<'a>(first: &str, more: &[&'a str]) -> impl Iterator<Item = &'a str> {
-    let plain = !matches!(first.chars().next(), Some('"' | '\''))
-        && !(first.starts_with(['|', '>']) && block_header(first));
-    more.iter().copied().filter(move |line| {
-        let text = line.trim_start();
-        plain && !text.starts_with('#') && split_key(text).is_some()
-    })
+/// The lines of a field's value that YAML would not read as that value, for
+/// [`FrontMatter::unread`]: `line` is the field's own line, `first` the
+/// rest of it after the `:` and `more` the indented and blank lines after
+/// it, which the value is read from. A comment is never one.
+///
+/// - **In quotes:** a quote never closed (the field's own line); and each
+///   line after the one where the quote closes (`description: "Ship it"`
+///   then `  profile: careful`, which was read as "Ship it" alone).
+/// - **A `|` or `>` block:** each line indented less than the block's own
+///   indentation (`description: |`, `    Ship it`, then `  profile:
+///   careful`, which was folded into the block).
+/// - **A plain value:** each line after its first that holds a `key: ` of
+///   its own, a `: ` inside quotes on that line aside. A value that begins
+///   a flow collection (`[` or `{`) is read to where it closes, and nothing
+///   inside it is taken for a key (`arguments: [focus,` then `  note = "a:
+///   b"]`); one never closed is the field's own line.
+fn not_the_values(line: &str, first: &str, more: &[&str]) -> Vec<String> {
+    fn said(text: &str) -> bool {
+        let text = text.trim_start();
+        !text.is_empty() && !text.starts_with('#')
+    }
+    match first.chars().next() {
+        Some('|' | '>') if block_header(first) => {
+            let indent = block_indent(first, more);
+            more.iter()
+                .filter(|text| said(text) && leading(text) < indent)
+                .map(|text| (*text).to_owned())
+                .collect()
+        }
+        Some(quote @ ('"' | '\'')) => match quote_closes(&first[1..], more, quote) {
+            None => vec![line.to_owned()],
+            Some(closed) => more[closed..]
+                .iter()
+                .filter(|text| said(text))
+                .map(|text| (*text).to_owned())
+                .collect(),
+        },
+        _ => {
+            let mut after = 0;
+            if first.starts_with(['[', '{']) {
+                match flow_closes(first, more) {
+                    None => return vec![line.to_owned()],
+                    Some(closed) => after = closed,
+                }
+            }
+            more[after..]
+                .iter()
+                .filter(|text| said(text) && holds_a_key(text.trim_start()))
+                .map(|text| (*text).to_owned())
+                .collect()
+        }
+    }
+}
+
+/// How far a line is indented, in spaces and tabs.
+fn leading(line: &str) -> usize {
+    line.len() - line.trim_start_matches([' ', '\t']).len()
+}
+
+/// A block's indentation: its header's indicator, or its first line's
+/// that is not blank, as [`block`] reads it.
+fn block_indent(header: &str, lines: &[&str]) -> usize {
+    header[1..]
+        .chars()
+        .take_while(|character| matches!(character, '+' | '-' | '1'..='9'))
+        .find_map(|character| character.to_digit(10))
+        .and_then(|digit| usize::try_from(digit).ok())
+        .unwrap_or_else(|| {
+            lines
+                .iter()
+                .find(|line| !line.trim().is_empty())
+                .map_or(0, |line| leading(line))
+        })
+}
+
+/// How many of `more` a quoted value runs into before its closing quote,
+/// begun on its key's line (`first`, after the opening quote): `0` when it
+/// closes there; `None` when it never closes. Escapes are read as
+/// [`quoted`] reads them: in `"` a `\` takes the character after it, and
+/// in `'` a doubled `''` is one quote.
+fn quote_closes(first: &str, more: &[&str], quote: char) -> Option<usize> {
+    let mut escaped = false;
+    for (index, text) in std::iter::once(first)
+        .chain(more.iter().copied())
+        .enumerate()
+    {
+        let mut chars = text.chars().peekable();
+        while let Some(character) = chars.next() {
+            if escaped {
+                escaped = false;
+            } else if character == '\\' && quote == '"' {
+                escaped = true;
+            } else if character == quote {
+                if quote == '\'' && chars.peek() == Some(&'\'') {
+                    chars.next();
+                } else {
+                    return Some(index);
+                }
+            }
+        }
+        // A `\` that ends a line escapes the line break.
+        escaped = false;
+    }
+    None
+}
+
+/// How many of `more` a flow collection runs into before it closes, begun
+/// on its key's line (`first`, at its `[` or `{`): `0` when it closes there;
+/// `None` when it never does. A bracket inside quotes is text.
+fn flow_closes(first: &str, more: &[&str]) -> Option<usize> {
+    let mut depth = 0_usize;
+    let mut quote: Option<char> = None;
+    let mut before = ' ';
+    for (index, text) in std::iter::once(first)
+        .chain(more.iter().copied())
+        .enumerate()
+    {
+        let mut chars = text.chars().peekable();
+        while let Some(character) = chars.next() {
+            match quote {
+                Some('"') if character == '\\' => {
+                    chars.next();
+                }
+                Some('\'') if character == '\'' && chars.peek() == Some(&'\'') => {
+                    chars.next();
+                }
+                Some(open) if character == open => quote = None,
+                Some(_) => {}
+                None if matches!(character, '"' | '\'') && opens_a_token(before) => {
+                    quote = Some(character);
+                }
+                None if matches!(character, '[' | '{') => depth += 1,
+                None if matches!(character, ']' | '}') => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        return Some(index);
+                    }
+                }
+                None => {}
+            }
+            before = character;
+        }
+        before = ' ';
+    }
+    None
+}
+
+/// Whether a quote after `before` begins a quoted text: at a line's start,
+/// or after white space or what separates a flow collection's items.
+fn opens_a_token(before: char) -> bool {
+    matches!(before, ' ' | '\t' | '[' | '{' | ',' | '=' | ':')
+}
+
+/// Whether `text`, a line of a plain value without its indentation, holds a
+/// `key: `: a `:` followed by white space or the line's end, outside a
+/// quoted text that closes on the line and before a comment.
+fn holds_a_key(text: &str) -> bool {
+    let chars: Vec<char> = text.chars().collect();
+    let mut at = 0;
+    let mut before = ' ';
+    while at < chars.len() {
+        let character = chars[at];
+        if character == '#' && matches!(before, ' ' | '\t') {
+            return false;
+        }
+        if matches!(character, '"' | '\'') && opens_a_token(before) {
+            let rest: String = chars[at + 1..].iter().collect();
+            if let Some(length) = closed_on_the_line(&rest, character) {
+                at += length + 2;
+                before = character;
+                continue;
+            }
+        }
+        if character == ':'
+            && chars
+                .get(at + 1)
+                .is_none_or(|next| matches!(next, ' ' | '\t'))
+        {
+            return true;
+        }
+        before = character;
+        at += 1;
+    }
+    false
+}
+
+/// The length in characters of a quoted text that closes on its line,
+/// `text` being what follows its opening `quote`; `None` when it does not.
+fn closed_on_the_line(text: &str, quote: char) -> Option<usize> {
+    let mut chars = text.chars().enumerate().peekable();
+    while let Some((at, character)) = chars.next() {
+        if character == '\\' && quote == '"' {
+            chars.next();
+        } else if character == quote {
+            if quote == '\'' && chars.peek().map(|(_, next)| *next) == Some('\'') {
+                chars.next();
+            } else {
+                return Some(at);
+            }
+        }
+    }
+    None
 }
 
 /// A field's key, and the rest of its line after the `:`.

@@ -192,6 +192,76 @@ fn a_key_written_indented_is_not_passed_over() {
     }
 }
 
+/// A key after a quoted value, in a quote never closed, or less indented
+/// than a block is not passed over either (the pre-push review of the
+/// fixes of step 28's full review): YAML refuses each, and each was read
+/// as the value, with no profile. A `: ` inside a quoted default of a flow
+/// list over two lines is no key, as on one line.
+#[test]
+fn a_key_after_a_quote_or_a_block_is_not_passed_over() {
+    for (text, line) in [
+        (
+            "---\ndescription: \"Ship it\"\n  profile: careful\n---\nhi",
+            "`  profile: careful`",
+        ),
+        (
+            "---\ndescription: 'Ship it'\n  profile: careful\n---\nhi",
+            "`  profile: careful`",
+        ),
+        (
+            "---\ndescription: \"Ship\n  it\"\n  profile: careful\n---\nhi",
+            "`  profile: careful`",
+        ),
+        (
+            "---\ndescription: \"Ship it\n  profile: careful\n---\nhi",
+            "`description: \"Ship it`",
+        ),
+        (
+            "---\ndescription: |\n    Ship it\n  profile: careful\n---\nhi",
+            "`  profile: careful`",
+        ),
+        (
+            "---\ndescription: >2\n  Ship it\n profile: careful\n---\nhi",
+            "` profile: careful`",
+        ),
+        (
+            "---\narguments: [focus,\n  profile: careful\n---\nhi",
+            "`arguments: [focus,`",
+        ),
+        (
+            "---\narguments: [focus]\n  profile: careful\n---\n{{focus}}",
+            "`  profile: careful`",
+        ),
+    ] {
+        let error = parsed(text).unwrap_err();
+        assert!(
+            error.contains("no `key: value` field") && error.contains(line),
+            "{text:?}: {error}"
+        );
+    }
+    for text in [
+        "---\narguments: [focus,\n  note = \"a: b\"]\n---\n{{focus}} {{note}}",
+        "---\narguments: [focus, note = \"a: b\"]\n---\n{{focus}} {{note}}",
+    ] {
+        let command = parsed(text).unwrap_or_else(|why| panic!("{text:?}: {why}"));
+        assert_eq!(
+            command.arguments[1].default.as_deref(),
+            Some("a: b"),
+            "{text:?}"
+        );
+    }
+    // A quote that closes on its line holds its `: `; a `\"` does not close
+    // it, nor a `''`; a block's own lines, and a comment, are its.
+    for text in [
+        "---\ndescription: Ship it\n  \"to: staging\" now\n---\nhi",
+        "---\ndescription: \"Ship \\\" it\n  to: staging\"\n---\nhi",
+        "---\ndescription: 'Ship '' it\n  to: staging'\n---\nhi",
+        "---\ndescription: |\n    Ship it\n      to: staging\n  # a comment: here\n---\nhi",
+    ] {
+        parsed(text).unwrap_or_else(|why| panic!("{text:?}: {why}"));
+    }
+}
+
 /// A project's body, and its arguments' defaults, hold nothing that acts
 /// unseen, the first such character named as an escape; a line break, a
 /// `\r\n` one too, a tab and an emoji's selector are seen. The user's own
