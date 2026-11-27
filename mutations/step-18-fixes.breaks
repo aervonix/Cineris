@@ -304,7 +304,7 @@ caught-by:
 rule: An instruction file's name, in the system prompt, in notices and as the key of what the model was given, is an escape.
 file: crates/cineris-agent/src/context/instructions.rs
 in: shown
-find: cineris_base::visible(&relative(root, path)).into_owned()
+find: cineris_base::visible_to_the_model(&relative(root, path)).into_owned()
 replace: relative(root, path)
 caught-by:
     cineris-agent context::instructions::tests::a_name_that_acts_unseen_is_shown_as_an_escape

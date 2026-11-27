@@ -421,6 +421,7 @@ async fn run_script(
     // Sent as the user's prompt: what acts unseen, and every variation
     // selector, written as an escape, as a hook's words are (the fixes to
     // step 28), so that the author's text hides nothing there.
+    let text = text.replace("\r\n", "\n");
     let text = cineris_base::visible_keeping(&text, &['\n', '\t']);
     let text = cineris_base::selectors_escaped(&text);
     Ok(format!(

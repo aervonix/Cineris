@@ -1074,6 +1074,15 @@ impl HookCommands {
             }
             Waited::LetGo => return let_go(),
         };
+        // Its trust looked at again once its turn has come: a reload may
+        // have found the store unreadable while it waited for a place.
+        if !self.in_force(hook.source) {
+            return failed(
+                "it was not started: this project's trust cannot be confirmed now (it was taken \
+                 away, or the trust store cannot be read)"
+                    .to_owned(),
+            );
+        }
         // A file the engine asks about for what it is is no hook's before
         // the person's yes to the call's question (the review of step 28,
         // finding 14): a hook that would take one waits for the yes, and an
