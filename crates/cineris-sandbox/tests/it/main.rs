@@ -20,6 +20,7 @@
 mod confined;
 #[cfg(windows)]
 mod console;
+mod harden;
 #[cfg(target_os = "linux")]
 mod helpers;
 mod perf;
@@ -107,6 +108,12 @@ fn child_entry() {
         #[cfg(all(target_os = "linux", feature = "backends"))]
         Some((at, DENY)) => helpers::deny(&arguments[at + 1], &arguments[at + 3..]),
         _ => {}
+    }
+    if arguments
+        .iter()
+        .any(|argument| argument == harden::STANDING)
+    {
+        harden::say_standing();
     }
     let harness = arguments
         .iter()

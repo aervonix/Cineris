@@ -67,6 +67,10 @@ const ALIAS: &str = "cin";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn main() -> ExitCode {
+    // Before anything is read: the process is closed to the user's other
+    // programs (`cineris_sandbox::harden`), in every process of the binary,
+    // the guard's and the sandbox launcher's too.
+    let hardened = cineris_sandbox::harden::harden();
     let started = Instant::now();
     let mut arguments = env::args_os();
     let name = invoked_name(arguments.next().as_deref());
@@ -83,6 +87,14 @@ fn main() -> ExitCode {
     if rest.first().is_some_and(|first| first == args::SANDBOX) {
         let code = cineris_sandbox::launch::run(rest.into_iter().skip(1).collect());
         return ExitCode::from(u8::try_from(code).unwrap_or(1));
+    }
+    // Said once, where the person sees it; it does not stop the program
+    // (on Linux the call cannot fail).
+    if let Err(error) = hardened {
+        eprintln!(
+            "{name}: this process could not close itself to your other programs ({error}): a \
+             program of yours could read its memory."
+        );
     }
 
     let command = match args::parse(rest) {

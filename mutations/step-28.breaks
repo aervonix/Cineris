@@ -10898,7 +10898,7 @@ caught-by:
     cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
 
 [break] session-linux-moved-store-same
-rule: A store's variable set otherwise than the session's own (on Linux in its environment, on Windows as it told what it starts) is moved; one comparison serves both systems since the second review of step 28's fixes.
+rule: A store's variable set otherwise than the session's own (on Linux as each harness of its line said in its word, on Windows as it told what it starts) is moved; one comparison serves both systems since the second review of step 28's fixes.
 file: crates/cineris-sandbox/src/session.rs
 in: moved_from
 find: value_in(mine, name, fold_case) != value_in(theirs, name, fold_case)
@@ -11056,8 +11056,8 @@ caught-by:
 rule: On Linux a process is Cineris by this very file, or by its name and its file's name together, never by its name alone.
 os: linux
 file: crates/cineris-sandbox/src/session.rs
-find: let cineris = same_binary(own, pid) || (named(own, name) && file_named(own, pid));
-replace: let cineris = same_binary(own, pid) || named(own, name);
+find: (named(own, name) && file_named(own, pid))
+replace: named(own, name)
 caught-by:
     cineris-sandbox session::sys::tests::sys_a_program_named_cin_that_is_another_is_not_cineris
 

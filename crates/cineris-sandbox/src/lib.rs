@@ -10,6 +10,7 @@
 //! | [`protect`] | The protected paths of a workspace, looked at before and after a sandboxed command. |
 //! | [`unfollowed`] | A folder read through handles that follow no link: what `cineris ext add` reads an extension with (since step 28). |
 //! | [`session`] | Whether this process runs under a session's command: what the subcommands that approve look at, and refuse under (since step 28). |
+//! | [`harden`] | The process closed to the user's other programs: not dumpable on Linux, an access list on Windows; and whether a tracer is attached (since the signed approvals' work). |
 //!
 //! The backends that confine, Landlock and seccomp on Linux, are behind the
 //! feature `backends`, off by default, so that `cineris-tools`, which needs
@@ -24,6 +25,7 @@
 #[cfg(all(target_os = "linux", feature = "backends"))]
 mod confine;
 pub mod explain;
+pub mod harden;
 pub mod launch;
 pub mod policy;
 pub mod protect;

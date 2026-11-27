@@ -91,6 +91,8 @@ mod commands;
 mod examples;
 mod first_run;
 mod guards;
+#[cfg(target_os = "linux")]
+mod hardened;
 mod live;
 mod names;
 mod nested;

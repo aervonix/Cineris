@@ -215,9 +215,27 @@ fn launch(arguments: Vec<OsString>) -> Result<Never, Failure> {
         .map_err(|error| {
             Failure::sandbox(format!("the command's input could not be given: {error}"))
         })?;
+    // The harness's word, found before the launcher is confined, which may
+    // refuse a read of `/proc`.
+    let words = words_to_keep();
 
     confine(&policy).map_err(Failure::sandbox)?;
-    become_command(&program, &rest, policy.temp.as_deref(), input)
+    become_command(&program, &rest, policy.temp.as_deref(), input, &words)
+}
+
+/// The descriptors of the harnesses' words the launcher holds
+/// (`crate::session::channel`): what it lets pass to the command, so that
+/// a nested run inside the sandbox reads its session's stores. Each is a
+/// socket whose writing end is closed: the command can read what it says
+/// and nothing else.
+#[cfg(unix)]
+fn words_to_keep() -> Vec<std::os::fd::RawFd> {
+    crate::session::channel::to_keep()
+}
+
+#[cfg(not(unix))]
+fn words_to_keep() -> Vec<i32> {
+    Vec::new()
 }
 
 /// The command's input, in an anonymous memory file: close-on-exec,
@@ -301,10 +319,14 @@ fn become_command(
     arguments: &[OsString],
     temp: Option<&Path>,
     input: Option<std::fs::File>,
+    words: &[std::os::fd::RawFd],
 ) -> Result<Never, Failure> {
     use std::os::unix::process::CommandExt;
 
     close_on_exec();
+    for word in words {
+        crate::session::channel::inherit(*word);
+    }
     let mut command = std::process::Command::new(program);
     command.args(arguments).stdin(match input {
         Some(input) => std::process::Stdio::from(input),
@@ -337,6 +359,7 @@ fn become_command(
     _arguments: &[OsString],
     _temp: Option<&Path>,
     _input: Option<std::fs::File>,
+    _words: &[i32],
 ) -> Result<Never, Failure> {
     Err(Failure::sandbox(
         "there is no sandbox launcher on this system",
@@ -345,7 +368,8 @@ fn become_command(
 
 /// Marks every descriptor above the standard three to be closed when the
 /// command starts, so that nothing the launcher inherited by mistake (a
-/// socket above all) reaches the command.
+/// socket above all) reaches the command. The harness's word is let pass
+/// again after it ([`words_to_keep`]).
 #[cfg(unix)]
 #[allow(
     unsafe_code,

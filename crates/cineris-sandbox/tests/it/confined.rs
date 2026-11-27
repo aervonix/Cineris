@@ -817,3 +817,36 @@ fn sh_in(policy: Policy, cwd: &Path, script: &str) -> Ran {
     let stdin = launcher.policy().encode();
     run_with(&launcher, &stdin, &[], cwd, "/bin/sh", &["-c", script])
 }
+
+/// A closed harness's word passes the launcher, which marks every other
+/// descriptor it holds to be closed: a nested run inside the sandbox reads
+/// its session's stores from it, and is told it runs under the session's
+/// command by it (`cineris_sandbox::session::channel`).
+#[test]
+fn sys_the_harnesss_word_passes_the_launcher() {
+    let Some(landlock) = enforcing() else { return };
+    let place = Place::new("word");
+    let policy = launcher(place.policy(Network::Off, landlock))
+        .policy()
+        .encode();
+    let input = place.scratch.file("policy", policy);
+    let copy = crate::harden::other_copy(&place.scratch);
+    let mut program: Vec<String> = [
+        std::env::current_exe().unwrap().display().to_string(),
+        "--exact".to_owned(),
+        ENTRY.to_owned(),
+        "--nocapture".to_owned(),
+        LAUNCH.to_owned(),
+        "--".to_owned(),
+    ]
+    .to_vec();
+    program.extend(crate::harden::standing_arguments(&copy));
+    let (under, moved) = crate::harden::standing(
+        &place.scratch,
+        "mark",
+        &input.display().to_string(),
+        &program,
+    );
+    assert!(under.starts_with("session"), "{under}");
+    assert_eq!(moved, "none");
+}

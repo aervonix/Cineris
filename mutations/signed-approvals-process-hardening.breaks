@@ -1,0 +1,63 @@
+# Signed approvals, part: the harness closes its own process
+# (docs/steps/signed-approvals/parts/process-hardening.md).
+
+# ------------------------------------------------------------- Linux
+
+[break] the-process-stays-dumpable
+rule: On Linux every process of the binary makes itself not dumpable before it reads anything, so that another process of its user can neither attach to it nor open its memory, environment or program's link.
+file: crates/cineris-sandbox/src/harden.rs
+find: libc::prctl(libc::PR_SET_DUMPABLE, NONE, NONE, NONE, NONE)
+replace: libc::prctl(libc::PR_GET_DUMPABLE, NONE, NONE, NONE, NONE)
+os: linux
+packages: cineris-sandbox, cineris-cli
+caught-by:
+    cineris-sandbox::it harden::sys_a_closed_process_keeps_out_another_process_of_its_user
+    cineris-cli::system hardened::sys_the_binary_closes_its_own_process
+
+[break] a-word-counts-for-any-process
+rule: A harness's word counts for the process that made it, as the kernel names it, started when the word says, and for no other: not for another process of the line.
+file: crates/cineris-sandbox/src/session.rs
+find: word.pid == pid &&
+replace:
+os: linux
+caught-by:
+    cineris-sandbox session::sys::tests::a_word_counts_only_for_the_process_that_gave_it
+
+[break] the-launcher-drops-the-word
+rule: The sandbox launcher, which marks every descriptor it holds to be closed when it becomes the command, lets the harness's word pass, so that a nested run inside the sandbox reads its session's stores.
+file: crates/cineris-sandbox/src/launch.rs
+find: crate::session::channel::inherit(*word);
+replace:
+os: linux
+packages: cineris-sandbox, cineris-core
+caught-by:
+    cineris-sandbox::it confined::sys_the_harnesss_word_passes_the_launcher
+
+[break] a-hidden-process-of-this-user-ends-the-line
+rule: A process of this user that /proc does not show (hidepid hides a harness that closed itself from its own commands) is not known on a line of parents, and refuses; only another user's, or one that is gone, ends the line.
+file: crates/cineris-sandbox/src/session.rs
+find: Some(true) => Seen::Hidden,
+replace: Some(true) => Seen::Unseen,
+os: linux
+caught-by:
+    cineris-sandbox session::sys::tests::a_process_proc_does_not_show_is_told_by_whose_it_is
+
+# ----------------------------------------------------------- Windows
+
+[break] the-process-list-keeps-reading-its-memory
+rule: On Windows the harness's process gives its user and OWNER RIGHTS only to wait for it, ask it the limited questions and end it: reading its memory is left out.
+file: crates/cineris-sandbox/src/harden.rs
+find: SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE
+replace: SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE | 0x0010
+os: windows
+caught-by:
+    cineris-sandbox::it harden::sys_a_closed_process_keeps_out_another_process_of_its_user
+
+[break] a-thread-made-later-keeps-the-default-list
+rule: On Windows a thread the harness makes after it closed itself gives itself the threads' list as it starts, so that no process of the user can set its context, suspend it or queue work to it.
+file: crates/cineris-sandbox/src/harden.rs
+find: if reason != DLL_THREAD_ATTACH
+replace: if reason == DLL_THREAD_ATTACH
+os: windows
+caught-by:
+    cineris-sandbox::it harden::sys_a_closed_process_keeps_out_another_process_of_its_user

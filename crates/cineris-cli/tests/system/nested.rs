@@ -132,8 +132,11 @@ impl Nested {
             }
             (("all.cmd", text), "cmd /c .\\all.cmd")
         } else {
+            // The command's own process, started by a harness that closed
+            // itself, is dumpable: its environment is its user's to read.
             let mut text = format!(
-                "ANTHROPIC_API_KEY='{}' '{binary}' -p hi --output json > nested.json 2> \
+                "cat /proc/$$/environ > /dev/null 2>&1 && echo yes > dumpable.txt\n\
+                 ANTHROPIC_API_KEY='{}' '{binary}' -p hi --output json > nested.json 2> \
                  nested.err\nCINERIS_CONFIG=evil.toml '{binary}' -p hi > moved.out 2> \
                  moved.err\nCINERIS_CONFIG=evil.toml '{binary}' -p > bare.out 2> bare.err\n",
                 crate::KEY
@@ -189,7 +192,7 @@ impl Nested {
 #[test]
 fn sys_cineris_run_by_a_sessions_command_is_held_or_refused() {
     let world = Nested::run();
-    let rules: [crate::Rule<Nested>; 4] = [
+    let rules: [crate::Rule<Nested>; 5] = [
         (
             "a_nested_headless_run_is_held_to_read_only_and_says_so",
             a_nested_headless_run_is_held_to_read_only_and_says_so,
@@ -206,8 +209,24 @@ fn sys_cineris_run_by_a_sessions_command_is_held_or_refused() {
             "each_variable_that_moves_the_stores_refuses_a_nested_run",
             each_variable_that_moves_the_stores_refuses_a_nested_run,
         ),
+        (
+            "a_sessions_command_is_not_closed_as_its_harness_is",
+            a_sessions_command_is_not_closed_as_its_harness_is,
+        ),
     ];
     crate::judge(&world, &rules);
+}
+
+/// The harness closes its own process (`cineris_sandbox::harden`); a
+/// command it starts is a new program, dumpable again from its `execve`:
+/// on Linux the command reads its own environment, which `/proc` gives only
+/// to a dumpable process's user. (Windows's commands are not given the
+/// harness's access list: `cineris-sandbox`'s own tests open one.)
+fn a_sessions_command_is_not_closed_as_its_harness_is(world: &Nested) {
+    if cfg!(windows) {
+        return;
+    }
+    assert_eq!(world.read("dumpable.txt"), "yes\n", "{}", shown(&world.run));
 }
 
 /// A headless run a session's command starts is held to `read-only`,

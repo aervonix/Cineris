@@ -119,6 +119,51 @@
 
 use std::io;
 
+#[cfg(target_os = "linux")]
+pub(crate) mod channel;
+
+/// Not a target: no harness's word is given or held.
+#[cfg(all(unix, not(target_os = "linux")))]
+pub(crate) mod channel {
+    use std::io;
+    use std::os::fd::RawFd;
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(super) struct Channel {
+        pub(super) pid: u32,
+        pub(super) start: u64,
+        pub(super) fd: RawFd,
+    }
+
+    impl Channel {
+        pub(super) fn entries(&self) -> Vec<(String, String)> {
+            Vec::new()
+        }
+    }
+
+    pub(super) fn start_in(_stat: &str) -> Option<u64> {
+        None
+    }
+
+    pub(super) fn give(_names: &[&str]) -> io::Result<()> {
+        Ok(())
+    }
+
+    pub(super) fn held() -> Vec<Channel> {
+        Vec::new()
+    }
+
+    pub(crate) fn to_keep() -> Vec<RawFd> {
+        Vec::new()
+    }
+
+    pub(crate) fn inherit(_fd: RawFd) {}
+
+    pub(super) fn ours(_pid: u32) -> Option<bool> {
+        None
+    }
+}
+
 /// The name of the job a Windows harness makes and joins, before its
 /// process id: `Local\` is the logon session's own namespace.
 pub const JOB_PREFIX: &str = r"Local\Cineris.SessionCommands.";
@@ -193,14 +238,15 @@ pub fn under_a_session_of(pid: u32) -> Under {
 
 /// Under a session's command, a variable of this process that moves where
 /// Cineris's configuration and stores are read from, set otherwise than
-/// for the session that started it: on Linux by the session's process's own
-/// environment, on Windows by what the session told what it starts
+/// for the session that started it: on Linux by what each harness of the
+/// line of parents said in its word (`channel`, since the signed approvals'
+/// work, when a harness's own environment stopped being readable), on
+/// Windows by what the session told what it starts
 /// (`CINERIS_SESSION_STORES`, which [`mark`] sets, and which the permission
 /// engine refuses a command line to set). `None` when none is. Asked only
 /// where [`under_a_session`] refuses: where the session's own stores cannot
-/// be read (on Linux, no harness found on the line of parents, or its
-/// environment unreadable; on Windows, nothing told), it names that, which
-/// refuses.
+/// be read (on Linux, no harness found on the line of parents, or a word of
+/// one not held; on Windows, nothing told), it names that, which refuses.
 #[must_use]
 pub fn moved_stores() -> Option<String> {
     sys::moved_stores()
@@ -408,6 +454,11 @@ enum Seen {
     Of { parent: u32, harness: bool },
     /// Not shown: gone, or another user's that `/proc` hides.
     Unseen,
+    /// Not shown, and there, and of this user: where `/proc` is mounted
+    /// with `hidepid`, a process of this user that is not dumpable, as a
+    /// harness of Cineris is ([`crate::harden`]), is hidden from the others.
+    /// What it is is not known.
+    Hidden,
     /// A read that failed for another reason.
     Failed,
 }
@@ -455,6 +506,13 @@ fn walk(start: u32, seen: impl Fn(u32) -> Seen, first_must_show: bool) -> Under 
                 return Under::Unknown(format!("its parent, process {at}, is not shown"));
             }
             Seen::Unseen => return Under::Nothing,
+            Seen::Hidden => {
+                return Under::Unknown(format!(
+                    "process {at} of its line is one of this user's that `/proc` does not show \
+                     (it is mounted with `hidepid`), as it does not show a harness to its \
+                     commands"
+                ));
+            }
             Seen::Failed => {
                 return Under::Unknown(format!("process {at} of its line could not be read"));
             }
@@ -493,7 +551,7 @@ fn harnesses_on_the_line(start: u32, seen: impl Fn(u32) -> Seen) -> Option<Vec<u
                 at = parent;
             }
             Seen::Unseen => return Some(found),
-            Seen::Failed => return None,
+            Seen::Hidden | Seen::Failed => return None,
         }
     }
     None
@@ -506,12 +564,30 @@ fn harnesses_on_the_line(start: u32, seen: impl Fn(u32) -> Seen) -> Option<Vec<u
     reason = "a few small reads of `/proc`, once, before an approving subcommand does anything"
 )]
 mod sys {
+    use std::cell::OnceCell;
     use std::io;
     use std::os::unix::fs::MetadataExt;
 
+    use super::channel::{self, Channel};
     use super::{Seen, Under, line, runs_cineris_sessions, walk};
 
+    /// The variables that place Cineris's configuration and stores on
+    /// Linux.
+    const STORES: [&str; 6] = [
+        "HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_STATE_HOME",
+        "XDG_DATA_HOME",
+        "CINERIS_CONFIG",
+        "CINERIS_DATA_DIR",
+    ];
+
+    /// Gives what this process starts its word ([`channel`]): its stores,
+    /// in a socket only it could have made. Where that fails, a nested run
+    /// under it refuses; the line of parents still finds it, so the mark
+    /// itself does not fail.
     pub(super) fn mark() -> io::Result<()> {
+        let _ = channel::give(&STORES);
         Ok(())
     }
 
@@ -533,6 +609,10 @@ mod sys {
             Seen::Of { parent, .. } if parent == pid => Under::Nothing,
             Seen::Of { parent, .. } => walk(parent, |pid| seen(&own, pid), false),
             Seen::Unseen => Under::Unknown(format!("process {pid} is not shown")),
+            Seen::Hidden => Under::Unknown(format!(
+                "process {pid} is one of this user's that `/proc` does not show (it is mounted \
+                 with `hidepid`)"
+            )),
             Seen::Failed => Under::Unknown(format!("process {pid} could not be read")),
         }
     }
@@ -545,6 +625,9 @@ mod sys {
     pub(super) struct Own {
         file: Option<(u64, u64)>,
         name: Option<String>,
+        /// The harnesses' words this process holds, read the first time
+        /// one is asked for.
+        channels: OnceCell<Vec<Channel>>,
     }
 
     impl Own {
@@ -557,32 +640,32 @@ mod sys {
                     exe.file_name()
                         .map(|name| name.to_string_lossy().into_owned())
                 }),
+                channels: OnceCell::new(),
             }
+        }
+
+        fn channels(&self) -> &[Channel] {
+            self.channels.get_or_init(channel::held)
+        }
+
+        /// The words this process holds of the process `pid`, started at
+        /// `start` where that is known.
+        fn words_of(&self, pid: u32, start: Option<u64>) -> Vec<&Channel> {
+            self.channels()
+                .iter()
+                .filter(|word| word.pid == pid && start.is_none_or(|start| word.start == start))
+                .collect()
         }
     }
 
-    /// The entries of a process's environment as `/proc/<pid>/environ`
-    /// gives them, in order: an entry that is not Unicode, or holds no `=`,
-    /// is left out, as Cineris's own reading leaves it out.
-    fn environ_entries(environ: &[u8]) -> Vec<(String, String)> {
-        environ
-            .split(|byte| *byte == 0)
-            .filter_map(|entry| {
-                let (name, value) = std::str::from_utf8(entry).ok()?.split_once('=')?;
-                Some((name.to_owned(), value.to_owned()))
-            })
-            .collect()
-    }
-
+    /// The session's stores are what its harnesses gave in their words
+    /// ([`channel`]), never their `/proc/<pid>/environ`, which a harness
+    /// that closed itself does not let its user read: the words of every
+    /// harness of the line ([`super::harnesses_on_the_line`]), each read as
+    /// Cineris reads its own environment ([`super::moved_from`]). A harness
+    /// of the line whose word this process does not hold refuses, and so
+    /// do two words of one harness that say different things.
     pub(super) fn moved_stores() -> Option<String> {
-        let names = [
-            "HOME",
-            "XDG_CONFIG_HOME",
-            "XDG_STATE_HOME",
-            "XDG_DATA_HOME",
-            "CINERIS_CONFIG",
-            "CINERIS_DATA_DIR",
-        ];
         // Asked only under a session's command, or where that could not be
         // told: with no harness found on the line (one of it could not be
         // read), what the session's stores are is not known either, and
@@ -595,16 +678,24 @@ mod sys {
         })
         .unwrap_or_default();
         if found.is_empty() {
-            return Some("the session's own environment, whose process was not found,".to_owned());
+            return Some(
+                "the stores the session gave what it starts, whose harness was not found,"
+                    .to_owned(),
+            );
         }
         let mut sessions = Vec::new();
         for pid in found {
-            let Ok(environ) = std::fs::read(format!("/proc/{pid}/environ")) else {
-                return Some("the session's own environment, which could not be read,".to_owned());
-            };
-            sessions.push(environ_entries(&environ));
+            let start = stat_of(pid).ok().and_then(|stat| channel::start_in(&stat));
+            let words = own.words_of(pid, start);
+            if words.is_empty() {
+                return Some(
+                    "the stores the session gave what it starts, which this process does not hold,"
+                        .to_owned(),
+                );
+            }
+            sessions.extend(words.iter().map(|word| word.entries()));
         }
-        super::moved_from(&names, false, &super::entries_of_this_process(), &sessions)
+        super::moved_from(&STORES, false, &super::entries_of_this_process(), &sessions)
     }
 
     /// The names a process of Cineris has in `/proc/<pid>/stat`: its own
@@ -679,7 +770,7 @@ mod sys {
                     io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied
                 ) =>
             {
-                return Seen::Unseen;
+                return hidden(own, pid);
             }
             Err(_) => return Seen::Failed,
         };
@@ -696,7 +787,12 @@ mod sys {
             return Seen::Failed;
         };
         let name = stat.get(open + 1..close).unwrap_or("");
-        let cineris = same_binary(own, pid) || (named(own, name) && file_named(own, pid));
+        // A harness that closed itself ([`crate::harden`]) does not let its
+        // file be read: it is told by its name, or by the word it gave this
+        // process ([`channel`]), whatever its name.
+        let cineris = same_binary(own, pid)
+            || (named(own, name) && file_named(own, pid))
+            || !own.words_of(pid, channel::start_in(&stat)).is_empty();
         // Its arguments, read only when it is Cineris: arguments that
         // cannot be read are taken as running sessions.
         let arguments = cineris
@@ -709,6 +805,24 @@ mod sys {
             });
         let harness = runs_cineris_sessions(cineris, arguments.as_deref());
         Seen::Of { parent, harness }
+    }
+
+    /// What a process `/proc` does not show is: a harness that gave this
+    /// process its word; another user's, or gone, which ends the line as
+    /// before; or one of this user's, which `/proc` hides only where it is
+    /// mounted with `hidepid` and the process is not dumpable, as a harness
+    /// is to its commands, and which is not known.
+    fn hidden(own: &Own, pid: u32) -> Seen {
+        if !own.words_of(pid, None).is_empty() {
+            return Seen::Of {
+                parent: 0,
+                harness: true,
+            };
+        }
+        match channel::ours(pid) {
+            Some(true) => Seen::Hidden,
+            Some(false) | None => Seen::Unseen,
+        }
     }
 
     #[cfg(test)]
@@ -838,6 +952,55 @@ mod sys {
                 crate::session::under_a_session_of(u32::MAX),
                 super::Under::Unknown(_)
             ));
+        }
+
+        /// This process, holding `words` and nothing else.
+        #[cfg(target_os = "linux")]
+        fn holding(words: Vec<super::Channel>) -> super::Own {
+            let own = super::Own::read();
+            let _ = own.channels.set(words);
+            own
+        }
+
+        /// A harness's word counts for the process that gave it, started
+        /// when it says, and for no other: not another process, nor one
+        /// that took its id after it.
+        #[cfg(target_os = "linux")]
+        #[test]
+        fn a_word_counts_only_for_the_process_that_gave_it() {
+            let own = holding(vec![super::Channel::given(7, 100, &[("HOME", "/h")])]);
+            assert_eq!(own.words_of(7, Some(100)).len(), 1);
+            assert_eq!(own.words_of(7, None).len(), 1);
+            assert!(own.words_of(8, None).is_empty());
+            assert!(own.words_of(7, Some(101)).is_empty());
+        }
+
+        /// A process `/proc` does not show is a harness when it gave this
+        /// process its word; is not known when it is there and of this
+        /// user (`hidepid` hides a harness that closed itself from its
+        /// commands, the independent review of the process hardening's
+        /// design); and ends the line when it is gone, as another user's
+        /// does.
+        #[cfg(target_os = "linux")]
+        #[test]
+        fn a_process_proc_does_not_show_is_told_by_whose_it_is() {
+            let pid = std::process::id();
+            assert_eq!(
+                super::hidden(&holding(Vec::new()), pid),
+                super::Seen::Hidden
+            );
+            assert_eq!(
+                super::hidden(&holding(vec![super::Channel::given(pid, 1, &[])]), pid),
+                super::Seen::Of {
+                    parent: 0,
+                    harness: true
+                }
+            );
+            // The largest id the kernel can give, which no process has.
+            assert_eq!(
+                super::hidden(&holding(Vec::new()), 4_194_304),
+                super::Seen::Unseen
+            );
         }
     }
 }
@@ -2981,6 +3144,34 @@ mod tests {
         assert!(matches!(walk(9, &read, false), Under::Session(_)));
         assert_eq!(walk(19, &read, false), Under::Nothing);
         assert!(matches!(walk(19, &read, true), Under::Unknown(_)));
+    }
+
+    /// A process of this user that `/proc` does not show, anywhere on the
+    /// line, is not known, and refuses: where `/proc` is mounted with
+    /// `hidepid`, a harness that closed itself is hidden from its own
+    /// commands, and a line that read past it as another user's would pass
+    /// them (the independent review of the process hardening's design).
+    /// Another user's that it hides still ends the line elsewhere.
+    #[test]
+    fn a_process_of_this_user_that_proc_hides_is_not_known() {
+        let processes = [
+            (10, of(9, false)),
+            (9, of(8, false)),
+            (8, Seen::Hidden),
+            (20, of(19, false)),
+            (19, Seen::Hidden),
+            (30, of(29, false)),
+        ];
+        let read = table(&processes);
+        for start in [10, 9, 20] {
+            let under = line(start, &read);
+            assert!(
+                matches!(&under, Under::Unknown(what) if what.contains("hidepid")),
+                "{start}: {under:?}"
+            );
+        }
+        // 29 is not shown and is not this user's: the line ends there.
+        assert_eq!(line(30, &read), Under::Nothing);
     }
 
     /// A process of Cineris runs sessions unless its first argument is a

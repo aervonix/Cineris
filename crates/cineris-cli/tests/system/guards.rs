@@ -401,7 +401,7 @@ fn sys_a_nested_run_whose_line_cannot_be_read_is_refused_with_its_stores_moved()
     let run = machine.run(&["-p", "go", "--output", "json"]);
     let said = std::fs::read_to_string(machine.workspace.join("unread.err")).unwrap_or_default();
     assert!(
-        said.contains("was refused") && said.contains("whose process was not found"),
+        said.contains("was refused") && said.contains("whose harness was not found"),
         "{said}\n{}",
         shown(&run)
     );
@@ -412,7 +412,10 @@ fn sys_a_nested_run_whose_line_cannot_be_read_is_refused_with_its_stores_moved()
 /// (a harness by its name and its file's), run with a moved `HOME`, between
 /// the session and the nested run, does not make the moved `HOME` the
 /// session's (the early review of step 28's fixes: the run was compared
-/// with the copy, passed, and read the stores the moved `HOME` named).
+/// with the copy, passed, and read the stores the moved `HOME` named). Since
+/// the signed approvals' work a harness's stores are read from the word it
+/// gave what it starts, and the copy gave none: the run is refused for that
+/// first.
 #[cfg(target_os = "linux")]
 #[test]
 fn sys_a_shell_named_cineris_on_the_line_does_not_pass_moved_stores() {
@@ -439,7 +442,7 @@ fn sys_a_shell_named_cineris_on_the_line_does_not_pass_moved_stores() {
     let run = machine.run(&["-p", "go", "--output", "json"]);
     let said = std::fs::read_to_string(machine.workspace.join("fake.err")).unwrap_or_default();
     assert!(
-        said.contains("HOME is set otherwise") && said.contains("was refused"),
+        said.contains("which this process does not hold") && said.contains("was refused"),
         "{said}\n{}",
         shown(&run)
     );
