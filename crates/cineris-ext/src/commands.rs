@@ -57,7 +57,7 @@ use std::path::Path;
 
 use cineris_base::{
     AbsPath, OpenError, PathResolver, ResolvedPath, location_within, open_regular,
-    strip_location_prefix, visible, visible_keeping_after,
+    strip_location_prefix, visible, visible::is_selector, visible_keeping_after,
 };
 
 use crate::registration::{MAX_ARGUMENTS, check_description, check_name};
@@ -660,10 +660,30 @@ fn parse(name: &str, owner: Owner, path: String, text: &str) -> Result<CommandFi
             }
         }
     }
+    // A project's command is sent as the user's own prompt: its variation
+    // selectors are taken out of its body and its arguments' defaults, an
+    // emoji's too, since one after each character can carry a byte unseen
+    // and a run any bytes (the fixes to step 28). The user's own are sent
+    // as they wrote them.
+    let without_selectors;
+    let body = if owner == Owner::Project && body.chars().any(is_selector) {
+        without_selectors = body
+            .chars()
+            .filter(|character| !is_selector(*character))
+            .collect::<String>();
+        without_selectors.as_str()
+    } else {
+        body
+    };
     if owner == Owner::Project {
-        // A project's command is sent as the user's own prompt: what it
-        // sends is seen in its file (L4 of the early review of step 28's
-        // commands).
+        for default in arguments
+            .iter_mut()
+            .filter_map(|argument: &mut Argument| argument.default.as_mut())
+        {
+            default.retain(|character| !is_selector(character));
+        }
+        // What else it sends is seen in its file (L4 of the early review of
+        // step 28's commands).
         if let Some(unseen) = first_unseen(body) {
             return Err(format!(
                 "its body holds `{unseen}`, {UNSEEN}: a project's command is sent as your own \

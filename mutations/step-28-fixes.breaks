@@ -262,3 +262,42 @@ replace: .skip(0)
 packages: cineris-sandbox
 caught-by:
     cineris-sandbox session::tests::a_nested_runs_stores_are_compared_as_cineris_reads_them
+[break] a-registered-description-keeps-selectors
+rule: A description a script registers holds no variation selector, since it reaches the model as written, where one after each character can carry a byte unseen.
+file: crates/cineris-ext/src/registration.rs
+in: check_registered_description
+find: match first_selector(description) {
+replace: match None::<String> {
+packages: cineris-ext
+caught-by:
+    cineris-ext::it engine::text_a_script_registers_holds_nothing_that_acts_unseen
+
+[break] a-registered-schema-keeps-selectors
+rule: Every text of a tool's `input` a script registers holds no variation selector.
+file: crates/cineris-ext/src/registration.rs
+in: check_schema_text
+find: Json::String(text) => hides_something(text) || first_selector(text).is_some(),
+replace: Json::String(text) => hides_something(text),
+packages: cineris-ext
+caught-by:
+    cineris-ext::it engine::text_a_script_registers_holds_nothing_that_acts_unseen
+
+[break] a-projects-command-keeps-its-selectors
+rule: A project's command is sent as the user's own prompt with the variation selectors of its body taken out.
+file: crates/cineris-ext/src/commands.rs
+in: parse
+find: owner == Owner::Project && body.chars().any(is_selector)
+replace: false
+packages: cineris-ext
+caught-by:
+    cineris-ext commands::tests::a_projects_command_is_sent_without_its_variation_selectors
+
+[break] a-projects-defaults-keep-their-selectors
+rule: A project's command's arguments' defaults are sent with their variation selectors taken out.
+file: crates/cineris-ext/src/commands.rs
+in: parse
+find: default.retain(|character| !is_selector(character));
+replace: let _ = default;
+packages: cineris-ext
+caught-by:
+    cineris-ext commands::tests::a_projects_command_is_sent_without_its_variation_selectors
