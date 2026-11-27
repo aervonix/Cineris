@@ -237,11 +237,32 @@ fn a_projects_command_holds_nothing_that_acts_unseen() {
         parsed(defaulted).unwrap().expand("").unwrap(),
         "On a\u{feff}b."
     );
-    // What is seen: line breaks of both kinds, a tab, an emoji's selector.
-    let seen = project("Lint:\r\n\t{{args}}\nand ship \u{2764}\u{fe0f}\r\n").unwrap();
+    // What is seen: line breaks of both kinds, a tab.
+    let seen = project("Lint:\r\n\t{{args}}\nand ship.\r\n").unwrap();
+    assert_eq!(seen.expand("all").unwrap(), "Lint:\r\n\tall\nand ship.\r\n");
+}
+
+/// A project's command is sent without a variation selector, from its body
+/// or its arguments' defaults, one after each character, a run, or an
+/// emoji's: one can carry a byte unseen (the fixes to step 28). The user's
+/// own are sent as they are.
+#[test]
+fn a_projects_command_is_sent_without_its_variation_selectors() {
+    let hidden =
+        "R\u{e0152}e\u{e0155}v\u{e0158}iew \u{2764}\u{fe0f}\u{fe0f} {{args}} on {{depth}}.";
+    let text = format!("---\narguments: [depth = \"d\u{e0101}e\u{fe0f}ep\"]\n---\n{hidden}");
+    let project = parse(
+        "review",
+        Owner::Project,
+        ".cineris/commands/review.md".to_owned(),
+        &text,
+    )
+    .unwrap();
+    assert_eq!(project.expand("").unwrap(), "Review \u{2764}  on deep.");
+    let own = parsed(&text).unwrap();
     assert_eq!(
-        seen.expand("all").unwrap(),
-        "Lint:\r\n\tall\nand ship \u{2764}\u{fe0f}\r\n"
+        own.expand("").unwrap(),
+        "R\u{e0152}e\u{e0155}v\u{e0158}iew \u{2764}\u{fe0f}\u{fe0f}  on d\u{e0101}e\u{fe0f}ep."
     );
 }
 

@@ -98,6 +98,34 @@ pub fn check_contribution_name(name: &str) -> Result<(), String> {
     }
 }
 
+/// A description a script registers for a tool or a command: what
+/// [`check_description`] takes, and no variation selector either, since it
+/// reaches the model as written, where one after each character can carry
+/// a byte unseen and a run of them any bytes (the fixes to step 28). An
+/// emoji's selector is refused too, named as its escape (`\u{fe0f}`).
+///
+/// # Errors
+///
+/// Why it is not one.
+pub fn check_registered_description(description: &str) -> Result<(), String> {
+    check_description(description)?;
+    match first_selector(description) {
+        Some(selector) => Err(format!(
+            "a description holds `{selector}`, a variation selector: text a script registers \
+             reaches the model, where a selector can carry a byte unseen, so it may hold none \
+             (an emoji's included)"
+        )),
+        None => Ok(()),
+    }
+}
+
+/// The first variation selector of `text`, written as its escape.
+fn first_selector(text: &str) -> Option<String> {
+    text.chars()
+        .find(|character| cineris_base::visible::is_selector(*character))
+        .map(|selector| cineris_base::visible(selector.encode_utf8(&mut [0; 4])).into_owned())
+}
+
 /// A description of a tool or a command: at most [`MAX_DESCRIPTION`], and
 /// shown as written, so with nothing in it that acts unseen but a line
 /// break and a tab.
@@ -119,7 +147,8 @@ pub fn check_description(description: &str) -> Result<(), String> {
 }
 
 /// A tool's `input`: a JSON Schema object of at most [`MAX_SCHEMA_BYTES`]
-/// as JSON, every text of it, its keys included, shown as written.
+/// as JSON, every text of it, its keys included, shown as written, with no
+/// variation selector (as [`check_registered_description`]).
 ///
 /// # Errors
 ///
@@ -134,11 +163,11 @@ pub fn check_schema(schema: &Json) -> Result<(), String> {
 /// Every text of a schema, its keys included, shown as written.
 fn check_schema_text(schema: &Json) -> Result<(), String> {
     let found = match schema {
-        Json::String(text) => hides_something(text),
+        Json::String(text) => hides_something(text) || first_selector(text).is_some(),
         Json::Array(items) => return items.iter().try_for_each(check_schema_text),
         Json::Object(fields) => {
             for (key, value) in fields {
-                if hides_something(key) {
+                if hides_something(key) || first_selector(key).is_some() {
                     return Err(SCHEMA_HIDES.to_owned());
                 }
                 check_schema_text(value)?;
@@ -154,8 +183,8 @@ fn check_schema_text(schema: &Json) -> Result<(), String> {
     }
 }
 
-const SCHEMA_HIDES: &str =
-    "`input` holds a character that acts unseen (a control or a format character)";
+const SCHEMA_HIDES: &str = "`input` holds a character that acts unseen (a control, a format \
+                            character or a variation selector)";
 
 /// One entry of a hook's filter: a tool's registry name, or a source's
 /// tools (`source/*`), 1 to [`MAX_FILTER_ENTRY`] of ASCII letters, digits,

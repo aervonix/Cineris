@@ -39,8 +39,8 @@ use crate::host::{FetchCall, HostAnswer, HostCall, Phase, Scope};
 use crate::manifest::Manifest;
 use crate::registration::{
     CommandDef, HookDef, MAX_ARGUMENTS, MAX_COMMANDS, MAX_HOOK_TOOLS, MAX_HOOKS, MAX_TOOLS,
-    Registration, ToolDef, check_allowed, check_contribution_name, check_description, check_filter,
-    check_name, check_schema, check_timeout,
+    Registration, ToolDef, check_allowed, check_contribution_name, check_filter, check_name,
+    check_registered_description, check_schema, check_timeout,
 };
 
 /// How many runtimes this process has made: the start-up test holds it at
@@ -1245,7 +1245,7 @@ fn read_entry<'js>(
             let description = def
                 .get::<_, Option<String>>("description")?
                 .unwrap_or_default();
-            check_description(&description).map_err(refuse)?;
+            check_registered_description(&description).map_err(refuse)?;
             let input: Value<'js> = def.get("input")?;
             let input = if input.is_undefined() || input.is_null() {
                 serde_json::json!({"type": "object", "properties": {}, "additionalProperties": false})
@@ -1275,7 +1275,7 @@ fn read_entry<'js>(
             let description = def
                 .get::<_, Option<String>>("description")?
                 .unwrap_or_default();
-            check_description(&description).map_err(refuse)?;
+            check_registered_description(&description).map_err(refuse)?;
             let arguments = bounded_texts(ctx, def, "arguments", MAX_ARGUMENTS)?;
             for argument in &arguments {
                 check_name(argument).map_err(refuse)?;

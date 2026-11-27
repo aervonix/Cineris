@@ -872,6 +872,29 @@ fn text_a_script_registers_holds_nothing_that_acts_unseen() {
             "{script}: {error}"
         );
     }
+    // A variation selector is refused, one after each character as a run,
+    // an emoji's too, and named: what a script registers reaches the model,
+    // where one can carry a byte unseen.
+    for (script, named) in [
+        (
+            "cineris.tool({ name: 't', description: 'Warn \\u26a0\\ufe0f first', run() {} });",
+            "`\\u{fe0f}`, a variation selector",
+        ),
+        (
+            "cineris.command({ name: 'c', description: 'a\\u{e0151}b\\u{e0152}c', run() {} });",
+            "`\\u{e0151}`, a variation selector",
+        ),
+        (
+            "cineris.tool({ name: 't', input: { type: 'object', description: 'x\\ufe0fy' }, run() {} });",
+            "a variation selector",
+        ),
+    ] {
+        let error = start(&extension("", script), &timer).unwrap_err();
+        assert!(
+            matches!(&error, LoadError::Evaluation(text) if text.contains(named)),
+            "{script}: {error}"
+        );
+    }
     // A line break and a tab are text.
     let fine = extension(
         "",
