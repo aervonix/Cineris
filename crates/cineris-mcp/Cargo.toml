@@ -16,7 +16,20 @@ cineris-tools.workspace = true
 cineris-sandbox.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["sync"] }
+# `rt` for the tasks that read a server's output and keep its change stream.
+tokio = { workspace = true, features = ["rt", "sync"] }
+
+[features]
+# Fake MCP servers of both eras (`fake`), scripted, for any crate's tests.
+# Code for tests only: dev-dependencies turn it on, and nothing else may
+# (`cargo xtask rules`).
+test-kit = []
+
+[dev-dependencies]
+cineris-testkit.workspace = true
+# The crate's integration tests use its own fake servers. Not an edge of the
+# crate table.
+cineris-mcp = { workspace = true, features = ["test-kit"] }
 
 [lints]
 workspace = true

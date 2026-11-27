@@ -32,7 +32,7 @@ The protocol changed fundamentally in its July 2026 revision: no handshake, no s
 ## Decision
 
 - Tools only. Standard I/O, and HTTP with static credentials. Both protocol eras.
-- The official SDK, client features only, confined to `cineris-mcp` behind our own transport trait and a cargo feature.
+- The official SDK, client features only, confined to `cineris-mcp` behind our own transport trait and a cargo feature. *Amended in step 30: a client of our own, behind the same interface ("Amended in step 30" below).*
 - Tools are reached through `tool_search` and `tool_call`, shared with extension tools, with opt-in direct exposure per server.
 - Existing configurations are read: the project's `.mcp.json` live, and other clients' per-user files by import.
 - Every tool definition is hashed at approval. A change needs approval again.
@@ -43,8 +43,16 @@ The protocol changed fundamentally in its July 2026 revision: no handshake, no s
 - Confinement to one crate behind a trait keeps the option of replacing it.
 - A stable tool list is required by the context design ([0016](0016-context-management.md)), and the search-and-call pair gives it on every provider.
 
+## Amended in step 30
+
+**The client is our own, and no MCP SDK is linked** (the owner, 2026-11-27, on the maintainers' recommendation; [steps/30/answered.md](../steps/30/answered.md), point 1). Measured on hosted runners, `rmcp` 3.12.0 as the step would have linked it added 1,718,016 bytes to the shipped Linux build and 2,171,904 to the Windows one, and 19 packages; a client of our own was priced at a tenth of that or less. Most of a client was ours either way: the process, HTTP through `cineris-llm`, the policy around the protocol (time limits, caps, the probe of a server that exits on it) and the fake servers the tests need. Decision 0039's first size reserve is spent here.
+
+- `cineris-mcp` speaks both eras itself: the JSON-RPC messages, a transport (standard I/O, and Streamable HTTP), a session over any transport, the probe and the fallback ([architecture/13-mcp.md](../architecture/13-mcp.md), "Implementation").
+- Everything else is written against `cineris_mcp::Client`, so an SDK could be put back behind it, as this record first had it the other way round.
+- **Against it:** interoperability is tested against servers we wrote from the specification's text. `rmcp`'s server is run against our client in the nightly tier, in both eras, from a package outside the workspace with its own lock file, kept out of the shipped binary and the blocking checks (the owner's yes of 2026-11-27). And each new revision of the specification is ours to read, twice a year.
+
 ## Revisit when
 
-- The SDK's churn costs more than tracking the specification would: write the standard I/O client by hand and keep the SDK for HTTP.
+- Tracking the specification by hand costs more than an SDK would, with the size budgets met: put one back behind `Client`.
 - Binary size or CI time is over budget: the `mcp` feature can be measured in isolation and trimmed.
 - Users need a remote server that requires OAuth: that step moves up.
