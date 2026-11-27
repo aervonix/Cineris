@@ -599,34 +599,6 @@ impl PasswordTerminal {
         read_password_on(&mut self.0, ask)
     }
 
-    /// Asks a yes or no while the terminal is taken, for a question that
-    /// comes before the password's (`cineris permissions trust`'s, of a
-    /// project's extensions): `question` and `[y/N]` written, a line typed,
-    /// echoed (it is no secret), and `Enter`. `Some(true)` for `y` or
-    /// `yes`, `Some(false)` for anything else, an empty line and `Esc`
-    /// included; `None` for `Ctrl+C` or a signal. What was typed before the
-    /// question was written does not answer it.
-    ///
-    /// # Errors
-    ///
-    /// When the terminal cannot be read or written.
-    pub fn confirm(&mut self, question: &str) -> io::Result<Option<bool>> {
-        confirm_on(&mut self.0, question)
-    }
-
-    /// Writes `text` while the terminal is taken, each line break as the
-    /// terminal needs it in raw mode: what a subcommand shows before it
-    /// asks. Its control characters are the caller's to make visible.
-    ///
-    /// # Errors
-    ///
-    /// When the terminal cannot be written.
-    pub fn show(&mut self, text: &str) -> io::Result<()> {
-        use cineris_term::Sink as _;
-        self.0
-            .write_frame(text.replace("\r\n", "\n").replace('\n', "\r\n").as_bytes())
-    }
-
     /// The exit code a signal handed over asks the program to end with,
     /// once one has come.
     #[must_use]
@@ -818,94 +790,6 @@ thread_local! {
     /// fails.
     pub(crate) static PASTES_WIPED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
-
-/// [`PasswordTerminal::confirm`] on a terminal already entered: for tests,
-/// on a device of their own.
-///
-/// # Errors
-///
-/// When the terminal cannot be read or written.
-pub fn confirm_on<D: Device>(
-    terminal: &mut Terminal<D>,
-    question: &str,
-) -> io::Result<Option<bool>> {
-    use cineris_term::Sink as _;
-    // What was typed before the question is written does not answer it:
-    // thrown away first, so that nothing typed once it is shown is.
-    while let Some(event) = terminal.next(Some(Duration::ZERO))? {
-        forget(event);
-    }
-    let question = cineris_term::sanitize(question);
-    terminal.write_frame(format!("{question} [y/N] ").as_bytes())?;
-    let mut line = String::new();
-    let yes = |line: &str| matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes");
-    let answer = loop {
-        if terminal.ending().is_some() {
-            break None;
-        }
-        let Some(event) = terminal.next(None)? else {
-            continue;
-        };
-        // What the event answers, once it is done with: `Some(None)` for no
-        // answer at all.
-        let mut answered: Option<Option<bool>> = None;
-        let mut echo = String::new();
-        match &event {
-            Event::Key(key) if is_ctrl_c(*key) => answered = Some(None),
-            Event::Key(Key {
-                code: KeyCode::Enter,
-                ..
-            }) => answered = Some(Some(yes(&line))),
-            Event::Key(Key {
-                code: KeyCode::Esc, ..
-            }) => answered = Some(Some(false)),
-            Event::Key(Key {
-                code: KeyCode::Backspace,
-                ..
-            }) => {
-                if line.pop().is_some() {
-                    echo.push_str("\x08 \x08");
-                }
-            }
-            Event::Key(Key {
-                code: KeyCode::Char(typed),
-                mods,
-            }) if *mods == Mods::NONE || *mods == Mods::SHIFT => {
-                if !typed.is_control() && line.chars().count() < CONFIRM_MOST {
-                    line.push(*typed);
-                    echo.push(*typed);
-                }
-            }
-            // Typed quickly, a line can come as one burst a terminal with
-            // no bracketed paste gives as a paste: its line break answers.
-            Event::Paste(text) => {
-                for typed in text.chars() {
-                    if typed == '\r' || typed == '\n' {
-                        answered = Some(Some(yes(&line)));
-                        break;
-                    }
-                    if !typed.is_control() && line.chars().count() < CONFIRM_MOST {
-                        line.push(typed);
-                        echo.push(typed);
-                    }
-                }
-            }
-            _ => {}
-        }
-        forget(event);
-        if !echo.is_empty() {
-            terminal.write_frame(echo.as_bytes())?;
-        }
-        if let Some(answer) = answered {
-            break answer;
-        }
-    };
-    terminal.write_frame(b"\r\n")?;
-    Ok(answer)
-}
-
-/// The most characters a yes or no is typed with.
-const CONFIRM_MOST: usize = 16;
 
 /// Reads, and throws away, every key and paste that has arrived: what was
 /// typed or pasted before the prompt's first frame. A resize, a resumption

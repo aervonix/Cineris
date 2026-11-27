@@ -177,6 +177,7 @@ pub(crate) fn raw() -> bool {
 /// writes is written as raw mode needs. Dropped, it is put back.
 pub(crate) struct Taken {
     terminal: Option<PasswordTerminal>,
+    overrides: cineris_tui::app::Overrides,
 }
 
 impl Taken {
@@ -191,15 +192,27 @@ impl Taken {
         RAW.store(true, std::sync::atomic::Ordering::SeqCst);
         Some(Self {
             terminal: Some(terminal),
+            overrides,
         })
     }
 
-    /// A yes or no asked on the taken terminal (`PasswordTerminal::confirm`):
-    /// `false` for anything but a yes, `Ctrl+C` and a failure included.
+    /// A yes or no that comes before the password (`permissions trust`'s, of
+    /// a project's extensions): asked in the terminal's own line mode, its
+    /// answer echoed, since it is no secret, and the terminal taken again
+    /// before anything else is read (the key file, the password). A yes is
+    /// `y` or `yes`; anything else, an empty line included, is no.
     pub(crate) fn confirm(&mut self, question: &str) -> bool {
-        self.terminal
-            .as_mut()
-            .is_some_and(|terminal| matches!(terminal.confirm(question), Ok(Some(true))))
+        if let Some(terminal) = self.terminal.take() {
+            let _ = terminal.leave();
+        }
+        RAW.store(false, std::sync::atomic::Ordering::SeqCst);
+        crate::print_out(&format!("{question} [y/N] "));
+        let mut line = String::new();
+        let yes = io::stdin().read_line(&mut line).is_ok()
+            && matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes");
+        self.terminal = PasswordTerminal::enter(self.overrides).ok();
+        RAW.store(self.terminal.is_some(), std::sync::atomic::Ordering::SeqCst);
+        yes
     }
 }
 

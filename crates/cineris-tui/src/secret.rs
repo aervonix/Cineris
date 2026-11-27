@@ -29,7 +29,7 @@ pub mod password;
 
 pub use password::{
     PasswordAsk, PasswordInput, PasswordPrompt, PasswordTerminal, PromptRows, Prompted, Purpose,
-    confirm_on, read_password, read_password_on,
+    read_password, read_password_on,
 };
 
 use std::io;
