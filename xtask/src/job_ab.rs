@@ -37,7 +37,8 @@ side goes first as often as the other) in alternating order on this machine,
 and each phase's median on each side and its change paired by round. Each
 side's round:
 
-  clean   its build of the tests (target/ci and target/tmp) is removed: in
+  clean   its build of the tests (target/ci, target/tmp, and an archive
+          side's target/ci-built) is removed: in
           every round, or with --keep-build (and --count 4 or more) in the
           first two alone, one in each order; then a cold round's phases are
           named apart from a warm one's (`build (cold)`, `build (warm)`)
@@ -58,8 +59,9 @@ side's round:
           the report
 
 Before the first round each tree is warmed, untimed (`cargo fetch --locked`,
-`cargo nextest --version`). `the job` is the setup, the build and the runs
-together; the clean is not in it. A failed clean, setup or build ends that side's round; a failed run of the
+`cargo nextest --version`). `the job` is the setup, the build, an archive
+side's extraction and the runs together; the clean is not in it, nor an
+archive side's putting back of its build after the round. A failed clean, setup or build ends that side's round; a failed run of the
 tests does not (the next run is made, and the tiers' sums and `the job` count
 as failed). Either way the round is recorded, the run goes on, and the command
 fails at the end. Each side's median is of the rounds the phase passed in on
@@ -908,6 +910,10 @@ pub(crate) trait SidePhases {
     fn run(&mut self, index: usize) -> Result<()>;
     /// Each tier's tests' time summed above the start, from the report.
     fn tiers(&mut self) -> Result<[f64; 3]>;
+    /// What the side does after its round, untimed and outside `the job`:
+    /// an archive side puts its build back. It cannot fail the round, whose
+    /// figures are measured by then: what goes wrong is said.
+    fn after_round(&mut self) {}
 }
 
 /// What a side's round does before its phases are timed, and what its
@@ -985,6 +991,21 @@ pub(crate) fn warm_up_commands() -> [Vec<String>; 2] {
 /// not: the job's next run is still made and timed, as the blocking job
 /// makes it, and the tiers' sums and `the job` count as failed.
 pub(crate) fn drive_side(
+    phases: &mut impl SidePhases,
+    round: usize,
+    which: Which,
+    plan: &SidePlan,
+    clock: &mut dyn FnMut() -> f64,
+) -> SideRound {
+    let side = timed_phases(phases, round, which, plan, clock);
+    // Whatever the round did, and once every figure of it is taken.
+    phases.after_round();
+    side
+}
+
+/// [`drive_side`]'s phases, each timed and recorded, up to the round's end
+/// or its first failure that ends it.
+fn timed_phases(
     phases: &mut impl SidePhases,
     round: usize,
     which: Which,
@@ -1131,6 +1152,21 @@ impl SidePhases for RealSide<'_> {
         crate::checks::forget_reports(self.tree)
     }
 
+    /// The archive side's build back in its place, after its round and
+    /// outside the job's time: the other side does no such work, and the
+    /// real build job never does it. After the last round the tree is left
+    /// as it was built. A failure is said, and the next round's build tries
+    /// again.
+    fn after_round(&mut self) {
+        if self.from_archive
+            && let Err(error) = put_back(self.tree)
+        {
+            println!(
+                "(could not put the build back after the round: {error}; the next build tries again)"
+            );
+        }
+    }
+
     fn extract(&mut self) -> Option<Result<()>> {
         if !self.from_archive {
             return None;
@@ -1173,17 +1209,7 @@ impl SidePhases for RealSide<'_> {
     }
 
     fn tiers(&mut self) -> Result<[f64; 3]> {
-        // The archive side's build back in its place, after its runs and
-        // outside the job's time (which ends before this phase): the other
-        // side does no such work, and the real build job never does it.
-        // After the last round the tree is left as it was built.
-        let put = if self.from_archive {
-            put_back(self.tree)
-        } else {
-            Ok(())
-        };
         let report = workspace::nextest_report(self.tree, "ci");
-        put?;
         let cases = junit::read(&report)?;
         let (start, _) = tiers::start_of(&cases);
         let kept = self
@@ -1931,7 +1957,10 @@ mod tests {
             self.step(&format!("run {index}"), 10.0)
         }
         fn tiers(&mut self) -> crate::Result<[f64; 3]> {
-            self.step("tiers", 0.0).map(|()| [1.0, 2.0, 3.0])
+            self.step("tiers", 3.0).map(|()| [1.0, 2.0, 3.0])
+        }
+        fn after_round(&mut self) {
+            let _ = self.step("after the round", 7.0);
         }
     }
 
@@ -2041,6 +2070,45 @@ mod tests {
     }
 
     #[test]
+    fn an_archive_side_puts_its_build_back_after_its_round_and_the_other_side_touches_nothing() {
+        let scratch = cineris_testkit::Scratch::outside("xtask-job-ab", "after-round");
+        let tree = scratch.path();
+        let target = tree.join("target");
+        let request = Request::parse(&strings(&["--base", "b", "--from-archive", "head"])).unwrap();
+        let lay_out = || {
+            std::fs::create_dir_all(target.join(super::BUILT_ASIDE).join("deps")).unwrap();
+            std::fs::write(
+                target.join(super::BUILT_ASIDE).join("deps").join("built"),
+                "b",
+            )
+            .unwrap();
+            std::fs::create_dir_all(target.join("ci").join("deps")).unwrap();
+            std::fs::write(target.join("ci").join("deps").join("extracted"), "e").unwrap();
+        };
+        let side = |from_archive: bool| super::RealSide {
+            head: tree,
+            tree,
+            which: Which::Head,
+            round: 1,
+            request: &request,
+            setup: None,
+            environment: Vec::new(),
+            runs: Vec::new(),
+            from_archive,
+        };
+        lay_out();
+        side(false).after_round();
+        assert!(
+            target.join(super::BUILT_ASIDE).exists() && target.join("ci").exists(),
+            "a side that ran where it built has nothing to put back"
+        );
+        side(true).after_round();
+        assert!(target.join("ci").join("deps").join("built").is_file());
+        assert!(!target.join("ci").join("deps").join("extracted").exists());
+        assert!(!target.join(super::BUILT_ASIDE).exists());
+    }
+
+    #[test]
     fn an_archive_sides_build_is_set_aside_and_put_back() {
         let scratch = cineris_testkit::Scratch::outside("xtask-job-ab", "aside");
         let tree = scratch.path();
@@ -2111,7 +2179,11 @@ mod tests {
         fake.extract = true;
         let side = drive_side(&mut fake, 2, Which::Head, &plan(false), &mut clock);
         assert_eq!(names(&side), ["build", "extract !", "the job !"]);
-        assert_eq!(fake.made, ["build", "extract"], "no test runs without it");
+        assert_eq!(
+            fake.made,
+            ["build", "extract", "after the round"],
+            "no test runs without it, and the build is still put back"
+        );
     }
 
     #[test]
@@ -2141,17 +2213,22 @@ mod tests {
         assert_eq!(
             side.phases.last().unwrap().seconds,
             122.0,
-            "setup, build, runs"
+            "setup, build, runs: not the tiers' reading, nor what follows the round"
         );
         assert_eq!(side.error, None);
+        assert_eq!(
+            fake.made[fake.made.len() - 2..],
+            ["tiers", "after the round"],
+            "the side's work after its round comes last, once its figures are taken"
+        );
 
         let mut fake = Fake::new(&["build"], &time);
         let side = drive_side(&mut fake, 2, Which::Head, &plan(false), &mut clock);
         assert_eq!(names(&side), ["setup", "build !", "the job !"]);
         assert_eq!(
             fake.made,
-            ["setup", "build"],
-            "nothing after a failed build"
+            ["setup", "build", "after the round"],
+            "nothing timed after a failed build"
         );
         assert_eq!(side.error.as_deref(), Some("build failed"));
 
