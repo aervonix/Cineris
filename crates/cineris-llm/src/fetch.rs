@@ -509,25 +509,64 @@ pub trait Resolve: Send + Sync + std::fmt::Debug {
     fn resolve<'a>(&'a self, host: &'a str) -> BoxFuture<'a, io::Result<Vec<IpAddr>>>;
 }
 
+/// The most lookups of the system's resolver under way at once in this
+/// process, whoever asked for them: an extension's fetches, and any other
+/// client of this module. The provider transports look their hosts up
+/// through their HTTP client's own resolver, and are not counted.
+pub const LOOKUPS_LIMIT: usize = 8;
+
+/// The places of [`LOOKUPS_LIMIT`]: each lookup holds one from before it is
+/// sent to the blocking pool until the system's resolver returns.
+static LOOKUPS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(LOOKUPS_LIMIT);
+
 /// The system's resolver (`getaddrinfo` and its Windows counterpart), on
-/// the runtime's blocking pool.
+/// the runtime's blocking pool, at most [`LOOKUPS_LIMIT`] lookups at once
+/// in the process.
+///
+/// A lookup cannot be stopped once it is on its thread: a fetch whose time
+/// runs out, or that is cancelled, drops its future, and the thread runs
+/// on until the system gives up on the name, tens of seconds for one that
+/// never answers. The lookup's place is held until then, not until its
+/// future is dropped, so fetches given up at once, of names that never
+/// answer, hold at most that many of the blocking pool's threads, which
+/// every other blocking task of the process (a path resolved, a file read,
+/// a look at the repository) waits for when they are all taken (the review
+/// of step 28's close: a script's loop of such fetches filled the pool
+/// within a second). A lookup past them waits for a place, holding no
+/// thread, within its fetch's own time and cancel.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SystemResolver;
 
 impl Resolve for SystemResolver {
     fn resolve<'a>(&'a self, host: &'a str) -> BoxFuture<'a, io::Result<Vec<IpAddr>>> {
-        let host = host.to_owned();
-        Box::pin(async move {
-            tokio::task::spawn_blocking(move || {
-                use std::net::ToSocketAddrs as _;
-                (host.as_str(), 0)
-                    .to_socket_addrs()
-                    .map(|found| found.map(|address| address.ip()).collect())
-            })
-            .await
-            .map_err(io::Error::other)?
-        })
+        Box::pin(on_the_pool(&LOOKUPS, host.to_owned(), |host| {
+            use std::net::ToSocketAddrs as _;
+            (host, 0)
+                .to_socket_addrs()
+                .map(|found| found.map(|address| address.ip()).collect())
+        }))
     }
+}
+
+/// Runs `look` for `host` on the blocking pool, holding one of `places`
+/// from before it is sent there until `look` returns: dropped meanwhile,
+/// the future gives back nothing, and the place is the thread's until its
+/// lookup ends.
+async fn on_the_pool<F>(
+    places: &'static tokio::sync::Semaphore,
+    host: String,
+    look: F,
+) -> io::Result<Vec<IpAddr>>
+where
+    F: FnOnce(&str) -> io::Result<Vec<IpAddr>> + Send + 'static,
+{
+    let place = places.acquire().await.map_err(io::Error::other)?;
+    tokio::task::spawn_blocking(move || {
+        let _place = place;
+        look(&host)
+    })
+    .await
+    .map_err(io::Error::other)?
 }
 
 /// Makes fetches. Cheap to clone; it holds no connection between fetches.
@@ -1506,5 +1545,80 @@ mod tests {
         let printed = format!("{request:?}");
         assert!(!printed.contains("secret"), "{printed}");
         assert!(printed.contains("authorization"), "{printed}");
+    }
+
+    /// A lookup whose future is dropped (its fetch out of time, or
+    /// cancelled) keeps its place until the blocking lookup itself returns,
+    /// so lookups given up at once never hold more of the blocking pool than
+    /// the places: the next waits, holding no thread, and goes on once a
+    /// lookup has returned (the review of step 28's close, finding 10). The
+    /// resolver blocks until the test lets it go: no name is looked up.
+    #[test]
+    fn a_lookup_given_up_holds_its_place_until_the_lookup_returns() {
+        use std::sync::mpsc;
+        use std::task::{Context, Poll};
+        use std::time::Duration;
+
+        const BOUND: Duration = Duration::from_secs(10);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let places: &'static tokio::sync::Semaphore =
+            Box::leak(Box::new(tokio::sync::Semaphore::new(2)));
+        let (began, beginnings) = mpsc::channel::<String>();
+        // A lookup that says it began and then blocks until it is let go,
+        // within the bound.
+        let blocking = |release: mpsc::Receiver<()>| {
+            let began = began.clone();
+            move |host: &str| {
+                let _ = began.send(host.to_owned());
+                let _ = release.recv_timeout(BOUND);
+                Ok(vec![IpAddr::from([127, 0, 0, 1])])
+            }
+        };
+        let (let_one_go, one_waits) = mpsc::channel();
+        let (let_two_go, two_waits) = mpsc::channel();
+        let (_, three_waits) = mpsc::channel::<()>();
+        runtime.block_on(async {
+            let polled_once = |future: std::pin::Pin<&mut _>| {
+                let mut context = Context::from_waker(std::task::Waker::noop());
+                std::future::Future::poll(future, &mut context)
+            };
+            {
+                let mut one = Box::pin(on_the_pool(places, "one".to_owned(), blocking(one_waits)));
+                let mut two = Box::pin(on_the_pool(places, "two".to_owned(), blocking(two_waits)));
+                assert!(polled_once(one.as_mut()).is_pending());
+                assert!(polled_once(two.as_mut()).is_pending());
+                let mut begun = [
+                    beginnings.recv_timeout(BOUND).unwrap(),
+                    beginnings.recv_timeout(BOUND).unwrap(),
+                ];
+                begun.sort();
+                assert_eq!(begun, ["one", "two"]);
+            }
+            // Both given up, and both still on their threads: their places
+            // are theirs.
+            assert_eq!(
+                places.available_permits(),
+                0,
+                "a lookup given up let go of its place while its thread still ran"
+            );
+            let mut three = Box::pin(on_the_pool(
+                places,
+                "three".to_owned(),
+                blocking(three_waits),
+            ));
+            assert!(matches!(polled_once(three.as_mut()), Poll::Pending));
+            assert!(
+                beginnings.try_recv().is_err(),
+                "a third lookup was sent to the pool"
+            );
+            // One returns: the third takes its place, and runs.
+            let_one_go.send(()).unwrap();
+            let found = three.await.unwrap();
+            assert_eq!(found, [IpAddr::from([127, 0, 0, 1])]);
+            assert_eq!(beginnings.recv_timeout(BOUND).unwrap(), "three");
+            let_two_go.send(()).unwrap();
+        });
     }
 }

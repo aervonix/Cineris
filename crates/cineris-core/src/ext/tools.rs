@@ -222,6 +222,9 @@ impl LoadedExtension {
                 self.disabled(),
                 self.remedy(Refusal::Disabled)
             )),
+            Err(error @ CallError::TooManyAbandoned(_)) => {
+                HookRan::Failed(format!("{error}; {}", self.remedy(Refusal::NoneStart)))
+            }
             Err(error) => HookRan::Failed(error.to_string()),
         }
     }
@@ -556,6 +559,10 @@ impl LoadedExtension {
                 "{}; {}",
                 self.disabled(),
                 self.remedy(Refusal::Disabled)
+            ))),
+            Err(error @ CallError::TooManyAbandoned(_)) => Err(CommandFailed::Other(format!(
+                "{error}; {}",
+                self.remedy(Refusal::NoneStart)
             ))),
             Err(error) => Err(CommandFailed::Other(format!("`{shown}` failed: {error}"))),
         }

@@ -560,6 +560,18 @@ fn absolute_root(text: &str, style: PathStyle) -> Option<(String, &str)> {
     }
 }
 
+/// The alternatives `pattern`'s braces expand to, nested braces included,
+/// exactly as [`PathGlob::compile`] reads them: for a check of each that
+/// the pattern's own text cannot show, such as a root, a `~` or a drive
+/// inside braces (`{/etc/**,src/**}`, the review of step 28's close).
+///
+/// # Errors
+///
+/// When the braces are not closed, or expand to too many alternatives.
+pub fn brace_alternatives(pattern: &str) -> Result<Vec<String>, GlobError> {
+    expand_braces(pattern)
+}
+
 /// Expands `{a,b}` into its alternatives. A brace inside a set (`[{]`) is
 /// a character, not a group.
 fn expand_braces(pattern: &str) -> Result<Vec<String>, GlobError> {
