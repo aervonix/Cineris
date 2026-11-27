@@ -132,6 +132,10 @@ const THREAD_RUNS: u8 = 0;
 const THREAD_TOLD: u8 = 1;
 const THREAD_LEFT: u8 = 2;
 const THREAD_ENDED: u8 = 3;
+/// Told to stop, it came back within its grace (its call's end, or its
+/// start's, was told): it stopped as told, and is ending, so it counts no
+/// more and nothing waits for it.
+const THREAD_BACK: u8 = 4;
 
 /// A runtime's thread, shared by the runtime, its start and the thread
 /// itself, which says when it ends: what [`MAX_ABANDONED`] counts. Every
@@ -214,6 +218,28 @@ impl Watched {
             SETTLED.notify_waiters();
         }
         left.is_some()
+    }
+
+    /// Its thread, told to stop, came back within its grace: it stopped as
+    /// it was told, and ends at the shutdown it was sent, so it is released
+    /// from the cap at once, not when it has ended. Counted until it ended,
+    /// a start or a call of its extension made meanwhile waited for an end
+    /// that takes real time while its grace ran on the session's timer, and
+    /// one the test moved for another wait left it running (the review of
+    /// the step 28 fixes' third pull request: a stress run on Windows).
+    fn came_back(&self) {
+        let released = {
+            let mut stopping = being_stopped();
+            let told = self.state.load(Ordering::SeqCst) == THREAD_TOLD;
+            if told {
+                self.state.store(THREAD_BACK, Ordering::SeqCst);
+                stopping.retain(|other| !std::ptr::eq(Arc::as_ptr(other), self));
+            }
+            told
+        };
+        if released {
+            SETTLED.notify_waiters();
+        }
     }
 
     fn is_left(&self) -> bool {
@@ -812,6 +838,11 @@ impl ScriptRuntime {
         })
         .await;
         starting.ended();
+        // Its thread told its start's end: one told to stop at the start's
+        // time came back.
+        if loaded.is_some() {
+            watched.came_back();
+        }
         match loaded {
             // Evaluated in its grace, its time up: its time ran out, and the
             // runtime, stopped, is no runtime. Its inbox is dropped here, so
@@ -1150,7 +1181,10 @@ impl ScriptRuntime {
         poll_fn(|context| {
             loop {
                 match replies.poll_recv(context) {
-                    Poll::Ready(Some(FromThread::Done(_)) | None) => return Poll::Ready(()),
+                    Poll::Ready(Some(FromThread::Done(_)) | None) => {
+                        self.watched.came_back();
+                        return Poll::Ready(());
+                    }
                     Poll::Ready(Some(_)) => {}
                     Poll::Pending => break,
                 }
