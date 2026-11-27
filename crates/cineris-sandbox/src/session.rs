@@ -2909,7 +2909,7 @@ mod tests {
             "empty"
         );
         let names = ["HOME", "XDG_CACHE_HOME"];
-        let session = entries(&[("HOME", "/home/me"), ("XDG_CACHE_HOME", "/home/me/.s")]);
+        let session = entries(&[("HOME", "/srv/me"), ("XDG_CACHE_HOME", "/srv/me/.s")]);
         assert_eq!(
             moved_from(&names, false, &session, std::slice::from_ref(&session)),
             None
@@ -2917,11 +2917,11 @@ mod tests {
         // The session's own environment read for its last entry too.
         let session_twice = entries(&[
             ("HOME", "/tmp/x"),
-            ("HOME", "/home/me"),
-            ("XDG_CACHE_HOME", "/home/me/.s"),
+            ("HOME", "/srv/me"),
+            ("XDG_CACHE_HOME", "/srv/me/.s"),
         ]);
         assert_eq!(moved_from(&names, false, &session, &[session_twice]), None);
-        let moved = entries(&[("HOME", "/home/me"), ("XDG_CACHE_HOME", "/tmp/evil")]);
+        let moved = entries(&[("HOME", "/srv/me"), ("XDG_CACHE_HOME", "/tmp/evil")]);
         assert_eq!(
             moved_from(&names, false, &moved, std::slice::from_ref(&session)).as_deref(),
             Some("XDG_CACHE_HOME")
@@ -2929,15 +2929,15 @@ mod tests {
         // A variable given twice, its last entry the session's.
         let twice = entries(&[
             ("HOME", "/tmp/evil"),
-            ("HOME", "/home/me"),
-            ("XDG_CACHE_HOME", "/home/me/.s"),
+            ("HOME", "/srv/me"),
+            ("XDG_CACHE_HOME", "/srv/me/.s"),
         ]);
         assert!(
             moved_from(&names, false, &twice, std::slice::from_ref(&session))
                 .is_some_and(|said| said.starts_with("HOME, given more than once")),
         );
         // Every session's harness: the nearest says the moved value.
-        let near = entries(&[("HOME", "/home/me"), ("XDG_CACHE_HOME", "/tmp/evil")]);
+        let near = entries(&[("HOME", "/srv/me"), ("XDG_CACHE_HOME", "/tmp/evil")]);
         assert_eq!(
             moved_from(&names, false, &moved, &[near, session]).as_deref(),
             Some("XDG_CACHE_HOME")
