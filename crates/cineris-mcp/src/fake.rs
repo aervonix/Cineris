@@ -133,6 +133,8 @@ struct Script {
     list_changed: bool,
     ttl_ms: Option<i64>,
     honours_listen: bool,
+    /// The error it answers a change stream with, if it does.
+    listen_error: Option<i64>,
     replies: HashMap<String, Reply>,
     stderr: String,
     /// What `initialize` waits for before it is answered.
@@ -226,6 +228,7 @@ impl FakeServer {
             list_changed: false,
             ttl_ms: None,
             honours_listen: true,
+            listen_error: None,
             replies: HashMap::new(),
             stderr: String::new(),
             initialize_gate: None,
@@ -334,6 +337,14 @@ impl FakeServer {
     #[must_use]
     pub fn refuses_listen(self) -> Self {
         self.script(|script| script.honours_listen = false);
+        self
+    }
+
+    /// A modern server that answers a change stream with an error of
+    /// `code`.
+    #[must_use]
+    pub fn listen_error(self, code: i64) -> Self {
+        self.script(|script| script.listen_error = Some(code));
         self
     }
 
@@ -765,6 +776,12 @@ async fn respond(
                 )
             });
             call(process, &id, message, reply, modern).await;
+        }
+        "subscriptions/listen" if modern && script.listen_error.is_some() => {
+            let code = script.listen_error.unwrap_or_default();
+            process
+                .send(error(&id, code, "no change stream here"))
+                .await;
         }
         "subscriptions/listen" if modern => {
             *lock(&process.listen) = Some(id.clone());

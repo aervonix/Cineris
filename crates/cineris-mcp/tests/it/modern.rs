@@ -350,6 +350,25 @@ fn a_change_stream_acknowledged_without_the_notices_asked_for_is_ended_and_not_a
 }
 
 #[test]
+fn a_change_stream_answered_with_an_error_is_over_and_not_asked_again() {
+    run(async {
+        let timer = timer();
+        let server = FakeServer::modern().list_changed().listen_error(-32601);
+        let client = connect(&server, &timer).await;
+        server.wait_for("subscriptions/listen", 1).await;
+        settle().await;
+        assert!(
+            server.of("notifications/cancelled").is_empty(),
+            "an answered request is not cancelled"
+        );
+        timer.advance(Duration::from_secs(60 * 60));
+        settle().await;
+        assert!(!client.listening());
+        assert_eq!(server.of("subscriptions/listen").len(), 1);
+    });
+}
+
+#[test]
 fn shutdown_ends_the_change_stream_and_then_the_process() {
     run(async {
         let timer = timer();

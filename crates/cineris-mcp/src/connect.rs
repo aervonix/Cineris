@@ -162,8 +162,8 @@ impl Start<'_> {
             .find(|ours| supported.iter().any(|theirs| theirs == *ours))
         else {
             return Err(ClientError::NotStarted(format!(
-                "it speaks the modern era but none of its revisions ({}) is one this client \
-                 speaks ({})",
+                "it speaks the modern era, and none of the {} revisions it named is one this \
+                 client speaks ({})",
                 supported.len(),
                 wire::MODERN_VERSIONS.join(", ")
             )));
