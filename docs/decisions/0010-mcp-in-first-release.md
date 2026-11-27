@@ -45,11 +45,11 @@ The protocol changed fundamentally in its July 2026 revision: no handshake, no s
 
 ## Amended in step 30
 
-**The client is our own, and no MCP SDK is linked** (the owner, 2026-11-27, on the maintainers' recommendation; [steps/30/answered.md](../steps/30/answered.md), point 1). Measured on hosted runners, `rmcp` 3.12.0 as the step would have linked it added 1,718,016 bytes to the shipped Linux build and 2,171,904 to the Windows one, and 19 packages; a client of our own was priced at a tenth of that or less. Most of a client was ours either way: the process, HTTP through `cineris-llm`, the policy around the protocol (time limits, caps, the probe of a server that exits on it) and the fake servers the tests need. Decision 0039's first size reserve is spent here.
+**The client is our own, and no MCP SDK is linked** (the owner, 2026-11-27, on the maintainers' recommendation; [steps/30/answered.md](../steps/30/answered.md), point 1). Measured on hosted runners, `rmcp` 3.12.0 as the step would have linked it added 1,718,016 bytes to the shipped Linux build and 2,171,904 to the Windows one, and 19 packages; a client of our own was priced, as a guess, at 9 to 21% of that (+0.15 to +0.35 MB on Linux, +0.2 to +0.45 MB on Windows). Most of a client was ours either way: the process, HTTP through `cineris-llm`, the policy around the protocol (time limits, caps, the probe of a server that exits on it) and the fake servers the tests need. Decision 0039's first size reserve is spent here.
 
 - `cineris-mcp` speaks both eras itself: the JSON-RPC messages, a transport (standard I/O, and Streamable HTTP), a session over any transport, the probe and the fallback ([architecture/13-mcp.md](../architecture/13-mcp.md), "Implementation").
 - Everything else is written against `cineris_mcp::Client`, so an SDK could be put back behind it, as this record first had it the other way round.
-- **Against it:** interoperability is tested against servers we wrote from the specification's text. `rmcp`'s server is run against our client in the nightly tier, in both eras, from a package outside the workspace with its own lock file, kept out of the shipped binary and the blocking checks (the owner's yes of 2026-11-27). And each new revision of the specification is ours to read, twice a year.
+- **Against it:** interoperability is tested against servers we wrote from the specification's text. A check that runs `rmcp`'s server against our client in the nightly tier, in both eras, is being added (step 30's part 4b): a package outside the workspace with its own lock file, kept out of the shipped binary and the blocking checks (the owner's yes of 2026-11-27). And each new revision of the specification is ours to read, twice a year.
 
 ## Revisit when
 
