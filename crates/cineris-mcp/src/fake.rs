@@ -10,6 +10,12 @@
 //! says, or when the test says. The test opens gates to let calls answer,
 //! sends what it likes on the server's behalf, and reads back every message
 //! the server received.
+//!
+//! [`client::FakeClient`] is the other kind of fake: a [`crate::Client`]
+//! itself, with no process and no protocol, for a test of what is built on
+//! a client (a server's tools in the registry, a session's prompt).
+
+pub mod client;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};

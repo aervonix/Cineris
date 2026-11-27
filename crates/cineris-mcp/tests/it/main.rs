@@ -1,7 +1,10 @@
 //! The MCP client's tests: our own client against the fake servers of both
 //! eras (`cineris_mcp::fake`), over in-memory pipes, with every wait on the
 //! test kit's manual fake timer. Nothing waits for real time: a test moves
-//! the clock past a limit once the limit's wait is running.
+//! the clock past a limit once the limit's wait is running. And a server's
+//! tool as the registry holds it (`tool`), called through the fake client
+//! (`cineris_mcp::fake::client`), each call on a runtime of its own with the
+//! blocking pool the output policy uses behind it.
 
 #![allow(
     clippy::unwrap_used,
@@ -14,14 +17,16 @@ mod flood;
 mod legacy;
 mod modern;
 mod probe;
+mod tool;
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use cineris_base::{FakeClock, SharedTimer};
+use cineris_base::{FakeClock, PathOptions, PathResolver, SharedTimer};
 use cineris_mcp::fake::FakeServer;
 use cineris_mcp::{ClientOptions, Expose, Launch, Origin, ServerDefinition, StdioClient};
 use cineris_testkit::FakeTimer;
+use cineris_tools::{FileTable, MemoryStore, RunCx};
 use serde_json::{Value as Json, json};
 
 /// The definition's start limit.
@@ -168,4 +173,44 @@ fn no_respawn() -> cineris_mcp::Respawn {
 /// One message as a line of a server's output.
 fn line(message: &Json) -> Result<Vec<u8>, cineris_mcp::LineError> {
     Ok(message.to_string().into_bytes())
+}
+
+/// A place for a test's calls to run: a workspace of its own, a store for
+/// artifacts and a table of seen files, as a session has.
+struct Workspace {
+    _scratch: cineris_testkit::Scratch,
+    paths: Arc<PathResolver>,
+    store: MemoryStore,
+    files: Arc<FileTable>,
+}
+
+impl Workspace {
+    fn new(test: &str) -> Self {
+        let scratch = cineris_testkit::scratch!(test);
+        let paths = PathResolver::new(scratch.path(), PathOptions::new()).expect("a workspace");
+        Self {
+            _scratch: scratch,
+            paths: Arc::new(paths),
+            store: MemoryStore::new(),
+            files: Arc::new(FileTable::new()),
+        }
+    }
+
+    /// What a call runs with.
+    fn cx(&self) -> RunCx {
+        RunCx::new(
+            Arc::clone(&self.paths),
+            Arc::new(self.store.clone()),
+            Arc::clone(&self.files),
+        )
+    }
+}
+
+/// Runs a future to its end on a runtime of its own, with the blocking
+/// pool the output policy uses behind it.
+fn block_on<T>(future: impl Future<Output = T>) -> T {
+    tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("a runtime")
+        .block_on(future)
 }

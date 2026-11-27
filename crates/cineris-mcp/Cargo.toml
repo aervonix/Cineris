@@ -20,9 +20,11 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "sync"] }
 
 [features]
-# Fake MCP servers of both eras (`fake`), scripted, for any crate's tests.
-# Code for tests only: dev-dependencies turn it on, and nothing else may
-# (`cargo xtask rules`).
+# Fake MCP servers of both eras (`fake`), scripted, for any crate's tests,
+# and a fake `Client` with no process and no protocol (`fake::client`): its
+# tools a list, its answers scripted, a call that waits at a gate. Code for
+# tests only: dev-dependencies turn it on, and nothing else may (`cargo
+# xtask rules`).
 test-kit = []
 
 [dev-dependencies]

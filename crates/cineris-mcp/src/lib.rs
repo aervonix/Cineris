@@ -13,7 +13,8 @@
 //! | [`client`] | [`Client`]: one connected server, its tools, its calls and its changes. |
 //! | [`process`] | [`Spawner`]: how the harness starts a local server, and the pipes it gives back. |
 //! | [`StdioClient`] | Our own client of the protocol, both eras, over a local server's standard input and output. |
-//! | `fake` (feature `test-kit`) | Fake servers of both eras, scripted, for tests. |
+//! | [`tool`] | [`McpTool`]: one server tool as the registry holds it; [`admit_all`], which says which of a server's tools are registered; [`register`]. |
+//! | `fake` (feature `test-kit`) | Fake servers of both eras, scripted, for tests; and `fake::client::FakeClient`, a [`Client`] the test scripts. |
 //!
 //! Inside, the client is in layers: `jsonrpc` reads and writes the
 //! messages; a `transport` carries them (`stdio` here, Streamable HTTP
@@ -30,13 +31,19 @@ mod jsonrpc;
 pub mod process;
 mod session;
 mod stdio;
+pub mod tool;
 mod transport;
 mod wire;
 
+pub use cineris_tools::Hold;
 pub use client::{CallOutput, Client, ClientError, Content, Era, ServerInfo, ToolDefinition};
 pub use connect::{Respawn, StdioClient};
 pub use definition::{EnvEntry, Expose, Launch, Origin, ServerDefinition, ValueSource};
 pub use process::{LineError, ServerPipes, ServerProcess, SpawnError, Spawner};
 pub use session::{
     ClientOptions, LISTEN_AGAIN, MAX_LISTING_BYTES, MAX_PAGES, MAX_ROUNDS, MAX_TOOLS,
+};
+pub use tool::{
+    Admitted, LeftOut, McpTool, ToolCaller, WhyLeftOut, admit, admit_all, is_tool_name, register,
+    unregister,
 };
